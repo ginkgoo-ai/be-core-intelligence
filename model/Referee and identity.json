@@ -1,0 +1,15 @@
+{
+    "applicant": {
+      "name": ""
+    },
+    "referee_1": {
+      "full_name": "",
+      "signature": "",
+      "date": ""
+    },
+    "referee_2": {
+      "full_name": "",
+      "signature": "",
+      "date": ""
+    }
+  }

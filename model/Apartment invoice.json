@@ -1,0 +1,69 @@
+{
+    "invoice_date": "",
+    "invoice_to": {
+      "name": "",
+      "address": {
+        "street": "",
+        "city": "",
+        "postcode": ""
+      }
+    },
+    "issuer": {
+      "name": "Residential Lettings",
+      "address": {
+        "street": "",
+        "city": "",
+        "postcode": ""
+      },
+      "contact": {
+        "phone": "",
+        "email": "",
+        "website": ""
+      }
+    },
+    "invoice_number": "",
+    "property": {
+      "address": {
+        "apartment": "",
+        "building": "",
+        "street": "",
+        "city": "",
+        "postcode": ""
+      }
+    },
+    "tenancy_details": {
+      "term": "",
+      "rental_amount_per_week": "",
+      "total_rental_first_instalment": ""
+    },
+    "deposit": "",
+    "administration_charge": "",
+    "vat": {
+      "rate": "",
+      "amount": ""
+    },
+    "amount_due": "",
+    "vat_number": "",
+    "payment_instructions": {
+      "cleared_funds_required": "",
+      "accepted_payment_methods": [
+        {
+          "type": "",
+          "details": ""
+        }
+      ],
+      "bank_details": {
+        "bank_name": "",
+        "account_name": "",
+        "uk_transfer": {
+          "sort_code": "",
+          "account_number": ""
+        },
+        "international_transfers": {
+          "iban": "",
+          "swift_bic": ""
+        }
+      },
+      "cash_payment_note": ""
+    }
+  }

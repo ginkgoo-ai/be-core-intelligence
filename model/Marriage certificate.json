@@ -1,0 +1,58 @@
+{
+    "certificate_details": {
+      "country": "",
+      "issuing_authority": "",
+      "certificate_type": "",
+      "registration_number": "",
+      "date_of_issue": "",
+      "place_of_issue": ""
+    },
+    "translator_details": {
+      "name": "",
+      "title": "",
+      "license_number": "",
+      "tax_id": "",
+      "languages": [
+        ""
+      ],
+      "certification_statement": "",
+      "appointment_authority": ""
+    },
+    "verification": {
+      "seal": {
+        "name": "",
+        "id": "",
+        "validation_url": ""
+      },
+      "qr_code": ""
+    },
+    "spouse_1": {
+      "given_names": "",
+      "family_name": "",
+      "tax_id": "",
+      "nationality": ""
+    },
+    "spouse_2": {
+      "given_names": "",
+      "family_name": "",
+      "tax_id": "",
+      "nationality": ""
+    },
+    "marriage_details": {
+      "date_of_marriage": "",
+      "place_of_marriage": {
+        "city": "",
+        "country": ""
+      }
+    },
+    "witnesses": [
+      {
+        "name": "",
+        "role": ""
+      }
+    ],
+    "officiant": {
+      "name": "",
+      "title": ""
+    }
+  }

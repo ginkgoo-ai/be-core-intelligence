@@ -1,0 +1,19 @@
+{
+    "referee_details": {
+      "family_name": "",
+      "given_name": "",
+      "date_of_birth": "",
+      "address": {
+        "street": "",
+        "city": "",
+        "postcode": ""
+      },
+      "previous_address": "",
+      "phone_number": "",
+      "email_address": "",
+      "profession": "",
+      "british_passport": "",
+      "passport_number": "",
+      "relationship_to_applicant": ""
+    }
+  }
