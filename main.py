@@ -9,8 +9,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from document_classifier import DocumentClassifier
-from document_struction import DocumentResolver
+from src.document_classifier import DocumentClassifier
+from src.document_struction import DocumentResolver
 from src import graph
 
 app = FastAPI()

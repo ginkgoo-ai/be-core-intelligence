@@ -1,7 +1,7 @@
 import os
 
 from src.model import file_definition
-from resolver import image_resolver, other_resolver, pdf_resolver
+from src.resolver import image_resolver, other_resolver, pdf_resolver
 from urllib.parse import urlparse
 
 # --- Entities ---

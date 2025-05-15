@@ -90,9 +90,9 @@ system_message = ChatPromptTemplate.from_messages(
 )
 
 model = system_message | ChatOpenAI(
-    base_url=os.getenv(os.getenv("MODEL_BASE_URL")),
+    base_url=os.getenv("MODEL_BASE_URL"),
     api_key=SecretStr(os.getenv("MODEL_API_KEY")),
-    model=os.getenv(os.getenv("MODEL_WORKFLOW_NAME")),
+    model=os.getenv("MODEL_WORKFLOW_NAME"),
     temperature=0,
 ).bind_tools(tools)
 

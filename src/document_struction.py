@@ -1,5 +1,5 @@
 
-from resolver import image_resolver, other_resolver, pdf_resolver
+from src.resolver import image_resolver, other_resolver, pdf_resolver
 from src.model import file_definition
 from urllib.parse import urlparse
 import os
