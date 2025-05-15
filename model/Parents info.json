@@ -1,0 +1,24 @@
+{
+    "parent_one": {
+      "relationship_to_applicant": "",
+      "given_names": "",
+      "family_name": "",
+      "date_of_birth": "",
+      "town_of_birth": "",
+      "country_of_birth": "",
+      "country_of_nationality": "",
+      "always_same_nationality": "",
+      "nationality_at_applicant_birth": ""
+    },
+    "parent_two": {
+      "relationship_to_applicant": "",
+      "given_names": "",
+      "family_name": "",
+      "date_of_birth": "",
+      "town_of_birth": "",
+      "country_of_birth": "",
+      "country_of_nationality": "",
+      "always_same_nationality": "",
+      "nationality_at_applicant_birth": ""
+    }
+  }

@@ -1,0 +1,37 @@
+{
+  "passport_number": "",
+  "surname": "",
+  "given_name": "",
+  "nationality": "",
+  "date_of_birth": "",
+  "place_of_issue": "",
+  "date_of_issue": "",
+  "date_of_expiry": "",
+  "type": "",
+  "number_of_entries": "",
+  "valid_from": "",
+  "valid_until": "",
+  "vaf_number": "",
+  "observations": "",
+  "conditions": "",
+  "machine_readable_zone": {
+    "document_type": "",
+    "country_code": "",
+    "passport_number": "",
+    "check_digit": "",
+    "date_of_birth": "",
+    "sex": "",
+    "expiry_date": "",
+    "nationality": "",
+    "check_digit_2": "",
+    "check_digit_3": ""
+  },
+  "stamps": [
+    {
+      "location": "",
+      "date": "",
+      "officer_id": "",
+      "notes": ""
+    }
+  ]
+}

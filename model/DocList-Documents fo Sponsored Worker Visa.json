@@ -1,0 +1,74 @@
+{
+    "visa_type": "Sponsored Worker Visa (Skilled Worker Visa)",
+    "document_categories": [
+      {
+        "category": "Identification Documents",
+        "description": "Documents required for identification purposes.",
+        "documents": [
+          {
+            "name": "Current passport",
+            "details": null,
+            "required_condition": "Always required"
+          },
+          {
+            "name": "Proof of current home address",
+            "details": null,
+            "required_condition": "Always required"
+          },
+          {
+            "name": "National identification card",
+            "details": null,
+            "required_condition": "If applicable"
+          }
+        ]
+      },
+      {
+        "category": "Mandatory Documents",
+        "description": "Documents that are generally required for all applications.",
+        "documents": [
+          {
+            "name": "Copy of Certificate of Sponsorship (CoS)",
+            "details": "We will have this from employer.",
+            "required_condition": "Always required"
+          },
+          {
+            "name": "Job Offer letter from new employer",
+            "details": "We will have this from employer.",
+            "required_condition": "Always required"
+          },
+          {
+            "name": "Up to date CV",
+            "details": null,
+            "required_condition": "Always required"
+          },
+          {
+            "name": "Evidence of satisfying the English language requirement",
+            "details": "Either English test/English speaking country/degree certificate.",
+            "required_condition": "Always required"
+          }
+        ]
+      },
+      {
+        "category": "Optional Documents",
+        "description": "Documents that are only required under specific conditions.",
+        "documents": [
+          {
+            "name": "Bank statements showing sufficient funds to live in the UK",
+            "details": null,
+            "required_condition": "Unless the certificate of sponsorship shows your employer can support you."
+          },
+          {
+            "name": "TB test certificate (Tuberculosis test certificate)",
+            "details": null,
+            "required_condition": "If you are a national of a country listed in Appendix T of the Immigration Rules."
+          },
+          {
+            "name": "Criminal record certificate",
+            "details": null,
+            "required_condition": "If your SOC code is on the list / if their job is in a specific profession."
+          }
+        ]
+      }
+    ],
+    "source_information": "Based on provided sources [1-3] and conversation history."
+  }
