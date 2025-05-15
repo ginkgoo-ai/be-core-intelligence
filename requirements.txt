@@ -26,7 +26,7 @@ fastapi==0.115.12
 filetype==1.2.0
 frozenlist==1.6.0
 greenlet==3.2.1
-h11==0.14.0
+h11==0.16.0
 html5lib==1.1
 httpcore==1.0.8
 httpx==0.28.1
