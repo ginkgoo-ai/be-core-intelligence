@@ -4,6 +4,7 @@ from langchain.output_parsers.enum import EnumOutputParser
 from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from src.document_struction import *
 from src.model.file_definition import ClassificationCategory,ConsolidatedDocumentModelPartOne, ConsolidatedDocumentModelPartTwo
@@ -19,7 +20,7 @@ class ImageDocumentAnalysis:
         Args:
             api_key: The API key for the Gemini service. (Currently unused in simulation)
         """
-        self.api_key = os.getenv("MODEL_API_KEY")
+        self.api_key = SecretStr(os.getenv("MODEL_API_KEY"))
         self.model = ChatOpenAI(
             base_url=os.getenv("MODEL_BASE_URL"),
             api_key=self.api_key,

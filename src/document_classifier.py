@@ -30,44 +30,35 @@ class DocumentClassifier:
         Builds the prompt for the Gemini model based on classification guidelines
         and document information.
         """
-        # Classification guidelines provided by the user
+
         prompt_template = """
                 You are an expert in UK Skilled Worker Visa document classification.
                 Your task is to classify the provided document based on the guidelines below.
                 Please return ONLY one of the following category names:
-                - "Identification Documents"
-                - "Mandatory Documents"
-                - "Optional Documents"
-                
-                If the document does not clearly fit into any of these categories based on the provided information, or if the information is insufficient, return "Unknown".
-                
-                ## Classification Guidelines - SKILLED WORKER VISA SPECIFIC
-                
-                ### 1. Identification Documents
-                Personal identification materials required for all applicants.
-                Examples:
-                - Current passport
-                - Proof of current home address (utility bills, bank statements, etc.)
-                - National identification card
-                
-                ### 2. Mandatory Documents
-                Essential documents required for all Skilled Worker Visa applications.
-                Examples:
-                - Certificate of Sponsorship (CoS) from UK employer
-                - Job Offer letter from UK employer
-                - CV/Resume
-                - Evidence of English language proficiency (test results, degree certificates, etc.)
-                
-                ### 3. Optional Documents
-                Supplementary documents that may be required based on specific circumstances or that provide additional supporting evidence.
-                Examples:
-                - Bank statements showing sufficient funds to live in the UK
-                - Tuberculosis (TB) test certificate (for nationals from countries listed in Appendix T)
-                - Criminal record certificate (required for specific SOC codes/professions)
-                - Any other supporting documents that cannot be classified in the previous categories but might strengthen the application
+                    - PASSPORT
+                        Description: passport file
+                    - PROOF_OF_CURRENT_HOME_ADDRESS 
+                        Description: Proof of current home address"
+                    - NATIONAL_IDENTIFICATION_CARD = 
+                        Description: National identification card
+                    - COPY_OF_CERTIFICATE_OF_SPONSORSHIP 
+                        Description: Copy of Certificate of Sponsorship (CoS)
+                    - JOB_OFFER_LETTER_FROM_NEW_EMPLOYER
+                        Description: Job Offer letter from new employer
+                    - UP_TO_DATE_CV 
+                        Description: Up to date CV
+                    - EVIDENCE_OF_SATISFYING_THE_ENGLISH_LANGUAGE_REQUIREMENT
+                        Description: Evidence of satisfying the English language requirement
+                    - BANK_STATEMENTS_SHOWING_SUFFICIENT_FUNDS_TO_LIVE_IN_THE_UK 
+                        Description: Bank statements showing sufficient funds to live in the UK
+                    - TB_TEST_CERTIFICATE
+                        Description: TB test certificate (Tuberculosis test certificate)
+                    - CRIMINAL_RECORD_CERTIFICATE
+                        Description: Criminal record certificate
 
-                
-            """
+                If the document does not clearly fit into any of these categories based on the provided information, or if the information is insufficient, return "Unknown".
+
+        """
 
         return prompt_template
 
@@ -81,10 +72,10 @@ class DocumentClassifier:
             return other_resolver.OtherDocumentAnalysis().classify_document(self._doc_url, self._build_prompt())
 
         if file_extension in file_definition.PDF_EXTENSIONS:
-            return pdf_resolver.GeminiPDFDocumentAnalysis.classify_document(self._doc_url, self._build_prompt())
+            return pdf_resolver.GeminiPDFDocumentAnalysis().classify_document(self._doc_url, self._build_prompt())
 
         elif file_extension in file_definition.IMAGE_EXTENSIONS:
-            return image_resolver.ImageDocumentAnalysis.classify_document(self._doc_url, self._build_prompt())
+            return image_resolver.ImageDocumentAnalysis().classify_document(self._doc_url, self._build_prompt())
 
         else:
             return other_resolver.OtherDocumentAnalysis().classify_document(self._doc_url, self._build_prompt())

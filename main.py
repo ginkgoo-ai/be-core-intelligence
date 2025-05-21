@@ -78,11 +78,7 @@ async def analyze_image_classify_endpoint( # Renamed to avoid conflict
         # Consider making API key an environment variable
         classifier = await DocumentClassifier(doc_url_to_classify).classify_document() # Use the selected URL
 
-        return JSONResponse(content={
-            "analysis_type": "classification_genai",
-            # Assuming classification_result has a .category.value attribute
-            "result": classifier
-        })
+        return classifier
 
     except Exception as e:
         return JSONResponse(

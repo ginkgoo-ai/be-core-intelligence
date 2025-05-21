@@ -24,9 +24,16 @@ IMAGE_EXTENSIONS = {
 
 class ClassificationCategory(enum.Enum):
     """Enumeration for document classification categories."""
-    IDENTIFICATION = "Identification Documents"
-    MANDATORY = "Mandatory Documents"
-    OPTIONAL = "Optional Documents"
+    PASSPORT = "passport"
+    PROOF_OF_CURRENT_HOME_ADDRESS = "Proof of current home address"
+    NATIONAL_IDENTIFICATION_CARD = "National identification card"
+    COPY_OF_CERTIFICATE_OF_SPONSORSHIP = "Copy of Certificate of Sponsorship (CoS)"
+    JOB_OFFER_LETTER_FROM_NEW_EMPLOYER = "Job Offer letter from new employer"
+    UP_TO_DATE_CV = "Up to date CV"
+    EVIDENCE_OF_SATISFYING_THE_ENGLISH_LANGUAGE_REQUIREMENT = "Evidence of satisfying the English language requirement"
+    BANK_STATEMENTS_SHOWING_SUFFICIENT_FUNDS_TO_LIVE_IN_THE_UK = "Bank statements showing sufficient funds to live in the UK"
+    TB_TEST_CERTIFICATE = "TB test certificate (Tuberculosis test certificate)"
+    CRIMINAL_RECORD_CERTIFICATE = "Criminal record certificate"
     UNKNOWN = "Unknown" # For cases where classification fails or is unclear
 
 
