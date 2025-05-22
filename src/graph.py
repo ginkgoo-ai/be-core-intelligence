@@ -112,10 +112,47 @@ def call_model(state: MessagesState):
     return {"messages": [response]}
 
 
+def check_node(state: MessagesState):
+    """
+    Use LLM to determine whether fill_data can satisfy the form requirements in the message.
+    fill_data is obtained from the tools node (ToolNode) and placed in the state, the return value of the search tool is fill_data.
+    """
+    messages = state['messages']
+    # The output of ToolNode will be placed in the state with the tool name as the key
+    fill_data = state.get('messages')[-1].content
+    prompt = f"""
+        You are a form auto-filling assistant. prefer use english to filling 
+        The current form requirements are as follows: {messages}
+        The user-provided data is as follows: {fill_data}
+        Please determine whether this data can satisfy the form filling requirements, or if the form can be filled automatically without additional data. If yes, return ok, otherwise return interrupt.
+        Only return ok or interrupt.
+    """
+    response = model.invoke([{"role": "user", "content": prompt}])
+    result = response.content.strip().lower()
+    if "ok" in result:
+        return {"check_result": "ok", "messages": messages, "search": fill_data}
+    else:
+        return {"check_result": "interrupt", "messages": messages, "search": fill_data}
+
+
+def interrupt_node(state: MessagesState):
+    """
+    The interrupt node directly returns a prompt for manual input.
+    """
+    return {"messages": [{
+        "type": "system",
+        "content": """
+            {"manual":"Unable to automatically fill all form items, please supplement manually."}
+        """
+    }]}
+
+
 workflow = StateGraph(MessagesState)
 
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", tools_node)
+workflow.add_node("check", check_node)
+workflow.add_node("interrupt", interrupt_node)
 
 workflow.set_entry_point("agent")
 
@@ -127,8 +164,15 @@ workflow.add_conditional_edges(
         END: END
     }
 )
-
-workflow.add_edge("tools", "agent")
+workflow.add_edge("tools", "check")
+workflow.add_conditional_edges(
+    "check",
+    lambda state: state["check_result"],
+    {
+        "ok": "agent",
+        "interrupt": "interrupt"
+    }
+)
 
 checkpointer = MemorySaver()
 

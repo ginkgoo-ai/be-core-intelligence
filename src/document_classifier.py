@@ -38,8 +38,8 @@ class DocumentClassifier:
                     - PASSPORT
                         Description: passport file
                     - PROOF_OF_CURRENT_HOME_ADDRESS 
-                        Description: Proof of current home address"
-                    - NATIONAL_IDENTIFICATION_CARD = 
+                        Description: Proof of current home address, have home address information
+                    - NATIONAL_IDENTIFICATION_CARD 
                         Description: National identification card
                     - COPY_OF_CERTIFICATE_OF_SPONSORSHIP 
                         Description: Copy of Certificate of Sponsorship (CoS)
