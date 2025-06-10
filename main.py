@@ -45,7 +45,7 @@ async def run_workflow(message: MessageRequest):
     graph.global_static_map.update({message.trace_id: message.fill_data})
 
     msg = graph.system_message.format_messages(messages=message.message)
-    result = graph.app.invoke(
+    result = graph.run_with_sidecar(
         {"messages": msg},
         config={"configurable": {"thread_id": message.trace_id}}
     )

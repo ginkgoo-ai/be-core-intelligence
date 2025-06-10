@@ -1,7 +1,7 @@
 import os
 from typing import Literal
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, BaseMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
@@ -16,6 +16,7 @@ from langchain_core.globals import set_verbose
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.prompts import HumanMessagePromptTemplate
 from langchain_core.runnables.config import RunnableConfig
+from typing import TypedDict, List, Optional
 
 import threading
 
@@ -25,6 +26,10 @@ set_verbose(True)
 
 
 global_static_map = {}
+
+class GraphState(TypedDict):
+    messages:Optional[List[BaseMessage]]
+
 
 def update_map(key, value):
     global global_static_map
@@ -97,7 +102,7 @@ model = system_message | ChatOpenAI(
 ).bind_tools(tools)
 
 
-def should_continue(state: MessagesState) -> Literal["tools", END]:
+def should_continue(state: GraphState) -> Literal["tools", END]:
     messages = state['messages']
     last_message = messages[-1]
     if last_message.tool_calls:
@@ -106,13 +111,13 @@ def should_continue(state: MessagesState) -> Literal["tools", END]:
     return END
 
 
-def call_model(state: MessagesState):
+def call_model(state: GraphState):
     messages = state['messages']
     response = model.invoke(messages)
     return {"messages": [response]}
 
 
-def check_node(state: MessagesState):
+def check_node(state: GraphState):
     """
     Use LLM to determine whether fill_data can satisfy the form requirements in the message.
     fill_data is obtained from the tools node (ToolNode) and placed in the state, the return value of the search tool is fill_data.
@@ -135,7 +140,7 @@ def check_node(state: MessagesState):
         return {"check_result": "interrupt", "messages": messages, "search": fill_data}
 
 
-def interrupt_node(state: MessagesState):
+def interrupt_node(state: GraphState):
     """
     The interrupt node directly returns a prompt for manual input.
     """
@@ -174,7 +179,97 @@ workflow.add_conditional_edges(
     }
 )
 
+# ========== Q&A旁路记录功能 BEGIN ==========
+qa_storage = []
+
+def extract_questions_node(state: GraphState):
+    """
+    用大模型解析HTML，提取所有需要填写的表单项及其问题描述
+    """
+    import json
+    messages = state['messages']
+    html = ""
+    for msg in messages:
+        if getattr(msg, "type", None) == "human":
+            html = getattr(msg, "content", "")
+            break
+    prompt = """
+    你是一个表单解析助手。请从以下HTML页面代码中，找出所有需要用户填写的表单项（如input、select、textarea），
+    并为每个表单项生成一个简洁的"问题"描述（可用label、placeholder、aria-label、name、id等信息），
+    以及该表单项的唯一CSS选择器（如#id、[name="xxx"]等）。
+    返回格式为JSON数组，每个元素包含"selector"和"question"字段，例如：[{"selector": "username", "question": "请输入用户名"},  {"selector": "password", "question": "请输入密码"}]
+    下面是HTML代码：{html}
+    """.replace("{html}", html)
+
+    response = model.invoke([{"role": "human", "content": prompt}])
+    try:
+        fields = json.loads(response.content)
+    except Exception:
+        fields = []
+    return {"fields": fields, "messages": messages}
+
+def match_answers_node(state: GraphState):
+    """
+    匹配AI生成的actions和fields，生成结构化Q&A
+    """
+    import json
+    fields = state.get("fields", [])
+    messages = state.get("messages", [])
+    ai_reply = ""
+    for msg in messages[::-1]:
+        if getattr(msg, "type", None) == "ai":
+            ai_reply = getattr(msg, "content", "")
+            break
+    try:
+        actions = json.loads(ai_reply).get("actions", [])
+    except Exception:
+        actions = []
+    qa_list = []
+    for field in fields:
+        selector = field["selector"]
+        question = field["question"]
+        answer = ""
+        for act in actions:
+            act_selector = act.get("selector", "")
+            if selector in act_selector:
+                if act.get("type") == "click":
+                    answer = "click"
+                elif "value" in act:
+                    answer = act["value"]
+                break
+        qa_list.append({"question": question, "answer": answer})
+    global qa_storage
+    qa_storage.append(qa_list)
+    print("Q&A记录：", qa_list)
+    return {"qa_list": qa_list, "messages": messages}
+
+# 注册旁路节点（不影响主流程）
+workflow.add_node("extract_questions", extract_questions_node)
+workflow.add_node("match_answers", match_answers_node)
+workflow.add_edge("extract_questions", "match_answers")
+
+# ========== Q&A旁路记录功能 END ==========
+
 checkpointer = MemorySaver()
 
 app = workflow.compile(checkpointer=checkpointer)
+
+# ========== Q&A旁路记录入口函数 ==========
+def run_with_sidecar(input_state, *args, **kwargs):
+    """
+    主流程invoke时自动并行记录Q&A，不影响主流程返回。
+    合并输入和输出的messages，保证旁路节点能同时拿到原始HTML和AI回复。
+    """
+    result = app.invoke(input_state, *args, **kwargs)
+    try:
+        # 合并输入和输出的messages
+        merged_state = {
+            "messages": input_state["messages"] + result["messages"]
+        }
+        state1 = extract_questions_node(merged_state)
+        match_answers_node(state1)
+    except Exception as e:
+        print("Q&A旁路记录异常：", e)
+    return result
+# ========== Q&A旁路记录入口函数 END ==========
 
