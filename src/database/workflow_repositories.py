@@ -21,19 +21,6 @@ class BaseRepository:
 class WorkflowDefinitionRepository(BaseRepository):
     """Workflow definition repository"""
     
-    def create_definition(self, name: str, description: str = None, 
-                         steps_schema: Dict[str, Any] = None) -> WorkflowDefinition:
-        """Create workflow definition"""
-        definition = WorkflowDefinition(
-            workflow_definition_id=str(uuid.uuid4()),
-            name=name,
-            description=description,
-            step_definitions=steps_schema
-        )
-        self.db.add(definition)
-        self.db.flush()
-        return definition
-    
     def get_definition_by_id(self, definition_id: str) -> Optional[WorkflowDefinition]:
         """Get workflow definition by ID"""
         return self.db.query(WorkflowDefinition).filter(
@@ -45,6 +32,19 @@ class WorkflowDefinitionRepository(BaseRepository):
         return self.db.query(WorkflowDefinition).filter(
             WorkflowDefinition.is_active == True
         ).all()
+    
+    def create_definition(self, name: str, description: str = None, 
+                         step_definitions: List[Dict[str, Any]] = None) -> WorkflowDefinition:
+        """Create workflow definition"""
+        definition = WorkflowDefinition(
+            workflow_definition_id=str(uuid.uuid4()),
+            name=name,
+            description=description,
+            step_definitions=step_definitions
+        )
+        self.db.add(definition)
+        self.db.flush()
+        return definition
 
 class WorkflowInstanceRepository(BaseRepository):
     """Workflow instance repository"""
@@ -98,15 +98,12 @@ class WorkflowInstanceRepository(BaseRepository):
     def complete_instance(self, instance_id: str) -> Optional[WorkflowInstance]:
         """Complete workflow instance"""
         return self.update_instance_status(instance_id, WorkflowStatus.COMPLETED)
-    
-    def fail_instance(self, instance_id: str) -> Optional[WorkflowInstance]:
-        """Mark workflow instance as failed"""
-        return self.update_instance_status(instance_id, WorkflowStatus.FAILED)
 
 class StepInstanceRepository(BaseRepository):
     """Step instance repository"""
     
-    def create_step(self, workflow_instance_id: str, step_key: str, name: str = None, order: int = None) -> StepInstance:
+    def create_step(self, workflow_instance_id: str, step_key: str, name: str = None, 
+                   order: int = None) -> StepInstance:
         """Create step instance"""
         step = StepInstance(
             step_instance_id=str(uuid.uuid4()),
@@ -162,10 +159,13 @@ class StepInstanceRepository(BaseRepository):
         step = self.get_step_by_id(step_id)
         if step:
             step.status = status
+            step.updated_at = datetime.utcnow()
+            
             if status == StepStatus.ACTIVE:
                 step.started_at = datetime.utcnow()
-            elif status in [StepStatus.COMPLETED_SUCCESS, StepStatus.COMPLETED_ERROR, StepStatus.SKIPPED]:
+            elif status in [StepStatus.COMPLETED_SUCCESS, StepStatus.COMPLETED_ERROR]:
                 step.completed_at = datetime.utcnow()
+            
             return step
         return None
     
@@ -174,6 +174,7 @@ class StepInstanceRepository(BaseRepository):
         step = self.get_step_by_id(step_id)
         if step:
             step.data = data
+            step.updated_at = datetime.utcnow()
             return step
         return None
     
@@ -183,6 +184,7 @@ class StepInstanceRepository(BaseRepository):
         if step:
             step.error_details = error_details
             step.status = StepStatus.COMPLETED_ERROR
+            step.updated_at = datetime.utcnow()
             step.completed_at = datetime.utcnow()
             return step
         return None 

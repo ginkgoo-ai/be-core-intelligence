@@ -124,7 +124,7 @@ class FormProcessResult(BaseModel):
     actions: List[FormActionModel] = Field(default_factory=list, description="表单动作列表")
     fields_processed: int = Field(default=0, description="处理的字段数")
     processing_time_ms: int = Field(default=0, description="处理时间(毫秒)")
-    error_message: Optional[str] = Field(None, description="错误消息")
+    error_details: Optional[str] = Field(None, description="错误详情")
     questions: List[Dict[str, Any]] = Field(default_factory=list, description="HTML页面分析出的问题")
     answers: List[Dict[str, Any]] = Field(default_factory=list, description="AI生成的答案")
     fields_detected: int = Field(default=0, description="检测到的字段数")
@@ -137,7 +137,8 @@ class FormDataResult(BaseModel):
     success: bool = Field(..., description="是否成功")
     data: List[Dict[str, Any]] = Field(default_factory=list, description="合并的问题答案数据")
     actions: List[Dict[str, str]] = Field(default_factory=list, description="Google插件格式的动作")
-    error_message: Optional[str] = Field(None, description="错误消息")
+    error_details: Optional[str] = Field(None, description="错误详情")
 
 # Update forward references
-WorkflowInstanceDetail.model_rebuild() 
+WorkflowInstanceDetail.model_rebuild()
+StepInstanceDetail.model_rebuild() 

@@ -79,6 +79,10 @@ class StepInstance(Base):
     started_at = Column(DateTime, nullable=True, comment="开始时间")
     completed_at = Column(DateTime, nullable=True, comment="完成时间")
     error_details = Column(Text, nullable=True, comment="错误详情")
+    current_question = Column(String, comment="当前页面要回答的问题")
+    expected_questions = Column(JSON, comment="步骤预期要回答的问题列表")
+    sub_steps = Column(JSON, comment="子步骤信息")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
     
     # Relationships
     workflow_instance = relationship("WorkflowInstance", back_populates="step_instances")

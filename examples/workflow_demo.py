@@ -238,7 +238,7 @@ class WorkflowDemo:
                         print(f"          字段: {answer.get('field_name', 'N/A')}")
                         
             else:
-                print(f"❌ 表单处理失败: {result.get('error_message', 'Unknown error')}")
+                print(f"❌ 表单处理失败: {result.get('error_details', 'Unknown error')}")
             
             return result
             
