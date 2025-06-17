@@ -40,6 +40,8 @@ class WorkflowInstanceSummary(BaseModel):
 class WorkflowInstanceDetail(WorkflowInstanceSummary):
     """Workflow instance detail (extends summary)"""
     workflow_definition_id: Optional[str] = Field(None, description="工作流定义ID")
+    progress_file_id: Optional[str] = Field(None, description="进度文件ID(外部系统管理)")
+    dummy_data_usage: Optional[List[Dict[str, Any]]] = Field(None, description="虚拟数据使用记录JSON数组")
     steps: List["StepInstanceDetail"] = Field(default_factory=list, description="步骤列表")
 
 class StepDataModel(BaseModel):
@@ -137,6 +139,19 @@ class FormDataResult(BaseModel):
     success: bool = Field(..., description="是否成功")
     data: List[Dict[str, Any]] = Field(default_factory=list, description="合并的问题答案数据")
     actions: List[Dict[str, str]] = Field(default_factory=list, description="Google插件格式的动作")
+    error_details: Optional[str] = Field(None, description="错误详情")
+
+# Progress File Models
+class ProgressFileUploadRequest(BaseModel):
+    """Progress file upload request"""
+    file_id: str = Field(..., description="文件ID(外部系统提供)")
+
+class ProgressFileUploadResult(BaseModel):
+    """Progress file upload result"""
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="响应消息")
+    workflow_instance_id: str = Field(..., description="工作流实例ID")
+    progress_file_id: Optional[str] = Field(None, description="已关联的文件ID")
     error_details: Optional[str] = Field(None, description="错误详情")
 
 # Update forward references

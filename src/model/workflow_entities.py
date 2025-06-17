@@ -53,6 +53,8 @@ class WorkflowInstance(Base):
     status = Column(SQLEnum(WorkflowStatus), default=WorkflowStatus.PENDING, 
                    comment="状态(PENDING,IN_PROGRESS,PAUSED,COMPLETED,FAILED)")
     current_step_key = Column(String(100), nullable=True, comment="当前步骤键")
+    progress_file_id = Column(String(100), nullable=True, comment="进度文件ID(外部系统管理)")
+    dummy_data_usage = Column(JSON, nullable=True, comment="虚拟数据使用记录JSON数组: [{'processed_at':'2024-01-01T12:00:00','step_key':'personal_details','question':'请选择您的国籍','answer':'i am dummy data'}]")
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
     completed_at = Column(DateTime, nullable=True, comment="完成时间")

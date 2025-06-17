@@ -78,12 +78,24 @@ class WorkflowInstanceRepository(BaseRepository):
         """Update workflow instance status"""
         instance = self.get_instance_by_id(instance_id)
         if instance:
-            instance.status = status
+            # Only update status if it's not None (allows updating only current_step_key)
+            if status is not None:
+                instance.status = status
+                if status == WorkflowStatus.COMPLETED:
+                    instance.completed_at = datetime.utcnow()
+            
             instance.updated_at = datetime.utcnow()
             if current_step_key:
                 instance.current_step_key = current_step_key
-            if status == WorkflowStatus.COMPLETED:
-                instance.completed_at = datetime.utcnow()
+            return instance
+        return None
+    
+    def update_progress_file_id(self, instance_id: str, file_id: str) -> Optional[WorkflowInstance]:
+        """Update workflow instance progress file ID"""
+        instance = self.get_instance_by_id(instance_id)
+        if instance:
+            instance.progress_file_id = file_id
+            instance.updated_at = datetime.utcnow()
             return instance
         return None
     

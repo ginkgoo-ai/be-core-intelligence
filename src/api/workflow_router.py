@@ -10,7 +10,7 @@ from src.model.workflow_schemas import (
     WorkflowInitiationPayload, WorkflowInstanceSummary, WorkflowInstanceDetail,
     WorkflowStatus, StepDataModel, PersonalDetailsModel, ContactAddressModel,
     StepStatusUpdate, NextStepInfo, AutosaveConfirmation, FormProcessResult,
-    FormDataResult
+    FormDataResult, ProgressFileUploadRequest, ProgressFileUploadResult
 )
 from src.business.langgraph_form_processor import LangGraphFormProcessor
 from src.model.workflow_entities import WorkflowInstance, StepInstance, WorkflowStatus, StepStatus
@@ -22,6 +22,7 @@ class FormProcessRequest(BaseModel):
     """Request model for form processing"""
     form_html: str
     profile_data: dict
+    profile_dummy_data: Optional[dict] = None  # Add optional dummy data field
 
 def get_workflow_service(db: Session = Depends(get_db_session)) -> WorkflowService:
     """Get workflow service instance"""
@@ -143,6 +144,29 @@ async def get_step_data(
             detail=f"获取步骤数据失败: {str(e)}"
         )
 
+@workflow_router.get("/{workflow_id}/steps/{step_key}/raw", response_model=Dict[str, Any])
+async def get_step_raw_data(
+    workflow_id: str,
+    step_key: str,
+    service: StepService = Depends(get_step_service)
+):
+    """Get step raw JSON data from database
+    
+    获取步骤在数据库中存储的原始JSON数据，用于调试和高级用途
+    """
+    try:
+        return service.get_step_raw_data(workflow_id, step_key)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取步骤原始数据失败: {str(e)}"
+        )
+
 @workflow_router.patch("/{workflow_id}/steps/{step_key}/", response_model=StepStatusUpdate)
 async def submit_step_data(
     workflow_id: str,
@@ -228,11 +252,11 @@ async def process_form_for_step(
     Args:
         workflow_id: 工作流实例ID
         step_key: 步骤键  
-        request: 包含form_html和profile_data的请求体
+        request: 包含form_html, profile_data和profile_dummy_data的请求体
     """
     try:
         return service.process_form_for_step(
-            workflow_id, step_key, request.form_html, request.profile_data
+            workflow_id, step_key, request.form_html, request.profile_data, request.profile_dummy_data
         )
     except Exception as e:
         raise HTTPException(
@@ -351,7 +375,7 @@ async def get_step_answers(
                 "answer_type": answer_data.get("type", ""),
                 "selector": answer_data.get("selector", ""),
                 "data": answer_data.get("data", []),
-                "interrupt": question_data.get("interrupt", 0)
+                "interrupt": 1 if question_data.get("type") == "interrupt" else 0
             }
             
             # 添加元数据（如果存在）
@@ -480,7 +504,7 @@ async def process_form(
     处理表单数据 - 使用智能步骤分析
     Args:
         workflow_id: 工作流ID
-        form_data: 表单数据，包含 form_html 和 profile_data
+        form_data: 表单数据，包含 form_html, profile_data 和 profile_dummy_data
     Returns:
         处理结果
     """
@@ -521,7 +545,8 @@ async def process_form(
             workflow_id=workflow_id,
             step_key=current_step.step_key,
             form_html=form_data.get("form_html", ""),
-            profile_data=form_data.get("profile_data", {})
+            profile_data=form_data.get("profile_data", {}),
+            profile_dummy_data=form_data.get("profile_dummy_data", {})
         )
         
         # 转换 FormProcessResult 为 API 响应格式
@@ -622,4 +647,49 @@ async def get_current_step(
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@workflow_router.post("/{workflow_id}/upload-progress-file", response_model=ProgressFileUploadResult)
+async def upload_progress_file(
+    workflow_id: str,
+    request: ProgressFileUploadRequest,
+    service: WorkflowService = Depends(get_workflow_service)
+):
+    """Upload progress file for workflow instance
+    
+    为工作流实例上传进度文件，只需要提供file_id
+    """
+    try:
+        return service.upload_progress_file(workflow_id, request.file_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"上传进度文件失败: {str(e)}"
+        )
+
+@workflow_router.get("/{workflow_id}/progress-file", response_model=Dict[str, Any])
+async def get_progress_file(
+    workflow_id: str,
+    service: WorkflowService = Depends(get_workflow_service)
+):
+    """Get progress file information for workflow instance
+    
+    获取工作流实例的进度文件信息
+    """
+    try:
+        return service.get_progress_file(workflow_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取进度文件信息失败: {str(e)}"
+        ) 

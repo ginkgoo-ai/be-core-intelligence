@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from src.database.workflow_repositories import (
     WorkflowInstanceRepository, StepInstanceRepository
 )
-from src.model.workflow_entities import StepStatus
+from src.model.workflow_entities import StepStatus, WorkflowInstance
 
 
 class FormAnalysisState(TypedDict):
@@ -24,6 +24,7 @@ class FormAnalysisState(TypedDict):
     step_key: str
     form_html: str
     profile_data: Dict[str, Any]
+    profile_dummy_data: Dict[str, Any]  # Add dummy data field
     parsed_form: Optional[Dict[str, Any]]
     detected_fields: List[Dict[str, Any]]
     field_questions: List[Dict[str, Any]]
@@ -32,6 +33,7 @@ class FormAnalysisState(TypedDict):
     form_actions: List[Dict[str, Any]]
     llm_generated_actions: List[Dict[str, Any]]  # New field for LLM-generated actions
     saved_step_data: Optional[Dict[str, Any]]  # New field to store data saved to database
+    dummy_data_usage: List[Dict[str, Any]]  # Track which questions used dummy data
     analysis_complete: bool
     error_details: Optional[str]  # Changed from error_message to error_details
     messages: List[Dict[str, Any]]
@@ -841,8 +843,48 @@ class StepAnalyzer:
             "options": field.get("options", [])
         }
     
-    def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate AI answer for a field question"""
+        try:
+            # First attempt: try to answer with profile_data only
+            primary_result = self._try_answer_with_data(question, profile, "profile_data")
+            
+            # If primary answer is successful and confident, use it
+            if (primary_result["confidence"] >= 50 and 
+                primary_result["answer"] and 
+                not primary_result["needs_intervention"]):
+                return primary_result
+            
+            # If profile_dummy_data is available and primary answer failed, try dummy data
+            if profile_dummy_data:
+                print(f"DEBUG: Trying dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
+                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
+                
+                # If dummy data provides a better answer, use it and mark as dummy data usage
+                if (dummy_result["confidence"] > primary_result["confidence"] and 
+                    dummy_result["answer"]):
+                    dummy_result["used_dummy_data"] = True
+                    dummy_result["dummy_data_source"] = "profile_dummy_data"
+                    return dummy_result
+            
+            # Return the primary result if dummy data didn't help
+            primary_result["used_dummy_data"] = False
+            return primary_result
+                
+        except Exception as e:
+            return {
+                "question_id": question["id"],
+                "field_selector": question["field_selector"],
+                "field_name": question["field_name"],
+                "answer": "",
+                "confidence": 0,
+                "reasoning": f"Error generating answer: {str(e)}",
+                "needs_intervention": True,
+                "used_dummy_data": False
+            }
+
+    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str) -> Dict[str, Any]:
+        """Try to answer a question using a specific data source"""
         try:
             # Create prompt for AI
             prompt = f"""
@@ -852,7 +894,7 @@ class StepAnalyzer:
             filling in the form content, and returning it to the front end in a fixed json format.
 
             # Task
-            Based on the user profile data, determine the appropriate value for this form field:
+            Based on the user data from {source_name}, determine the appropriate value for this form field:
             
             Field Name: {question['field_name']}
             Field Type: {question['field_type']}
@@ -861,15 +903,15 @@ class StepAnalyzer:
             Required: {question['required']}
             Question: {question['question']}
             
-            # User Profile Data:
-            {json.dumps(profile, indent=2)}
+            # User Data ({source_name}):
+            {json.dumps(data_source, indent=2)}
             
             # Instructions
-            1. Find the most appropriate value from the user profile data for this field
+            1. Find the most appropriate value from the user data for this field
             2. Consider the field type and requirements
-            3. If no suitable data is found in the profile, set "needs_intervention" to true
+            3. If no suitable data is found, set "needs_intervention" to true
             4. Provide confidence level (0-100) based on data quality match
-            5. If the profile data is insufficient or unclear for this specific question, mark it as needing human intervention
+            5. If the data is insufficient or unclear for this specific question, mark it as needing human intervention
             
             # Response Format (JSON only):
             {{
@@ -880,8 +922,8 @@ class StepAnalyzer:
             }}
             
             # Examples of when needs_intervention should be true:
-            - Profile data doesn't contain relevant information for this field
-            - The question requires specific knowledge not in the profile
+            - Data doesn't contain relevant information for this field
+            - The question requires specific knowledge not in the data
             - The field is required but no matching data exists
             - The question is ambiguous and requires clarification
             """
@@ -932,10 +974,10 @@ class StepAnalyzer:
                 "field_name": question["field_name"],
                 "answer": "",
                 "confidence": 0,
-                "reasoning": f"Error generating answer: {str(e)}",
+                "reasoning": f"Error with {source_name}: {str(e)}",
                 "needs_intervention": True
             }
-    
+
     def _generate_form_action(self, merged_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Generate form action from merged question-answer data"""
         # Check if we have a valid answer with reasonable confidence
@@ -1204,12 +1246,13 @@ class LangGraphFormProcessor:
                     return True
         return False
 
-    def process_form(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+    def process_form(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process form using LangGraph workflow"""
         try:
             print(f"DEBUG: process_form - Starting with workflow_id: {workflow_id}, step_key: {step_key}")
             print(f"DEBUG: process_form - HTML length: {len(form_html)}")
             print(f"DEBUG: process_form - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+            print(f"DEBUG: process_form - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
             
             # Create initial state
             initial_state = FormAnalysisState(
@@ -1217,6 +1260,7 @@ class LangGraphFormProcessor:
                 step_key=step_key,
                 form_html=form_html,
                 profile_data=profile_data or {},
+                profile_dummy_data=profile_dummy_data or {},
                 parsed_form=None,
                 detected_fields=[],
                 field_questions=[],
@@ -1225,6 +1269,7 @@ class LangGraphFormProcessor:
                 form_actions=[],
                 llm_generated_actions=[],
                 saved_step_data=None,
+                dummy_data_usage=[],
                 analysis_complete=False,
                 error_details=None,
                 messages=[]
@@ -1385,15 +1430,29 @@ class LangGraphFormProcessor:
             print("DEBUG: AI Answerer - Starting")
             
             answers = []
+            dummy_usage = []
             profile_data = state.get("profile_data", {})
+            profile_dummy_data = state.get("profile_dummy_data", {})
             
             for question in state["field_questions"]:
-                answer = self.step_analyzer._generate_ai_answer(question, profile_data)
+                answer = self.step_analyzer._generate_ai_answer(question, profile_data, profile_dummy_data)
                 answers.append(answer)
-                print(f"DEBUG: AI Answerer - Generated answer for {question['field_name']}: confidence={answer['confidence']}")
+                
+                # Track dummy data usage
+                if answer.get("used_dummy_data", False):
+                    dummy_usage.append({
+                        "question": question.get("question", ""),
+                        "field_name": question.get("field_name", ""),
+                        "answer": answer.get("answer", ""),
+                        "dummy_data_source": answer.get("dummy_data_source", "")
+                    })
+                    print(f"DEBUG: AI Answerer - Used dummy data for {question['field_name']}: {answer['answer']}")
+                else:
+                    print(f"DEBUG: AI Answerer - Used profile data for {question['field_name']}: confidence={answer['confidence']}")
             
             state["ai_answers"] = answers
-            print(f"DEBUG: AI Answerer - Generated {len(answers)} answers")
+            state["dummy_data_usage"] = dummy_usage
+            print(f"DEBUG: AI Answerer - Generated {len(answers)} answers, {len(dummy_usage)} used dummy data")
             
         except Exception as e:
             print(f"DEBUG: AI Answerer - Error: {str(e)}")
@@ -1454,6 +1513,15 @@ class LangGraphFormProcessor:
                 # Determine overall intervention status (if any field needs intervention)
                 overall_needs_intervention = any(all_needs_intervention)
                 
+                # CRITICAL: Check if any answer data has check=1 (indicating an answer exists)
+                # If any answer has check=1, then no interrupt should be set regardless of needs_intervention
+                has_valid_answer = any(item.get("check", 0) == 1 for item in all_field_data)
+                
+                # Interrupt logic: only set interrupt if needs intervention AND no valid answer exists
+                should_interrupt = overall_needs_intervention and not has_valid_answer
+                
+                print(f"DEBUG: Q&A Merger - Question '{question_text}': needs_intervention={overall_needs_intervention}, has_valid_answer={has_valid_answer}, should_interrupt={should_interrupt}")
+                
                 # Calculate average confidence
                 avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
                 
@@ -1484,16 +1552,19 @@ class LangGraphFormProcessor:
                         "confidence": avg_confidence,
                         "reasoning": combined_reasoning,
                         "needs_intervention": overall_needs_intervention,
+                        "has_valid_answer": has_valid_answer,  # Track if answer exists
                         "grouped_fields": [q["field_name"] for q in grouped_questions]  # Track all grouped fields
                     }
                 }
                 
-                # Add interrupt field at question level if needed
-                if overall_needs_intervention:
-                    merged_item["question"]["interrupt"] = 1
+                # Add interrupt field at question level ONLY if should_interrupt is True
+                if should_interrupt:
+                    merged_item["question"]["type"] = "interrupt"
+                    interrupt_status = "interrupt"
+                else:
+                    interrupt_status = "normal" if has_valid_answer else "no_answer_but_no_interrupt"
                 
                 merged_data.append(merged_item)
-                interrupt_status = "interrupt" if overall_needs_intervention else "normal"
                 print(f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(grouped_questions)}, status={interrupt_status}")
             
             state["merged_qa_data"] = merged_data
@@ -1610,7 +1681,7 @@ class LangGraphFormProcessor:
                 question_data = item.get("question", {})
                 
                 # Skip if question needs intervention (interrupt)
-                if question_data.get("interrupt"):
+                if question_data.get("type") == "interrupt":
                     print(f"DEBUG: Action Generator - Skipping {metadata.get('field_name', 'unknown')} due to interrupt")
                     continue
                 
@@ -1827,7 +1898,8 @@ class LangGraphFormProcessor:
                 "field_count": len(state.get("detected_fields", [])),
                 "question_count": len(state.get("field_questions", [])),
                 "answer_count": len(state.get("ai_answers", [])),
-                "action_count": len(state.get("llm_generated_actions", []))
+                "action_count": len(state.get("llm_generated_actions", [])),
+                "dummy_data_used_count": len(state.get("dummy_data_usage", []))
             }
             
             # Add error details if present
@@ -1842,6 +1914,7 @@ class LangGraphFormProcessor:
                 "form_data": state.get("merged_qa_data", []),  # 合并的问答数据
                 "actions": state.get("llm_generated_actions", []),  # LLM生成的动作
                 "questions": state.get("field_questions", []),  # 原始问题数据
+                "dummy_data_usage": state.get("dummy_data_usage", []),  # 虚拟数据使用记录
                 "metadata": {
                     "processed_at": datetime.utcnow().isoformat(),
                     "workflow_id": state["workflow_id"],
@@ -1850,7 +1923,8 @@ class LangGraphFormProcessor:
                     "field_count": len(state.get("detected_fields", [])),
                     "question_count": len(state.get("field_questions", [])),
                     "answer_count": len(state.get("ai_answers", [])),
-                    "action_count": len(state.get("llm_generated_actions", []))
+                    "action_count": len(state.get("llm_generated_actions", [])),
+                    "dummy_data_used_count": len(state.get("dummy_data_usage", []))
                 },
                 "history": updated_history  # 完整的历史记录
             }
@@ -1861,6 +1935,45 @@ class LangGraphFormProcessor:
             
             # Save to database (replace existing data with new structure)
             self.step_repo.update_step_data(step.step_instance_id, save_data)
+            
+            # Update WorkflowInstance with dummy data usage if any dummy data was used
+            dummy_usage = state.get("dummy_data_usage", [])
+            if dummy_usage:
+                try:
+                    # Get workflow instance and update dummy_data_usage field
+                    workflow_instance = self.db.query(WorkflowInstance).filter(
+                        WorkflowInstance.workflow_instance_id == state["workflow_id"]
+                    ).first()
+                    
+                    if workflow_instance:
+                        # Get existing dummy data usage array or initialize empty
+                        existing_dummy_usage = workflow_instance.dummy_data_usage or []
+                        
+                        # Create new records for current processing
+                        new_records = []
+                        for usage in dummy_usage:
+                            new_record = {
+                                "processed_at": datetime.utcnow().isoformat(),
+                                "step_key": state["step_key"],
+                                "question": usage.get("question", ""),
+                                "answer": usage.get("answer", "")
+                            }
+                            new_records.append(new_record)
+                        
+                        # Append new records to existing array (incremental update)
+                        updated_dummy_usage = existing_dummy_usage + new_records
+                        
+                        # Update workflow instance
+                        workflow_instance.dummy_data_usage = updated_dummy_usage
+                        self.db.commit()
+                        
+                        print(f"DEBUG: Result Saver - Added {len(new_records)} dummy data usage records to WorkflowInstance (total: {len(updated_dummy_usage)})")
+                    else:
+                        print(f"DEBUG: Result Saver - Warning: WorkflowInstance {state['workflow_id']} not found for dummy data update")
+                        
+                except Exception as e:
+                    print(f"DEBUG: Result Saver - Error updating WorkflowInstance dummy data usage: {str(e)}")
+                    # Don't fail the whole operation if this update fails
             
             # Store saved data in state for reference
             state["saved_step_data"] = save_data
@@ -1916,6 +2029,19 @@ class LangGraphFormProcessor:
                     # Map field type to answer component type
                     answer_type = self._map_field_type_to_answer_type(field.get("type", "text"))
                     
+                    # Create answer data with check=0 (no valid answer)
+                    answer_data = [{
+                        "name": "",
+                        "value": "",
+                        "check": 0  # No valid answer in error case
+                    }]
+                    
+                    # Apply interrupt logic: since check=0 (no valid answer) and needs_intervention=True,
+                    # we should set interrupt=1
+                    has_valid_answer = any(item.get("check", 0) == 1 for item in answer_data)
+                    needs_intervention = True  # Always true in error case
+                    should_interrupt = needs_intervention and not has_valid_answer  # True in error case
+                    
                     error_question = {
                         "question": {
                             "data": {
@@ -1924,13 +2050,8 @@ class LangGraphFormProcessor:
                             "answer": {
                                 "type": answer_type,  # Component type from HTML
                                 "selector": field.get("selector", ""),
-                                "data": [{
-                                    "name": "",
-                                    "value": "",
-                                    "check": 0
-                                }]
-                            },
-                            "interrupt": 1  # Interrupt at question level
+                                "data": answer_data
+                            }
                         },
                         "_metadata": {
                             "id": f"error_q_{field.get('name', 'unknown')}_{uuid.uuid4().hex[:8]}",
@@ -1942,10 +2063,17 @@ class LangGraphFormProcessor:
                             "options": field.get("options", []),
                             "confidence": 0,
                             "reasoning": f"Error occurred during processing: {state.get('error_details', 'Unknown error')}",
-                            "needs_intervention": True
+                            "needs_intervention": needs_intervention,
+                            "has_valid_answer": has_valid_answer
                         }
                     }
+                    
+                    # Add interrupt field ONLY if should_interrupt is True (which is always true in error case)
+                    if should_interrupt:
+                        error_question["question"]["type"] = "interrupt"
+                    
                     error_questions.append(error_question)
+                    print(f"DEBUG: Error Handler - Created error question for {field.get('name', 'unknown')}: interrupt={should_interrupt}")
             
             # Update state with error questions
             state["merged_qa_data"] = error_questions
