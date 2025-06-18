@@ -1,6 +1,6 @@
 # Core FastAPI and web framework
 fastapi==0.115.12
-fastapi-cdn-host==0.1.0
+fastapi-cdn-host==0.9.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 
