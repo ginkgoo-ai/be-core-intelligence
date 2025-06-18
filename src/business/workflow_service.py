@@ -261,6 +261,30 @@ class WorkflowService:
             
         except Exception as e:
             raise e
+    
+    def get_user_workflows(self, user_id: str, limit: int = 50) -> List[WorkflowInstanceSummary]:
+        """Get user's workflow instances list"""
+        try:
+            instances = self.instance_repo.get_user_instances(user_id, limit)
+            
+            # Convert to WorkflowInstanceSummary list
+            workflow_summaries = []
+            for instance in instances:
+                summary = WorkflowInstanceSummary(
+                    workflow_instance_id=instance.workflow_instance_id,
+                    user_id=instance.user_id,
+                    status=instance.status,
+                    current_step_key=instance.current_step_key,
+                    created_at=instance.created_at,
+                    updated_at=instance.updated_at,
+                    completed_at=instance.completed_at
+                )
+                workflow_summaries.append(summary)
+            
+            return workflow_summaries
+            
+        except Exception as e:
+            raise e
 
 class StepService:
     """Step management service"""

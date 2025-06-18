@@ -54,6 +54,29 @@ async def create_workflow(
             detail=f"创建工作流失败: {str(e)}"
         )
 
+@workflow_router.get("/user/{user_id}", response_model=List[WorkflowInstanceSummary])
+async def get_user_workflows(
+    user_id: str,
+    limit: int = 50,
+    service: WorkflowService = Depends(get_workflow_service)
+):
+    """Get user's workflow instances list
+    
+    获取指定用户的所有工作流实例列表，按创建时间倒序排列
+    """
+    try:
+        return service.get_user_workflows(user_id, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取用户工作流列表失败: {str(e)}"
+        )
+
 @workflow_router.get("/{workflow_id}/", response_model=WorkflowInstanceDetail)
 async def get_workflow_status(
     workflow_id: str,
