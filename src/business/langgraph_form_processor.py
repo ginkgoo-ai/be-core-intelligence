@@ -618,6 +618,39 @@ class StepAnalyzer:
                 field_info["options"] = options
                 print(f"DEBUG: _extract_field_info - Select options: {options}")
 
+            elif field_type == "radio":
+                # For radio buttons, find all related radio buttons with same name
+                radio_name = element.get("name", "")
+                if radio_name:
+                    # Find the container and look for related radio buttons
+                    # Search in a wider scope to find all radio buttons with same name
+                    container = element.find_parent()
+                    search_scope = container
+                    
+                    # If container is too small, search in document root
+                    while search_scope and len(search_scope.find_all('input', {'type': 'radio', 'name': radio_name})) < 2:
+                        search_scope = search_scope.find_parent()
+                        if not search_scope:
+                            # Search in the entire document
+                            search_scope = element
+                            while search_scope.parent:
+                                search_scope = search_scope.parent
+                            break
+                    
+                    related_radios = search_scope.find_all('input', {'type': 'radio', 'name': radio_name}) if search_scope else []
+                    options = []
+                    for radio in related_radios:
+                        label_text = self._find_field_label(radio)
+                        radio_value = radio.get("value", "")
+                        if radio_value or label_text:  # Only include if has value or label
+                            options.append({
+                                "value": radio_value or label_text,
+                                "text": label_text or radio_value
+                            })
+                    
+                    field_info["options"] = options
+                    print(f"DEBUG: _extract_field_info - Radio options for '{radio_name}': {options}")
+
             elif field_type == "checkbox":
                 # For checkboxes, find related checkboxes with same name
                 checkbox_name = element.get("name", "")
@@ -1081,81 +1114,65 @@ class StepAnalyzer:
         return None
 
     def _create_answer_data(self, question: Dict[str, Any], ai_answer: Optional[Dict[str, Any]], needs_intervention: bool) -> List[Dict[str, Any]]:
-        """Create answer data array based on field type and AI answer"""
+        """Create answer data array based on field type and AI answer
+        
+        New logic:
+        - If AI answered successfully (not needs_intervention): only store the answer like input format
+        - If needs intervention (interrupt): store all options for user selection
+        """
         field_type = question["field_type"]
         options = question.get("options", [])
         ai_answer_value = ai_answer.get("answer", "") if ai_answer else ""
         
-        if field_type in ["radio", "checkbox"] and options:
-            # For radio/checkbox with options, create data array with check values
-            answer_data = []
-            
-            # Handle multiple answers for checkbox (comma-separated)
-            ai_values = []
+        if field_type in ["radio", "checkbox", "select"] and options:
             if not needs_intervention and ai_answer_value:
-                if field_type == "checkbox" and "," in ai_answer_value:
-                    # Multiple selections for checkbox
-                    ai_values = [v.strip().lower() for v in ai_answer_value.split(",")]
-                else:
-                    # Single selection
-                    ai_values = [ai_answer_value.lower()]
-            
-            for option in options:
-                is_selected = False
-                if ai_values:
-                    option_value = str(option.get("value", "")).lower()
-                    option_text = str(option.get("text", "")).lower()
-                    
-                    # Check if any AI value matches this option
-                    for ai_val in ai_values:
-                        if ai_val == option_value or ai_val == option_text:
-                            is_selected = True
-                            break
+                # AI已回答：只存储答案，类似input格式
+                return [{
+                    "name": ai_answer_value,
+                    "value": ai_answer_value,
+                    "check": 1,
+                    "selector": question["field_selector"]
+                }]
+            else:
+                # 需要人工干预：存储完整选项列表
+                answer_data = []
                 
-                answer_data.append({
-                    "name": option.get("text", option.get("value", "")),
-                    "value": option.get("value", ""),
-                    "check": 1 if is_selected else 0,  # 1 = selected/clicked
-                    "selector": f"input[name='{question['field_name']}'][value='{option.get('value', '')}']"
-                })
-            
-            return answer_data
-        
-        elif field_type == "select" and options:
-            # For select with options
-            answer_data = []
-            
-            # Handle select-multiple case
-            ai_values = []
-            if not needs_intervention and ai_answer_value:
-                if "select-multiple" in field_type or "," in ai_answer_value:
-                    # Multiple selections
-                    ai_values = [v.strip().lower() for v in ai_answer_value.split(",")]
-                else:
-                    # Single selection
-                    ai_values = [ai_answer_value.lower()]
-            
-            for option in options:
-                is_selected = False
-                if ai_values:
-                    option_value = str(option.get("value", "")).lower()
-                    option_text = str(option.get("text", "")).lower()
-                    
-                    # Check if any AI value matches this option
-                    for ai_val in ai_values:
-                        if ai_val == option_value or ai_val == option_text:
-                            is_selected = True
-                            break
+                # Handle multiple answers for checkbox (comma-separated)
+                ai_values = []
+                if not needs_intervention and ai_answer_value:
+                    if field_type == "checkbox" and "," in ai_answer_value:
+                        # Multiple selections for checkbox
+                        ai_values = [v.strip().lower() for v in ai_answer_value.split(",")]
+                    else:
+                        # Single selection
+                        ai_values = [ai_answer_value.lower()]
                 
-                answer_data.append({
-                    "name": option.get("text", option.get("value", "")),
-                    "value": option.get("value", ""),
-                    "check": 1 if is_selected else 0,  # 1 = selected option
-                    "selector": question["field_selector"]  # Use select element selector
-                })
-            
-            return answer_data
-        
+                for option in options:
+                    is_selected = False
+                    if ai_values:
+                        option_value = str(option.get("value", "")).lower()
+                        option_text = str(option.get("text", "")).lower()
+                        
+                        # Check if any AI value matches this option
+                        for ai_val in ai_values:
+                            if ai_val == option_value or ai_val == option_text:
+                                is_selected = True
+                                break
+                    
+                    # 构建选择器
+                    if field_type == "select":
+                        selector = question["field_selector"]
+                    else:
+                        selector = f"input[name='{question['field_name']}'][value='{option.get('value', '')}']"
+                    
+                    answer_data.append({
+                        "name": option.get("text", option.get("value", "")),
+                        "value": option.get("value", ""),
+                        "check": 1 if is_selected else 0,  # 1 = selected/clicked
+                        "selector": selector
+                    })
+                
+                return answer_data
         else:
             # For text inputs, textarea, etc.
             answer_value = ai_answer_value if not needs_intervention else ""
@@ -1359,17 +1376,30 @@ class LangGraphFormProcessor:
             
             form_elements = state["parsed_form"]["elements"]
             detected_fields = []
+            processed_field_groups = set()  # Track processed radio/checkbox groups
             
             # Find all form input elements
             if hasattr(form_elements, 'find_all'):
                 for element in form_elements.find_all(["input", "select", "textarea"]):
+                    element_type = element.get("type", "text").lower() if element.name == "input" else element.name.lower()
+                    element_name = element.get("name", "")
+                    
+                    # For radio and checkbox fields, only process each group once
+                    if element_type in ["radio", "checkbox"] and element_name:
+                        group_key = f"{element_type}_{element_name}"
+                        if group_key in processed_field_groups:
+                            print(f"DEBUG: Field Detector - Skipping duplicate {element_type} field: {element_name}")
+                            continue
+                        processed_field_groups.add(group_key)
+                        print(f"DEBUG: Field Detector - Processing {element_type} group: {element_name}")
+                    
                     field_info = self.step_analyzer._extract_field_info(element)
                     if field_info:
                         detected_fields.append(field_info)
                         print(f"DEBUG: Field Detector - Found field: {field_info['name']} ({field_info['type']})")
             
             state["detected_fields"] = detected_fields
-            print(f"DEBUG: Field Detector - Found {len(detected_fields)} fields")
+            print(f"DEBUG: Field Detector - Found {len(detected_fields)} fields (after deduplication)")
             
         except Exception as e:
             print(f"DEBUG: Field Detector - Error: {str(e)}")
