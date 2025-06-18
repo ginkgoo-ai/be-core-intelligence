@@ -155,7 +155,7 @@ python scripts/init_database.py
 
 5. **启动服务**
 ```bash
-python -m src.main
+python main.py
 ```
 
 服务将在 `http://localhost:8000` 启动
@@ -440,7 +440,7 @@ pip install -r requirements.txt --force-reinstall
 
 ```bash
 # 启动API服务器
-python -m uvicorn src.main:app --reload
+python -m uvicorn main:app --reload
 
 # 在另一个终端运行演示
 python examples/workflow_demo.py

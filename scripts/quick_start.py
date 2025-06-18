@@ -110,7 +110,7 @@ def start_application():
         print("=" * 60)
         
         # Start the application
-        os.system("python -m src.main")
+        os.system("python main.py")
         
     except KeyboardInterrupt:
         print("\n\n🛑 服务已停止")
@@ -130,7 +130,7 @@ def main():
                 start_application()
             else:
                 print("\n📋 手动启动命令:")
-                print("   python -m src.main")
+                print("   python main.py")
         else:
             print("\n❌ 环境配置失败，请检查错误信息")
             return False

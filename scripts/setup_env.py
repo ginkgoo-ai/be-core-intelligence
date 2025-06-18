@@ -86,7 +86,7 @@ def main():
         print("\n📋 下一步操作:")
         print("   1. 确保PostgreSQL服务正在运行")
         print("   2. 运行: python scripts/init_database.py")
-        print("   3. 启动应用: python -m src.main")
+        print("   3. 启动应用: python main.py")
     else:
         print("\n❌ 配置失败")
 
