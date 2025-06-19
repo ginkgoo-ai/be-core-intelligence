@@ -45,15 +45,118 @@ class WorkflowDefinitionRepository(BaseRepository):
         self.db.add(definition)
         self.db.flush()
         return definition
+    
+    def create_definition_full(self, name: str, description: str = None, 
+                              workflow_type: str = "visa", version: str = "1.0",
+                              step_definitions: List[Dict[str, Any]] = None,
+                              is_active: bool = True) -> WorkflowDefinition:
+        """Create workflow definition with full parameters"""
+        definition = WorkflowDefinition(
+            workflow_definition_id=str(uuid.uuid4()),
+            name=name,
+            description=description,
+            type=workflow_type,
+            version=version,
+            step_definitions=step_definitions,
+            is_active=is_active
+        )
+        self.db.add(definition)
+        self.db.flush()
+        return definition
+    
+    def update_definition(self, definition_id: str, **kwargs) -> Optional[WorkflowDefinition]:
+        """Update workflow definition"""
+        definition = self.get_definition_by_id(definition_id)
+        if not definition:
+            return None
+        
+        # Update allowed fields
+        allowed_fields = ['name', 'description', 'type', 'version', 'step_definitions', 'is_active']
+        for field, value in kwargs.items():
+            if field in allowed_fields and value is not None:
+                setattr(definition, field, value)
+        
+        definition.updated_at = datetime.utcnow()
+        self.db.flush()
+        return definition
+    
+    def delete_definition(self, definition_id: str) -> bool:
+        """Delete workflow definition (soft delete by setting is_active=False)"""
+        definition = self.get_definition_by_id(definition_id)
+        if not definition:
+            return False
+        
+        definition.is_active = False
+        definition.updated_at = datetime.utcnow()
+        self.db.flush()
+        return True
+    
+    def hard_delete_definition(self, definition_id: str) -> bool:
+        """Hard delete workflow definition"""
+        definition = self.get_definition_by_id(definition_id)
+        if not definition:
+            return False
+        
+        self.db.delete(definition)
+        self.db.flush()
+        return True
+    
+    def get_definitions_by_type(self, workflow_type: str, is_active: bool = True) -> List[WorkflowDefinition]:
+        """Get workflow definitions by type"""
+        query = self.db.query(WorkflowDefinition).filter(
+            WorkflowDefinition.type == workflow_type
+        )
+        if is_active is not None:
+            query = query.filter(WorkflowDefinition.is_active == is_active)
+        return query.all()
+    
+    def get_definitions_paginated(self, page: int = 1, page_size: int = 10, 
+                                 workflow_type: str = None, is_active: bool = None,
+                                 search_term: str = None) -> Dict[str, Any]:
+        """Get paginated workflow definitions with filters"""
+        query = self.db.query(WorkflowDefinition)
+        
+        # Apply filters
+        if workflow_type:
+            query = query.filter(WorkflowDefinition.type == workflow_type)
+        if is_active is not None:
+            query = query.filter(WorkflowDefinition.is_active == is_active)
+        if search_term:
+            query = query.filter(
+                WorkflowDefinition.name.ilike(f"%{search_term}%") |
+                WorkflowDefinition.description.ilike(f"%{search_term}%")
+            )
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * page_size
+        items = query.order_by(WorkflowDefinition.created_at.desc()).offset(offset).limit(page_size).all()
+        
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items
+        }
+    
+    def get_all_definitions(self, is_active: bool = None) -> List[WorkflowDefinition]:
+        """Get all workflow definitions"""
+        query = self.db.query(WorkflowDefinition)
+        if is_active is not None:
+            query = query.filter(WorkflowDefinition.is_active == is_active)
+        return query.order_by(WorkflowDefinition.created_at.desc()).all()
 
 class WorkflowInstanceRepository(BaseRepository):
     """Workflow instance repository"""
     
-    def create_instance(self, user_id: str, workflow_definition_id: str = None) -> WorkflowInstance:
+    def create_instance(self, user_id: str, case_id: str = None, workflow_definition_id: str = None) -> WorkflowInstance:
         """Create workflow instance"""
         instance = WorkflowInstance(
             workflow_instance_id=str(uuid.uuid4()),
             user_id=user_id,  # Simple string field, no validation
+            case_id=case_id,
             workflow_definition_id=workflow_definition_id,
             status=WorkflowStatus.PENDING
         )
@@ -71,6 +174,19 @@ class WorkflowInstanceRepository(BaseRepository):
         """Get user's workflow instances"""
         return self.db.query(WorkflowInstance).filter(
             WorkflowInstance.user_id == user_id
+        ).order_by(WorkflowInstance.created_at.desc()).limit(limit).all()
+    
+    def get_case_instances(self, case_id: str, limit: int = 50) -> List[WorkflowInstance]:
+        """Get workflow instances by case ID"""
+        return self.db.query(WorkflowInstance).filter(
+            WorkflowInstance.case_id == case_id
+        ).order_by(WorkflowInstance.created_at.desc()).limit(limit).all()
+    
+    def get_user_case_instances(self, user_id: str, case_id: str, limit: int = 50) -> List[WorkflowInstance]:
+        """Get workflow instances by user ID and case ID"""
+        return self.db.query(WorkflowInstance).filter(
+            WorkflowInstance.user_id == user_id,
+            WorkflowInstance.case_id == case_id
         ).order_by(WorkflowInstance.created_at.desc()).limit(limit).all()
     
     def update_instance_status(self, instance_id: str, status: WorkflowStatus, 

@@ -5,12 +5,14 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from src.database.database_config import get_db_session
-from src.business.workflow_service import WorkflowService, StepService
+from src.business.workflow_service import WorkflowService, StepService, WorkflowDefinitionService
 from src.model.workflow_schemas import (
     WorkflowInitiationPayload, WorkflowInstanceSummary, WorkflowInstanceDetail,
     WorkflowStatus, StepDataModel, PersonalDetailsModel, ContactAddressModel,
     StepStatusUpdate, NextStepInfo, AutosaveConfirmation, FormProcessResult,
-    FormDataResult, ProgressFileUploadRequest, ProgressFileUploadResult
+    FormDataResult, ProgressFileUploadRequest, ProgressFileUploadResult,
+    WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDefinitionDetail,
+    WorkflowDefinitionList, WorkflowTypeEnum
 )
 from src.business.langgraph_form_processor import LangGraphFormProcessor
 from src.model.workflow_entities import WorkflowInstance, StepInstance, WorkflowStatus, StepStatus
@@ -75,6 +77,53 @@ async def get_user_workflows(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取用户工作流列表失败: {str(e)}"
+        )
+
+@workflow_router.get("/case/{case_id}", response_model=List[WorkflowInstanceSummary])
+async def get_case_workflows(
+    case_id: str,
+    limit: int = 50,
+    service: WorkflowService = Depends(get_workflow_service)
+):
+    """Get workflow instances by case ID
+    
+    获取指定案例的所有工作流实例列表，按创建时间倒序排列
+    """
+    try:
+        return service.get_case_workflows(case_id, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取案例工作流列表失败: {str(e)}"
+        )
+
+@workflow_router.get("/user/{user_id}/case/{case_id}", response_model=List[WorkflowInstanceSummary])
+async def get_user_case_workflows(
+    user_id: str,
+    case_id: str,
+    limit: int = 50,
+    service: WorkflowService = Depends(get_workflow_service)
+):
+    """Get workflow instances by user ID and case ID
+    
+    获取指定用户在指定案例下的所有工作流实例列表，按创建时间倒序排列
+    """
+    try:
+        return service.get_user_case_workflows(user_id, case_id, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取用户案例工作流列表失败: {str(e)}"
         )
 
 @workflow_router.get("/{workflow_id}/", response_model=WorkflowInstanceDetail)
@@ -715,4 +764,157 @@ async def get_progress_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取进度文件信息失败: {str(e)}"
+        )
+
+# WorkflowDefinition CRUD APIs
+@workflow_router.post("/definitions", response_model=WorkflowDefinitionDetail, status_code=status.HTTP_201_CREATED)
+async def create_workflow_definition(
+    definition_data: WorkflowDefinitionCreate,
+    db: Session = Depends(get_db_session)
+):
+    """Create a new workflow definition"""
+    try:
+        service = WorkflowDefinitionService(db)
+        result = service.create_definition(definition_data)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建工作流定义失败: {str(e)}"
+        )
+
+@workflow_router.get("/definitions/{definition_id}", response_model=WorkflowDefinitionDetail)
+async def get_workflow_definition(
+    definition_id: str,
+    db: Session = Depends(get_db_session)
+):
+    """Get workflow definition by ID"""
+    try:
+        service = WorkflowDefinitionService(db)
+        result = service.get_definition_by_id(definition_id)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"工作流定义未找到: {definition_id}"
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取工作流定义失败: {str(e)}"
+        )
+
+@workflow_router.put("/definitions/{definition_id}", response_model=WorkflowDefinitionDetail)
+async def update_workflow_definition(
+    definition_id: str,
+    update_data: WorkflowDefinitionUpdate,
+    db: Session = Depends(get_db_session)
+):
+    """Update workflow definition"""
+    try:
+        service = WorkflowDefinitionService(db)
+        result = service.update_definition(definition_id, update_data)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"工作流定义未找到: {definition_id}"
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新工作流定义失败: {str(e)}"
+        )
+
+@workflow_router.delete("/definitions/{definition_id}")
+async def delete_workflow_definition(
+    definition_id: str,
+    hard_delete: bool = False,
+    db: Session = Depends(get_db_session)
+):
+    """Delete workflow definition (soft delete by default, hard delete if hard_delete=true)"""
+    try:
+        service = WorkflowDefinitionService(db)
+        success = service.delete_definition(definition_id, hard_delete)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"工作流定义未找到: {definition_id}"
+            )
+        
+        delete_type = "硬删除" if hard_delete else "软删除"
+        return {
+            "success": True,
+            "message": f"工作流定义{delete_type}成功",
+            "definition_id": definition_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除工作流定义失败: {str(e)}"
+        )
+
+@workflow_router.get("/definitions", response_model=WorkflowDefinitionList)
+async def get_workflow_definitions(
+    page: int = 1,
+    page_size: int = 10,
+    workflow_type: Optional[WorkflowTypeEnum] = None,
+    is_active: Optional[bool] = None,
+    search_term: Optional[str] = None,
+    db: Session = Depends(get_db_session)
+):
+    """Get paginated workflow definitions with filters"""
+    try:
+        service = WorkflowDefinitionService(db)
+        result = service.get_definitions_list(
+            page=page,
+            page_size=page_size,
+            workflow_type=workflow_type.value if workflow_type else None,
+            is_active=is_active,
+            search_term=search_term
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取工作流定义列表失败: {str(e)}"
+        )
+
+@workflow_router.get("/definitions/by-type/{workflow_type}", response_model=List[WorkflowDefinitionDetail])
+async def get_workflow_definitions_by_type(
+    workflow_type: WorkflowTypeEnum,
+    is_active: bool = True,
+    db: Session = Depends(get_db_session)
+):
+    """Get workflow definitions by type"""
+    try:
+        service = WorkflowDefinitionService(db)
+        result = service.get_definitions_by_type(workflow_type.value, is_active)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"按类型获取工作流定义失败: {str(e)}"
+        )
+
+@workflow_router.get("/definitions/all", response_model=List[WorkflowDefinitionDetail])
+async def get_all_workflow_definitions(
+    is_active: Optional[bool] = None,
+    db: Session = Depends(get_db_session)
+):
+    """Get all workflow definitions"""
+    try:
+        service = WorkflowDefinitionService(db)
+        result = service.get_all_definitions(is_active)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取所有工作流定义失败: {str(e)}"
         ) 

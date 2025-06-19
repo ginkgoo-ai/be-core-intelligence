@@ -20,10 +20,20 @@ class StepStatusEnum(str, Enum):
     COMPLETED_ERROR = "COMPLETED_ERROR"
     SKIPPED = "SKIPPED"
 
+class WorkflowTypeEnum(str, Enum):
+    """Workflow template type enumeration"""
+    VISA = "visa"
+    PASSPORT = "passport"
+    IMMIGRATION = "immigration"
+    STUDENT_VISA = "student_visa"
+    WORK_PERMIT = "work_permit"
+    FAMILY_VISA = "family_visa"
+
 # Base Models
 class WorkflowInitiationPayload(BaseModel):
     """Workflow initiation payload"""
     user_id: str = Field(..., description="用户ID")
+    case_id: Optional[str] = Field(None, description="案例ID(可选)")
     workflow_definition_id: Optional[str] = Field(None, description="工作流定义ID(可选)")
     initial_data: Optional[Dict[str, Any]] = Field(None, description="初始数据")
 
@@ -31,6 +41,7 @@ class WorkflowInstanceSummary(BaseModel):
     """Workflow instance summary"""
     workflow_instance_id: str = Field(..., description="工作流实例ID")
     user_id: str = Field(..., description="用户ID")
+    case_id: Optional[str] = Field(None, description="案例ID")
     status: WorkflowStatusEnum = Field(..., description="状态")
     current_step_key: Optional[str] = Field(None, description="当前步骤键")
     created_at: datetime = Field(..., description="创建时间")
@@ -153,6 +164,44 @@ class ProgressFileUploadResult(BaseModel):
     workflow_instance_id: str = Field(..., description="工作流实例ID")
     progress_file_id: Optional[str] = Field(None, description="已关联的文件ID")
     error_details: Optional[str] = Field(None, description="错误详情")
+
+# WorkflowDefinition Models
+class WorkflowDefinitionCreate(BaseModel):
+    """Workflow definition creation model"""
+    name: str = Field(..., min_length=1, max_length=200, description="工作流名称")
+    description: Optional[str] = Field(None, max_length=1000, description="工作流描述")
+    type: WorkflowTypeEnum = Field(..., description="模板类型")
+    version: str = Field(default="1.0", max_length=20, description="版本号")
+    step_definitions: Optional[List[Dict[str, Any]]] = Field(None, description="步骤定义JSON")
+    is_active: bool = Field(default=True, description="是否激活")
+
+class WorkflowDefinitionUpdate(BaseModel):
+    """Workflow definition update model"""
+    name: Optional[str] = Field(None, min_length=1, max_length=200, description="工作流名称")
+    description: Optional[str] = Field(None, max_length=1000, description="工作流描述")
+    type: Optional[WorkflowTypeEnum] = Field(None, description="模板类型")
+    version: Optional[str] = Field(None, max_length=20, description="版本号")
+    step_definitions: Optional[List[Dict[str, Any]]] = Field(None, description="步骤定义JSON")
+    is_active: Optional[bool] = Field(None, description="是否激活")
+
+class WorkflowDefinitionDetail(BaseModel):
+    """Workflow definition detail model"""
+    workflow_definition_id: str = Field(..., description="工作流定义ID")
+    name: str = Field(..., description="工作流名称")
+    description: Optional[str] = Field(None, description="工作流描述")
+    type: WorkflowTypeEnum = Field(..., description="模板类型")
+    version: str = Field(..., description="版本号")
+    is_active: bool = Field(..., description="是否激活")
+    step_definitions: Optional[List[Dict[str, Any]]] = Field(None, description="步骤定义JSON")
+    created_at: datetime = Field(..., description="创建时间")
+    updated_at: Optional[datetime] = Field(None, description="更新时间")
+
+class WorkflowDefinitionList(BaseModel):
+    """Workflow definition list response"""
+    total: int = Field(..., description="总数")
+    page: int = Field(..., description="当前页码")
+    page_size: int = Field(..., description="每页大小")
+    items: List[WorkflowDefinitionDetail] = Field(..., description="工作流定义列表")
 
 # Update forward references
 WorkflowInstanceDetail.model_rebuild()

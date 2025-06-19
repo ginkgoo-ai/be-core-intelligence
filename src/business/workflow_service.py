@@ -7,12 +7,14 @@ from src.database.workflow_repositories import (
     WorkflowDefinitionRepository, WorkflowInstanceRepository,
     StepInstanceRepository
 )
-from src.model.workflow_entities import WorkflowStatus, StepStatus
+from src.model.workflow_entities import WorkflowStatus, StepStatus,WorkflowDefinition
 from src.model.workflow_schemas import (
     WorkflowInitiationPayload, WorkflowInstanceSummary, WorkflowInstanceDetail,
     StepDataModel, PersonalDetailsModel, ContactAddressModel, StepStatusUpdate,
     NextStepInfo, WorkflowStatus as WorkflowStatusSchema, AutosaveConfirmation,
-    FormProcessResult, FormActionModel, StepInstanceDetail, ProgressFileUploadResult
+    FormProcessResult, FormActionModel, StepInstanceDetail, ProgressFileUploadResult,
+    WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDefinitionDetail, 
+    WorkflowDefinitionList, WorkflowTypeEnum
 )
 from src.business.langgraph_form_processor import LangGraphFormProcessor
 from src.model.profile_schema import Profile
@@ -62,10 +64,13 @@ class WorkflowService:
                     print(f"⚠️ 工作流定义未找到或无步骤配置，使用默认15步配置")
             else:
                 # Create a default workflow definition if none specified
-                workflow_def = self.definition_repo.create_definition(
+                workflow_def = self.definition_repo.create_definition_full(
                     name="Default Visa Application Workflow",
                     description="Default 15-step visa application process",
-                    step_definitions=step_definitions
+                    workflow_type="visa",
+                    version="1.0", 
+                    step_definitions=step_definitions,
+                    is_active=True
                 )
                 payload.workflow_definition_id = workflow_def.workflow_definition_id
                 print(f"✅ 创建默认工作流定义: {workflow_def.workflow_definition_id}")
@@ -73,6 +78,7 @@ class WorkflowService:
             # Create workflow instance
             instance = self.instance_repo.create_instance(
                 user_id=payload.user_id,
+                case_id=payload.case_id,
                 workflow_definition_id=payload.workflow_definition_id
             )
             
@@ -103,6 +109,7 @@ class WorkflowService:
             return WorkflowInstanceSummary(
                 workflow_instance_id=instance.workflow_instance_id,
                 user_id=instance.user_id,
+                case_id=instance.case_id,
                 status=instance.status,
                 current_step_key=instance.current_step_key,
                 created_at=instance.created_at,
@@ -144,6 +151,7 @@ class WorkflowService:
         return WorkflowInstanceDetail(
             workflow_instance_id=instance.workflow_instance_id,
             user_id=instance.user_id,
+            case_id=instance.case_id,
             status=instance.status,
             current_step_key=instance.current_step_key,
             created_at=instance.created_at,
@@ -273,6 +281,57 @@ class WorkflowService:
                 summary = WorkflowInstanceSummary(
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
+                    case_id=instance.case_id,
+                    status=instance.status,
+                    current_step_key=instance.current_step_key,
+                    created_at=instance.created_at,
+                    updated_at=instance.updated_at,
+                    completed_at=instance.completed_at
+                )
+                workflow_summaries.append(summary)
+            
+            return workflow_summaries
+            
+        except Exception as e:
+            raise e
+    
+    def get_case_workflows(self, case_id: str, limit: int = 50) -> List[WorkflowInstanceSummary]:
+        """Get workflow instances by case ID"""
+        try:
+            instances = self.instance_repo.get_case_instances(case_id, limit)
+            
+            # Convert to WorkflowInstanceSummary list
+            workflow_summaries = []
+            for instance in instances:
+                summary = WorkflowInstanceSummary(
+                    workflow_instance_id=instance.workflow_instance_id,
+                    user_id=instance.user_id,
+                    case_id=instance.case_id,
+                    status=instance.status,
+                    current_step_key=instance.current_step_key,
+                    created_at=instance.created_at,
+                    updated_at=instance.updated_at,
+                    completed_at=instance.completed_at
+                )
+                workflow_summaries.append(summary)
+            
+            return workflow_summaries
+            
+        except Exception as e:
+            raise e
+    
+    def get_user_case_workflows(self, user_id: str, case_id: str, limit: int = 50) -> List[WorkflowInstanceSummary]:
+        """Get workflow instances by user ID and case ID"""
+        try:
+            instances = self.instance_repo.get_user_case_instances(user_id, case_id, limit)
+            
+            # Convert to WorkflowInstanceSummary list
+            workflow_summaries = []
+            for instance in instances:
+                summary = WorkflowInstanceSummary(
+                    workflow_instance_id=instance.workflow_instance_id,
+                    user_id=instance.user_id,
+                    case_id=instance.case_id,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
                     created_at=instance.created_at,
@@ -657,4 +716,162 @@ class StepService:
                 workflow_id,
                 WorkflowStatus.COMPLETED
             )
-            print("✅ 工作流已完成") 
+            print("✅ 工作流已完成")
+
+class WorkflowDefinitionService:
+    """Workflow definition management service"""
+    
+    def __init__(self, db_session: Session):
+        self.db = db_session
+        self.definition_repo = WorkflowDefinitionRepository(db_session)
+    
+    def create_definition(self, create_data: 'WorkflowDefinitionCreate') -> 'WorkflowDefinitionDetail':
+        """Create a new workflow definition"""
+        try:
+            # Create workflow definition
+            definition = self.definition_repo.create_definition_full(
+                name=create_data.name,
+                description=create_data.description,
+                workflow_type=create_data.type.value,
+                version=create_data.version,
+                step_definitions=create_data.step_definitions,
+                is_active=create_data.is_active
+            )
+            
+            self.db.commit()
+            print(f"✅ 创建工作流定义成功: {definition.workflow_definition_id}")
+            
+            # Convert to response model
+            return self._convert_to_detail(definition)
+            
+        except Exception as e:
+            self.db.rollback()
+            print(f"❌ 创建工作流定义失败: {e}")
+            raise e
+    
+    def get_definition_by_id(self, definition_id: str) -> Optional['WorkflowDefinitionDetail']:
+        """Get workflow definition by ID"""
+        try:
+            definition = self.definition_repo.get_definition_by_id(definition_id)
+            if not definition:
+                return None
+            
+            return self._convert_to_detail(definition)
+            
+        except Exception as e:
+            print(f"❌ 获取工作流定义失败: {e}")
+            raise e
+    
+    def update_definition(self, definition_id: str, update_data: 'WorkflowDefinitionUpdate') -> Optional['WorkflowDefinitionDetail']:
+        """Update workflow definition"""
+        try:
+            # Prepare update data
+            update_kwargs = {}
+            if update_data.name is not None:
+                update_kwargs['name'] = update_data.name
+            if update_data.description is not None:
+                update_kwargs['description'] = update_data.description
+            if update_data.type is not None:
+                update_kwargs['type'] = update_data.type.value
+            if update_data.version is not None:
+                update_kwargs['version'] = update_data.version
+            if update_data.step_definitions is not None:
+                update_kwargs['step_definitions'] = update_data.step_definitions
+            if update_data.is_active is not None:
+                update_kwargs['is_active'] = update_data.is_active
+            
+            # Update definition
+            definition = self.definition_repo.update_definition(definition_id, **update_kwargs)
+            if not definition:
+                return None
+            
+            self.db.commit()
+            print(f"✅ 更新工作流定义成功: {definition_id}")
+            
+            return self._convert_to_detail(definition)
+            
+        except Exception as e:
+            self.db.rollback()
+            print(f"❌ 更新工作流定义失败: {e}")
+            raise e
+    
+    def delete_definition(self, definition_id: str, hard_delete: bool = False) -> bool:
+        """Delete workflow definition"""
+        try:
+            if hard_delete:
+                success = self.definition_repo.hard_delete_definition(definition_id)
+            else:
+                success = self.definition_repo.delete_definition(definition_id)
+            
+            if success:
+                self.db.commit()
+                delete_type = "硬删除" if hard_delete else "软删除"
+                print(f"✅ {delete_type}工作流定义成功: {definition_id}")
+            
+            return success
+            
+        except Exception as e:
+            self.db.rollback()
+            print(f"❌ 删除工作流定义失败: {e}")
+            raise e
+    
+    def get_definitions_list(self, page: int = 1, page_size: int = 10, 
+                           workflow_type: str = None, is_active: bool = None,
+                           search_term: str = None) -> 'WorkflowDefinitionList':
+        """Get paginated workflow definitions list"""
+        try:
+            result = self.definition_repo.get_definitions_paginated(
+                page=page, 
+                page_size=page_size,
+                workflow_type=workflow_type,
+                is_active=is_active,
+                search_term=search_term
+            )
+            
+            # Convert items to detail models
+            items = [self._convert_to_detail(definition) for definition in result['items']]
+            
+            return WorkflowDefinitionList(
+                total=result['total'],
+                page=result['page'],
+                page_size=result['page_size'],
+                items=items
+            )
+            
+        except Exception as e:
+            print(f"❌ 获取工作流定义列表失败: {e}")
+            raise e
+    
+    def get_definitions_by_type(self, workflow_type: str, is_active: bool = True) -> List['WorkflowDefinitionDetail']:
+        """Get workflow definitions by type"""
+        try:
+            definitions = self.definition_repo.get_definitions_by_type(workflow_type, is_active)
+            return [self._convert_to_detail(definition) for definition in definitions]
+            
+        except Exception as e:
+            print(f"❌ 按类型获取工作流定义失败: {e}")
+            raise e
+    
+    def get_all_definitions(self, is_active: bool = None) -> List['WorkflowDefinitionDetail']:
+        """Get all workflow definitions"""
+        try:
+            definitions = self.definition_repo.get_all_definitions(is_active)
+            return [self._convert_to_detail(definition) for definition in definitions]
+            
+        except Exception as e:
+            print(f"❌ 获取所有工作流定义失败: {e}")
+            raise e
+    
+    def _convert_to_detail(self, definition: WorkflowDefinition) -> 'WorkflowDefinitionDetail':
+        """Convert entity to detail model"""
+        return WorkflowDefinitionDetail(
+            workflow_definition_id=definition.workflow_definition_id,
+            name=definition.name,
+            description=definition.description,
+            type=WorkflowTypeEnum(definition.type),
+            version=definition.version,
+            is_active=definition.is_active,
+            step_definitions=definition.step_definitions,
+            created_at=definition.created_at,
+            updated_at=definition.updated_at
+        ) 

@@ -33,6 +33,7 @@ class WorkflowDefinition(Base):
     name = Column(String(200), nullable=False, comment="工作流名称")
     description = Column(Text, nullable=True, comment="工作流描述")
     version = Column(String(20), default="1.0", comment="版本号")
+    type = Column(String(50), nullable=False, default="visa", comment="模板类型(visa,passport,immigration等)")
     is_active = Column(Boolean, default=True, comment="是否激活")
     step_definitions = Column(JSON, nullable=True, comment="步骤定义JSON")
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
@@ -48,6 +49,7 @@ class WorkflowInstance(Base):
     
     workflow_instance_id = Column(String(50), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(50), nullable=False, comment="用户ID")  # Removed foreign key constraint
+    case_id = Column(String(50), nullable=True, comment="案例ID(一个案例可以包含多个工作流实例)")
     workflow_definition_id = Column(String(50), ForeignKey('workflow.workflow_definitions.workflow_definition_id'), 
                                    nullable=True, comment="工作流定义XID(外键,可选)")
     status = Column(SQLEnum(WorkflowStatus), default=WorkflowStatus.PENDING, 

@@ -1350,9 +1350,9 @@ class LangGraphFormProcessor:
             if not form:
                 # If no form tag, use the entire HTML as form content
                 form = soup
-            
+
             state["parsed_form"] = {
-                "elements": form,
+                "html_content": str(form),  # 存储 HTML 字符串而不是 Tag 对象
                 "action": form.get("action", "") if hasattr(form, 'get') else "",
                 "method": form.get("method", "post") if hasattr(form, 'get') else "post"
             }
@@ -1374,7 +1374,10 @@ class LangGraphFormProcessor:
                 state["error_details"] = "No parsed form available"
                 return state
             
-            form_elements = state["parsed_form"]["elements"]
+            # 修复：从 HTML 字符串重新解析 BeautifulSoup 对象
+            html_content = state["parsed_form"]["html_content"]
+            form_elements = BeautifulSoup(html_content, 'html.parser')
+            
             detected_fields = []
             processed_field_groups = set()  # Track processed radio/checkbox groups
             
