@@ -175,10 +175,25 @@ if __name__ == "__main__":
         },
     }
     
+    # IPv4/IPv6 双栈模式配置 - 直接支持双栈
+    # "::" 表示IPv6双栈模式，同时支持IPv4和IPv6连接
+    # 客户端可以通过以下方式访问：
+    # - IPv4: http://127.0.0.1:6011 或 http://localhost:6011
+    # - IPv6: http://[::1]:6011
+    
+    host = os.getenv("APP_HOST", "::")  # 默认使用IPv6双栈模式
+    port = int(os.getenv("APP_PORT", "6011"))
+    
+    logger.info(f"🚀 服务器启动配置: {host}:{port}")
+    logger.info("🌐 IPv4/IPv6 双栈模式已启用")
+    logger.info(f"📱 Postman访问地址:")
+    logger.info(f"   - IPv4: http://localhost:{port} 或 http://127.0.0.1:{port}")
+    logger.info(f"   - IPv6: http://[::1]:{port}")
+    
     uvicorn.run(
         "main:app",
-        host=os.getenv("APP_HOST", "0.0.0.0"),
-        port=int(os.getenv("APP_PORT", "8080")),
+        host=host,
+        port=port,
         reload=os.getenv("APP_RELOAD", "true").lower() == "true",
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
         log_config=log_config
