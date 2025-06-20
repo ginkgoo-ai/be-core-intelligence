@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 from src.database.database_config import get_db_session
@@ -25,6 +25,15 @@ class FormProcessRequest(BaseModel):
     form_html: str
     profile_data: dict
     profile_dummy_data: Optional[dict] = None  # Add optional dummy data field
+
+class DummyDataUsageResult(BaseModel):
+    """Result model for dummy data usage tracking"""
+    workflow_id: str = Field(..., description="工作流ID")
+    total_dummy_records: int = Field(..., description="虚拟数据记录总数")
+    ai_generated_count: int = Field(..., description="AI生成的虚拟数据数量")
+    provided_dummy_count: int = Field(..., description="提供的虚拟数据数量")
+    dummy_usage: List[Dict[str, Any]] = Field(default_factory=list, description="虚拟数据使用详情")
+    steps_with_dummy: List[str] = Field(default_factory=list, description="使用了虚拟数据的步骤")
 
 def get_workflow_service(db: Session = Depends(get_db_session)) -> WorkflowService:
     """Get workflow service instance"""
@@ -917,4 +926,61 @@ async def get_all_workflow_definitions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取所有工作流定义失败: {str(e)}"
+        )
+
+@workflow_router.get("/{workflow_id}/dummy-data-usage", response_model=DummyDataUsageResult)
+async def get_dummy_data_usage(
+    workflow_id: str,
+    db: Session = Depends(get_db_session)
+):
+    """Get dummy data usage statistics for a workflow
+    
+    获取工作流中虚拟数据的使用情况统计
+    """
+    try:
+        # Get workflow instance
+        workflow_instance = db.query(WorkflowInstance).filter(
+            WorkflowInstance.workflow_instance_id == workflow_id
+        ).first()
+        
+        if not workflow_instance:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workflow {workflow_id} not found"
+            )
+        
+        dummy_usage = workflow_instance.dummy_data_usage or []
+        
+        # Analyze dummy data usage
+        ai_generated_count = 0
+        provided_dummy_count = 0
+        steps_with_dummy = set()
+        
+        for record in dummy_usage:
+            source = record.get("source", "unknown")
+            step_key = record.get("step_key", "")
+            
+            if source == "ai_generated":
+                ai_generated_count += 1
+            elif source in ["profile_dummy_data", "provided"]:
+                provided_dummy_count += 1
+            
+            if step_key:
+                steps_with_dummy.add(step_key)
+        
+        return DummyDataUsageResult(
+            workflow_id=workflow_id,
+            total_dummy_records=len(dummy_usage),
+            ai_generated_count=ai_generated_count,
+            provided_dummy_count=provided_dummy_count,
+            dummy_usage=dummy_usage,
+            steps_with_dummy=list(steps_with_dummy)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取虚拟数据使用记录失败: {str(e)}"
         ) 

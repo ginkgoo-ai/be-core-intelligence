@@ -900,7 +900,20 @@ class StepAnalyzer:
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
                     return dummy_result
             
-            # Return the primary result if dummy data didn't help
+            # NEW: If both profile_data and profile_dummy_data failed, try intelligent dummy generation
+            if (primary_result["confidence"] < 50 or 
+                not primary_result["answer"] or 
+                primary_result["needs_intervention"]):
+                
+                print(f"DEBUG: Attempting intelligent dummy data generation for field {question['field_name']}")
+                smart_dummy_result = self._generate_smart_dummy_data(question, profile, primary_result)
+                
+                if smart_dummy_result["confidence"] > primary_result["confidence"]:
+                    smart_dummy_result["used_dummy_data"] = True
+                    smart_dummy_result["dummy_data_source"] = "ai_generated"
+                    return smart_dummy_result
+            
+            # Return the primary result if no dummy data could help
             primary_result["used_dummy_data"] = False
             return primary_result
                 
@@ -914,6 +927,127 @@ class StepAnalyzer:
                 "reasoning": f"Error generating answer: {str(e)}",
                 "needs_intervention": True,
                 "used_dummy_data": False
+            }
+
+    def _generate_smart_dummy_data(self, question: Dict[str, Any], profile: Dict[str, Any], primary_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate intelligent dummy data using human-like reasoning"""
+        try:
+            field_name = question.get("field_name", "").lower()
+            field_type = question.get("field_type", "")
+            field_label = question.get("field_label", "")
+            question_text = question.get("question", "")
+            options = question.get("options", [])
+            
+            # Analyze the question like a human would
+            prompt = f"""
+            # Role
+            You are an intelligent form-filling assistant with human-like reasoning capabilities.
+            You need to analyze questions that couldn't be answered from user profile data and determine if you can generate reasonable dummy data.
+
+            # Context
+            The following question could not be answered from the user's profile data:
+            - Field Name: {field_name}
+            - Field Type: {field_type}
+            - Field Label: {field_label}
+            - Question: {question_text}
+            - Options: {json.dumps(options, indent=2) if options else "None"}
+            
+            User Profile Context (for reference):
+            {json.dumps(profile, indent=2)}
+            
+            Primary Analysis Result:
+            - Answer: {primary_result.get("answer", "")}
+            - Confidence: {primary_result.get("confidence", 0)}
+            - Reasoning: {primary_result.get("reasoning", "")}
+
+            # Task
+            Think like a human: Can you generate reasonable dummy data for this question?
+            
+            Consider:
+            1. Is this a factual question that can be reasonably guessed? (e.g., common names, dates, addresses)
+            2. Is this a preference/opinion question where any reasonable choice is acceptable?
+            3. Is this a required field that must be filled to proceed?
+            4. Would a human be able to make a reasonable guess or provide a common answer?
+            5. Are there contextual clues from the user's profile that can guide the answer?
+
+            Guidelines for dummy data generation:
+            - For names: Use common, culturally appropriate names
+            - For dates: Use reasonable dates based on context
+            - For addresses: Use realistic but generic addresses
+            - For phone numbers: Use valid format but fictional numbers
+            - For emails: Use realistic but fictional emails
+            - For multiple choice: Select most common/reasonable option
+            - For yes/no: Choose based on most common scenario
+            - For text fields: Provide reasonable placeholder text
+
+            NEVER generate dummy data for:
+            - Government IDs, passport numbers, social security numbers
+            - Bank account numbers, credit card numbers
+            - Highly personal medical information
+            - Legal documents or signatures
+            - Security questions or passwords
+
+            # Response Format (JSON only):
+            {{
+                "can_generate_dummy": true/false,
+                "answer": "generated dummy data or empty string",
+                "confidence": 0-100,
+                "reasoning": "explanation of why dummy data was generated or why it needs human intervention",
+                "needs_intervention": true/false,
+                "dummy_data_type": "factual/preference/required/contextual"
+            }}
+            """
+            
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            
+            try:
+                result = json.loads(response.content)
+                
+                can_generate = result.get("can_generate_dummy", False)
+                answer = result.get("answer", "")
+                confidence = result.get("confidence", 0)
+                reasoning = result.get("reasoning", "")
+                needs_intervention = result.get("needs_intervention", True)
+                dummy_type = result.get("dummy_data_type", "unknown")
+                
+                # Additional validation
+                if can_generate and answer and confidence >= 60:
+                    needs_intervention = False
+                else:
+                    needs_intervention = True
+                    confidence = min(confidence, 30)  # Cap confidence if intervention needed
+                
+                return {
+                    "question_id": question["id"],
+                    "field_selector": question["field_selector"],
+                    "field_name": question["field_name"],
+                    "answer": answer if can_generate else "",
+                    "confidence": confidence,
+                    "reasoning": f"AI-generated dummy data ({dummy_type}): {reasoning}",
+                    "needs_intervention": needs_intervention,
+                    "dummy_data_type": dummy_type
+                }
+                
+            except json.JSONDecodeError:
+                return {
+                    "question_id": question["id"],
+                    "field_selector": question["field_selector"],
+                    "field_name": question["field_name"],
+                    "answer": "",
+                    "confidence": 0,
+                    "reasoning": "Failed to parse AI response for dummy data generation",
+                    "needs_intervention": True
+                }
+                
+        except Exception as e:
+            return {
+                "question_id": question["id"],
+                "field_selector": question["field_selector"],
+                "field_name": question["field_name"],
+                "answer": "",
+                "confidence": 0,
+                "reasoning": f"Error in smart dummy data generation: {str(e)}",
+                "needs_intervention": True
             }
 
     def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str) -> Dict[str, Any]:
@@ -1471,15 +1605,23 @@ class LangGraphFormProcessor:
                 answer = self.step_analyzer._generate_ai_answer(question, profile_data, profile_dummy_data)
                 answers.append(answer)
                 
-                # Track dummy data usage
+                # Track dummy data usage (including AI-generated dummy data)
                 if answer.get("used_dummy_data", False):
+                    dummy_source = answer.get("dummy_data_source", "unknown")
                     dummy_usage.append({
                         "question": question.get("question", ""),
                         "field_name": question.get("field_name", ""),
                         "answer": answer.get("answer", ""),
-                        "dummy_data_source": answer.get("dummy_data_source", "")
+                        "dummy_data_source": dummy_source,
+                        "dummy_data_type": answer.get("dummy_data_type", "unknown"),
+                        "confidence": answer.get("confidence", 0),
+                        "reasoning": answer.get("reasoning", "")
                     })
-                    print(f"DEBUG: AI Answerer - Used dummy data for {question['field_name']}: {answer['answer']}")
+                    
+                    if dummy_source == "ai_generated":
+                        print(f"DEBUG: AI Answerer - Generated smart dummy data for {question['field_name']}: {answer['answer']} (confidence: {answer['confidence']})")
+                    else:
+                        print(f"DEBUG: AI Answerer - Used provided dummy data for {question['field_name']}: {answer['answer']}")
                 else:
                     print(f"DEBUG: AI Answerer - Used profile data for {question['field_name']}: confidence={answer['confidence']}")
             
@@ -1982,25 +2124,32 @@ class LangGraphFormProcessor:
                         # Get existing dummy data usage array or initialize empty
                         existing_dummy_usage = workflow_instance.dummy_data_usage or []
                         
-                        # Create new records for current processing
-                        new_records = []
+                        # Create new records for current processing using the tool function
+                        new_records = self._create_workflow_dummy_data(dummy_usage, state["step_key"])
+                        
+                        # For backward compatibility, also create simple records for all dummy usage
+                        simple_records = []
                         for usage in dummy_usage:
-                            new_record = {
+                            simple_record = {
                                 "processed_at": datetime.utcnow().isoformat(),
                                 "step_key": state["step_key"],
                                 "question": usage.get("question", ""),
-                                "answer": usage.get("answer", "")
+                                "answer": usage.get("answer", ""),
+                                "source": usage.get("dummy_data_source", "unknown")
                             }
-                            new_records.append(new_record)
+                            simple_records.append(simple_record)
                         
-                        # Append new records to existing array (incremental update)
-                        updated_dummy_usage = existing_dummy_usage + new_records
+                        # Append both detailed records and simple records to existing array (incremental update)
+                        # This ensures both new format and backward compatibility
+                        updated_dummy_usage = existing_dummy_usage + simple_records
                         
                         # Update workflow instance
                         workflow_instance.dummy_data_usage = updated_dummy_usage
                         self.db.commit()
                         
-                        print(f"DEBUG: Result Saver - Added {len(new_records)} dummy data usage records to WorkflowInstance (total: {len(updated_dummy_usage)})")
+                        print(f"DEBUG: Result Saver - Added {len(simple_records)} dummy data usage records to WorkflowInstance")
+                        print(f"DEBUG: Result Saver - {len(new_records)} AI-generated dummy data records created")
+                        print(f"DEBUG: Result Saver - Total dummy usage records: {len(updated_dummy_usage)}")
                     else:
                         print(f"DEBUG: Result Saver - Warning: WorkflowInstance {state['workflow_id']} not found for dummy data update")
                         
@@ -2146,3 +2295,34 @@ class LangGraphFormProcessor:
             state["llm_generated_actions"] = []
 
         return state
+
+    def _create_workflow_dummy_data(self, dummy_usage: List[Dict[str, Any]], step_key: str) -> List[Dict[str, Any]]:
+        """Create formatted dummy data for workflow instance storage
+        
+        Args:
+            dummy_usage: List of dummy data usage records
+            step_key: Current step key
+            
+        Returns:
+            List of formatted dummy data records for workflow storage
+        """
+        workflow_dummy_data = []
+        
+        for usage in dummy_usage:
+            # Only include AI-generated dummy data in workflow storage
+            # (provided dummy data from profile_dummy_data is not stored as it's already known)
+            if usage.get("dummy_data_source") == "ai_generated":
+                workflow_record = {
+                    "processed_at": datetime.utcnow().isoformat(),
+                    "step_key": step_key,
+                    "question": usage.get("question", ""),
+                    "answer": usage.get("answer", ""),
+                    "field_name": usage.get("field_name", ""),
+                    "dummy_data_type": usage.get("dummy_data_type", "unknown"),
+                    "confidence": usage.get("confidence", 0),
+                    "reasoning": usage.get("reasoning", ""),
+                    "source": "ai_generated"
+                }
+                workflow_dummy_data.append(workflow_record)
+        
+        return workflow_dummy_data
