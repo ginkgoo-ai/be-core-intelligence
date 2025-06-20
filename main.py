@@ -146,10 +146,40 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     
+    # Configure uvicorn logging
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+            "watchfiles": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+            "watchfiles.main": {"handlers": ["default"], "level": "ERROR", "propagate": False},
+        },
+        "root": {
+            "level": "INFO",
+            "handlers": ["default"],
+        },
+    }
+    
     uvicorn.run(
         "main:app",
         host=os.getenv("APP_HOST", "0.0.0.0"),
         port=int(os.getenv("APP_PORT", "8080")),
         reload=os.getenv("APP_RELOAD", "true").lower() == "true",
-        log_level=os.getenv("LOG_LEVEL", "info").lower()
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
+        log_config=log_config
     ) 

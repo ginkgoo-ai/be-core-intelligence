@@ -76,8 +76,42 @@ class LoggerConfig:
         debug_handler.setFormatter(formatter)
         root_logger.addHandler(debug_handler)
         
+        # Configure specific loggers to reduce noise
+        cls._configure_noisy_loggers()
+        
         cls._configured = True
         return root_logger
+    
+    @classmethod
+    def _configure_noisy_loggers(cls):
+        """Configure specific loggers that tend to be too verbose"""
+        # Reduce watchfiles logging (file change detection)
+        watchfiles_logger = logging.getLogger("watchfiles")
+        watchfiles_logger.setLevel(logging.WARNING)
+        
+        # Reduce uvicorn access logs if needed
+        uvicorn_access_logger = logging.getLogger("uvicorn.access")
+        uvicorn_access_logger.setLevel(logging.WARNING)
+        
+        # Reduce httpx logs
+        httpx_logger = logging.getLogger("httpx")
+        httpx_logger.setLevel(logging.WARNING)
+        
+        # Reduce httpcore logs
+        httpcore_logger = logging.getLogger("httpcore")
+        httpcore_logger.setLevel(logging.WARNING)
+        
+        # Reduce sqlalchemy engine logs (if too verbose)
+        sqlalchemy_engine_logger = logging.getLogger("sqlalchemy.engine")
+        sqlalchemy_engine_logger.setLevel(logging.WARNING)
+        
+        # Reduce langchain logs if too verbose
+        langchain_logger = logging.getLogger("langchain")
+        langchain_logger.setLevel(logging.INFO)
+        
+        # Keep our application logs at the desired level
+        app_logger = logging.getLogger("src")
+        app_logger.setLevel(logging.DEBUG)
     
     @staticmethod
     def get_logger(name: str) -> logging.Logger:
