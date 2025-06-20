@@ -5,28 +5,38 @@ import fastapi_cdn_host
 from contextlib import asynccontextmanager
 import uvicorn
 import os
+import traceback
+from datetime import datetime
 
 from src.database.database_config import init_database
 from src.api.workflow_router import workflow_router
+from src.utils.logger_config import LoggerConfig, get_logger
+
+# Setup logging
+logger = LoggerConfig.setup(
+    log_level=os.getenv("LOG_LEVEL", "INFO"),
+    log_dir="logs"
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
-    print("🚀 启动签证自动填表工作流系统...")
-    print(f"📊 数据库类型: {'PostgreSQL' if 'postgresql' in os.getenv('DATABASE_URL', '') else 'SQLite'}")
+    logger.info("🚀 启动签证自动填表工作流系统...")
+    logger.info(f"📊 数据库类型: {'PostgreSQL' if 'postgresql' in os.getenv('DATABASE_URL', '') else 'SQLite'}")
     
     # Initialize database
     try:
         init_database()
+        logger.info("✅ 数据库初始化成功")
     except Exception as e:
-        print(f"❌ 数据库初始化失败: {e}")
+        LoggerConfig.log_exception(logger, "数据库初始化失败", e)
         raise
     
     yield
     
     # Shutdown
-    print("🛑 关闭签证自动填表工作流系统...")
+    logger.info("🛑 关闭签证自动填表工作流系统...")
 
 # Create FastAPI application
 app = FastAPI(
@@ -56,13 +66,47 @@ app.include_router(workflow_router)
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Global exception handler"""
+    """Global exception handler with comprehensive logging"""
+    # Log detailed error information
+    logger.error("=" * 50)
+    logger.error(f"🚨 UNHANDLED EXCEPTION OCCURRED")
+    logger.error(f"Request URL: {request.url}")
+    logger.error(f"Request method: {request.method}")
+    logger.error(f"Exception type: {type(exc).__name__}")
+    logger.error(f"Exception message: {str(exc)}")
+    logger.error(f"Full traceback:")
+    logger.error(traceback.format_exc())
+    
+    # Log request headers (excluding sensitive information)
+    headers_to_log = {}
+    for key, value in request.headers.items():
+        if key.lower() not in ['authorization', 'cookie', 'x-api-key']:
+            headers_to_log[key] = value
+        else:
+            headers_to_log[key] = "[REDACTED]"
+    logger.error(f"Request headers: {headers_to_log}")
+    
+    # Try to log request body if available and not too large
+    try:
+        if hasattr(request, '_body') and request._body:
+            body_str = request._body.decode('utf-8')
+            if len(body_str) < 1000:  # Only log small bodies
+                logger.error(f"Request body: {body_str}")
+            else:
+                logger.error(f"Request body: [TOO LARGE - {len(body_str)} bytes]")
+    except Exception as body_error:
+        logger.error(f"Could not log request body: {body_error}")
+    
+    logger.error("=" * 50)
+    
+    # Return JSON response to client
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal server error",
             "message": str(exc),
-            "type": type(exc).__name__
+            "type": type(exc).__name__,
+            "timestamp": datetime.utcnow().isoformat()
         }
     )
 

@@ -5,10 +5,16 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
+from src.utils.logger_config import get_logger
+
+logger = get_logger(__name__)
+
 class DatabaseConfig:
     """Database configuration class"""
     
     def __init__(self):
+        logger.info("Initializing database configuration")
+        
         # PostgreSQL configuration from environment variables
         postgres_host = os.getenv("POSTGRES_HOST", "127.0.0.1")
         postgres_port = os.getenv("POSTGRES_PORT", "5432")
@@ -21,6 +27,7 @@ class DatabaseConfig:
         
         # Use PostgreSQL by default, fallback to SQLite for development
         self.database_url = os.getenv("DATABASE_URL", postgres_url)
+        logger.info(f"Database URL configured: {self.database_url.split('@')[1] if '@' in self.database_url else self.database_url}")
         
         # Engine configuration
         self.engine = create_engine(
@@ -38,42 +45,59 @@ class DatabaseConfig:
             autoflush=False,
             bind=self.engine
         )
+        
+        logger.info("Database configuration initialized successfully")
     
     def create_schema(self):
         """Create workflow schema if it doesn't exist"""
         try:
+            logger.info("Creating workflow schema if it doesn't exist")
             with self.engine.connect() as connection:
                 # Create workflow schema
                 connection.execute(text("CREATE SCHEMA IF NOT EXISTS workflow"))
                 connection.commit()
-                print("✅ Workflow schema created/verified")
+                logger.info("✅ Workflow schema created/verified")
         except Exception as e:
-            print(f"❌ Schema creation failed: {e}")
+            logger.error(f"❌ Schema creation failed: {e}")
             raise
     
     def create_tables(self):
         """Create all database tables in workflow schema"""
-        from src.model.workflow_entities import Base
-        
-        # First create the schema
-        self.create_schema()
-        
-        # Then create tables
-        Base.metadata.create_all(bind=self.engine)
+        try:
+            logger.info("Creating database tables")
+            from src.model.workflow_entities import Base
+            
+            # First create the schema
+            self.create_schema()
+            
+            # Then create tables
+            Base.metadata.create_all(bind=self.engine)
+            logger.info("✅ Database tables created successfully")
+        except Exception as e:
+            logger.error(f"❌ Table creation failed: {e}")
+            raise
     
     def drop_tables(self):
         """Drop all database tables"""
-        from src.model.workflow_entities import Base
-        Base.metadata.drop_all(bind=self.engine)
+        try:
+            logger.warning("Dropping all database tables")
+            from src.model.workflow_entities import Base
+            Base.metadata.drop_all(bind=self.engine)
+            logger.info("✅ Database tables dropped successfully")
+        except Exception as e:
+            logger.error(f"❌ Table dropping failed: {e}")
+            raise
     
     def test_connection(self):
         """Test database connection"""
         try:
+            logger.info("Testing database connection")
             with self.engine.connect() as connection:
                 result = connection.execute(text("SELECT 1"))
+                logger.info("✅ Database connection test successful")
                 return True
         except Exception as e:
-            print(f"Database connection failed: {e}")
+            logger.error(f"❌ Database connection test failed: {e}")
             return False
     
     @contextmanager
@@ -81,13 +105,17 @@ class DatabaseConfig:
         """Get database session with automatic cleanup"""
         session = self.SessionLocal()
         try:
+            logger.debug("Database session created")
             yield session
             session.commit()
-        except Exception:
+            logger.debug("Database session committed successfully")
+        except Exception as e:
+            logger.error(f"Database session error, rolling back: {e}")
             session.rollback()
             raise
         finally:
             session.close()
+            logger.debug("Database session closed")
 
 # Global database instance
 db_config = DatabaseConfig()
@@ -99,14 +127,16 @@ def get_db_session() -> Generator[Session, None, None]:
 
 def init_database():
     """Initialize database tables"""
-    print("Initializing database...")
+    logger.info("Initializing database...")
     try:
         if db_config.test_connection():
-            print("✅ Database connection successful")
+            logger.info("✅ Database connection successful")
             db_config.create_tables()
-            print("✅ Database tables created successfully")
+            logger.info("✅ Database tables created successfully")
         else:
-            print("❌ Database connection failed")
+            error_msg = "❌ Database connection failed"
+            logger.error(error_msg)
+            raise ConnectionError(error_msg)
     except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
+        logger.error(f"❌ Database initialization failed: {e}")
         raise 
