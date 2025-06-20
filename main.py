@@ -182,7 +182,7 @@ if __name__ == "__main__":
     # - IPv6: http://[::1]:6011
     
     host = os.getenv("APP_HOST", "::")  # 默认使用IPv6双栈模式
-    port = int(os.getenv("APP_PORT", "6011"))
+    port = int(os.getenv("APP_PORT", "8080"))
     
     logger.info(f"🚀 服务器启动配置: {host}:{port}")
     logger.info("🌐 IPv4/IPv6 双栈模式已启用")
