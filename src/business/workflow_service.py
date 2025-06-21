@@ -97,8 +97,7 @@ class WorkflowService:
                     instance.workflow_instance_id,
                     step_def["step_key"],
                     step_def["step_name"],
-                    step_def.get("order", 1),
-                    step_def.get("required", False)
+                    step_def.get("order", 1)
                 )
                 created_steps.append(step)
             
@@ -107,7 +106,11 @@ class WorkflowService:
             # Set first step as current
             if created_steps:
                 first_step = min(created_steps, key=lambda s: s.order or 0)
-                self.instance_repo.update_current_step(instance.workflow_instance_id, first_step.step_key)
+                self.instance_repo.update_instance_status(
+                    instance.workflow_instance_id, 
+                    WorkflowStatus.IN_PROGRESS,  # 设置状态为进行中
+                    first_step.step_key  # 设置当前步骤
+                )
                 logger.info(f"✅ 设置当前步骤为: {first_step.step_key}")
 
             return WorkflowInstanceSummary(
