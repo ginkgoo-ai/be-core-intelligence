@@ -183,7 +183,7 @@ if __name__ == "__main__":
     config.application_path = "main:app"
 
     config.reload = os.getenv("APP_RELOAD", "true").lower() == "true"
-    config.log_level = os.getenv("LOG_LEVEL", "info").lower()
+    config.log_level = os.getenv("LOG_LEVEL", "trace").lower()
     config.workers = 1
 
     
