@@ -43,7 +43,7 @@ def get_step_service(db: Session = Depends(get_db_session)) -> StepService:
     """Get step service instance"""
     return StepService(db)
 
-@workflow_router.post("/", response_model=WorkflowInstanceSummary)
+@workflow_router.post(path="",response_model=WorkflowInstanceSummary)
 async def create_workflow(
     payload: WorkflowInitiationPayload,
     service: WorkflowService = Depends(get_workflow_service)
@@ -135,7 +135,7 @@ async def get_user_case_workflows(
             detail=f"获取用户案例工作流列表失败: {str(e)}"
         )
 
-@workflow_router.get("/{workflow_id}/", response_model=WorkflowInstanceDetail)
+@workflow_router.get("/{workflow_id}", response_model=WorkflowInstanceDetail)
 async def get_workflow_status(
     workflow_id: str,
     service: WorkflowService = Depends(get_workflow_service)
@@ -202,7 +202,7 @@ async def resume_workflow(
         )
 
 # Step management endpoints
-@workflow_router.get("/{workflow_id}/steps/{step_key}/", response_model=StepDataModel)
+@workflow_router.get("/{workflow_id}/steps/{step_key}", response_model=StepDataModel)
 async def get_step_data(
     workflow_id: str,
     step_key: str,
@@ -248,7 +248,7 @@ async def get_step_raw_data(
             detail=f"获取步骤原始数据失败: {str(e)}"
         )
 
-@workflow_router.patch("/{workflow_id}/steps/{step_key}/", response_model=StepStatusUpdate)
+@workflow_router.patch("/{workflow_id}/steps/{step_key}", response_model=StepStatusUpdate)
 async def submit_step_data(
     workflow_id: str,
     step_key: str,
