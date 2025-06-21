@@ -154,7 +154,8 @@ if __name__ == "__main__":
     load_dotenv()
     
     # IPv4/IPv6 双栈配置
-    port = int(os.getenv("APP_PORT", "8080"))
+    # Railway 使用 PORT 环境变量，本地开发使用 APP_PORT
+    port = int(os.getenv("PORT", os.getenv("APP_PORT", "8080")))
     
     # Start the server
     print(f"🚀 启动签证自动填表工作流系统...")
@@ -165,15 +166,19 @@ if __name__ == "__main__":
     
     # Configure and run with hypercorn
     config = Config()
-    # IPv4/IPv6 双栈绑定 - 同时监听两个地址
+
     config.bind = [
-        f"0.0.0.0:{port}",    # IPv4
-        f"[::]:{port}"        # IPv6
+        f"0.0.0.0:{port}",  # IPv4
+        f"[::]:{port}"  # IPv6
     ]
+    
     config.application_path = "main:app"
+
     config.reload = os.getenv("APP_RELOAD", "true").lower() == "true"
     config.log_level = os.getenv("LOG_LEVEL", "info").lower()
     config.workers = 1
+
+    
     config.worker_class = "asyncio"
     config.access_logfile = "-"
     config.error_logfile = "-"
