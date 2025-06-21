@@ -4,6 +4,10 @@ fastapi-cdn-host==0.9.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 
+# WebSocket support (required for uvicorn)
+websockets==15.0.1
+wsproto==1.2.0
+
 # Database and ORM
 sqlalchemy==2.0.23
 alembic==1.12.1
