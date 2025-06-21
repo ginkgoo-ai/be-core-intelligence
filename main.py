@@ -167,10 +167,18 @@ if __name__ == "__main__":
     # Configure and run with hypercorn
     config = Config()
 
-    config.bind = [
-        f"0.0.0.0:{port}",  # IPv4
-        f"[::]:{port}"  # IPv6
-    ]
+    is_railway = os.getenv("IS_RAILWAY", "true").lower() == "true"
+
+    if is_railway:
+        config.bind = [
+            f"[::]:{port}"  # IPv6
+        ]
+    else:
+        config.bind = [
+            f"0.0.0.0:{port}",  # IPv4
+            f"[::]:{port}"  # IPv6
+        ]
+
     
     config.application_path = "main:app"
 
