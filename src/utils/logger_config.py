@@ -89,9 +89,13 @@ class LoggerConfig:
         watchfiles_logger = logging.getLogger("watchfiles")
         watchfiles_logger.setLevel(logging.WARNING)
         
-        # Reduce uvicorn access logs if needed
-        uvicorn_access_logger = logging.getLogger("uvicorn.access")
-        uvicorn_access_logger.setLevel(logging.WARNING)
+        # Reduce hypercorn access logs if needed
+        hypercorn_access_logger = logging.getLogger("hypercorn.access")
+        hypercorn_access_logger.setLevel(logging.WARNING)
+        
+        # Reduce hypercorn error logs to INFO level
+        hypercorn_error_logger = logging.getLogger("hypercorn.error")
+        hypercorn_error_logger.setLevel(logging.INFO)
         
         # Reduce httpx logs
         httpx_logger = logging.getLogger("httpx")

@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import fastapi_cdn_host
 from contextlib import asynccontextmanager
-import uvicorn
+import hypercorn.asyncio
+from hypercorn.config import Config
 import os
 import traceback
 from datetime import datetime
@@ -149,45 +150,33 @@ async def root():
 if __name__ == "__main__":
     # Load environment variables
     from dotenv import load_dotenv
+    import asyncio
     load_dotenv()
-    
-    # Configure uvicorn logging
-    log_config = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "default": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            },
-        },
-        "handlers": {
-            "default": {
-                "formatter": "default",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-        },
-        "loggers": {
-            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
-            "watchfiles": {"handlers": ["default"], "level": "WARNING", "propagate": False},
-            "watchfiles.main": {"handlers": ["default"], "level": "ERROR", "propagate": False},
-        },
-        "root": {
-            "level": "INFO",
-            "handlers": ["default"],
-        },
-    }
     
     # IPv4/IPv6 双栈配置
     port = int(os.getenv("APP_PORT", "8080"))
     
-    uvicorn.run(
-        "main:app",
-        host="::",  # IPv6 双栈绑定
-        port=port,
-        reload=os.getenv("APP_RELOAD", "true").lower() == "true",
-        log_level=os.getenv("LOG_LEVEL", "info").lower(),
-        log_config=log_config
-    ) 
+    # Start the server
+    print(f"🚀 启动签证自动填表工作流系统...")
+    print(f"📊 服务地址: http://localhost:{port}")
+    print(f"📚 API文档: http://localhost:{port}/docs")
+    print(f"🔍 健康检查: http://localhost:{port}/health")
+    print("按 Ctrl+C 停止服务")
+    
+    # Configure and run with hypercorn
+    config = Config()
+    # IPv4/IPv6 双栈绑定 - 同时监听两个地址
+    config.bind = [
+        f"0.0.0.0:{port}",    # IPv4
+        f"[::]:{port}"        # IPv6
+    ]
+    config.application_path = "main:app"
+    config.reload = os.getenv("APP_RELOAD", "true").lower() == "true"
+    config.log_level = os.getenv("LOG_LEVEL", "info").lower()
+    config.workers = 1
+    config.worker_class = "asyncio"
+    config.access_logfile = "-"
+    config.error_logfile = "-"
+    
+    # Run with hypercorn
+    asyncio.run(hypercorn.asyncio.serve(app, config)) 

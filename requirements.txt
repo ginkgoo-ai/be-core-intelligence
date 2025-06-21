@@ -1,12 +1,15 @@
-# Core FastAPI and web framework
-fastapi==0.115.12
+# Core FastAPI and web framework - Updated to latest versions
+fastapi==0.115.13
 fastapi-cdn-host==0.9.1
-uvicorn[standard]==0.24.0
+hypercorn==0.17.3
 python-multipart==0.0.6
 
-# WebSocket support (required for uvicorn)
+# WebSocket support (required for hypercorn and LangGraph) - Updated versions
 websockets==15.0.1
 wsproto==1.2.0
+h11==0.16.0
+h2==4.2.0
+watchfiles==0.22.0
 
 # Database and ORM
 sqlalchemy==2.0.23

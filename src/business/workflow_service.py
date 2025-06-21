@@ -49,8 +49,16 @@ class WorkflowService:
         self.definition_repo = WorkflowDefinitionRepository(db_session)
         self.instance_repo = WorkflowInstanceRepository(db_session)
         self.step_repo = StepInstanceRepository(db_session)
-        self.form_processor = LangGraphFormProcessor(db_session)
+        # 延迟加载 LangGraphFormProcessor，避免在初始化时就需要 WebSocket 依赖
+        self._form_processor = None
         logger.info("WorkflowService initialized")
+    
+    @property
+    def form_processor(self):
+        """Lazy loading of LangGraphFormProcessor"""
+        if self._form_processor is None:
+            self._form_processor = LangGraphFormProcessor(self.db)
+        return self._form_processor
     
     def create_workflow(self, payload: WorkflowInitiationPayload) -> WorkflowInstanceSummary:
         """Create a new workflow instance"""
@@ -360,7 +368,15 @@ class StepService:
         self.db = db_session
         self.instance_repo = WorkflowInstanceRepository(db_session)
         self.step_repo = StepInstanceRepository(db_session)
-        self.form_processor = LangGraphFormProcessor(db_session)
+        # 延迟加载 LangGraphFormProcessor，避免在初始化时就需要 WebSocket 依赖
+        self._form_processor = None
+    
+    @property
+    def form_processor(self):
+        """Lazy loading of LangGraphFormProcessor"""
+        if self._form_processor is None:
+            self._form_processor = LangGraphFormProcessor(self.db)
+        return self._form_processor
     
     def get_step_data(self, workflow_id: str, step_key: str) -> StepDataModel:
         """Get step data"""
