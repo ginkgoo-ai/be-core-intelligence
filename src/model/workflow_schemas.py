@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field
-from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 from enum import Enum
+from typing import Dict, List, Any, Optional
+
+from pydantic import BaseModel, Field
+
 
 # Enums
 class WorkflowStatusEnum(str, Enum):
@@ -47,6 +49,8 @@ class WorkflowInstanceSummary(BaseModel):
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
+    progress_file_id: Optional[str] = Field(None, description="进度文件ID(外部系统管理)")
+    dummy_data_usage: Optional[List[Dict[str, Any]]] = Field(None, description="虚拟数据使用记录JSON数组")
 
 class WorkflowInstanceDetail(WorkflowInstanceSummary):
     """Workflow instance detail (extends summary)"""

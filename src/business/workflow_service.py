@@ -1,23 +1,22 @@
-from typing import Dict, List, Any, Optional
 from datetime import datetime
-from sqlalchemy.orm import Session
-import uuid
+from typing import Dict, List, Any, Optional
 
+from sqlalchemy.orm import Session
+
+from src.business.langgraph_form_processor import LangGraphFormProcessor
 from src.database.workflow_repositories import (
     WorkflowDefinitionRepository, WorkflowInstanceRepository,
     StepInstanceRepository
 )
-from src.model.workflow_entities import WorkflowStatus, StepStatus,WorkflowDefinition
+from src.model.workflow_entities import WorkflowStatus, StepStatus, WorkflowDefinition
 from src.model.workflow_schemas import (
     WorkflowInitiationPayload, WorkflowInstanceSummary, WorkflowInstanceDetail,
-    StepDataModel, PersonalDetailsModel, ContactAddressModel, StepStatusUpdate,
+    StepDataModel, StepStatusUpdate,
     NextStepInfo, WorkflowStatus as WorkflowStatusSchema, AutosaveConfirmation,
     FormProcessResult, FormActionModel, StepInstanceDetail, ProgressFileUploadResult,
-    WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDefinitionDetail, 
+    WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDefinitionDetail,
     WorkflowDefinitionList, WorkflowTypeEnum
 )
-from src.business.langgraph_form_processor import LangGraphFormProcessor
-from src.model.profile_schema import Profile
 from src.utils.logger_config import get_logger
 
 logger = get_logger(__name__)
@@ -129,7 +128,9 @@ class WorkflowService:
                 current_step_key=instance.current_step_key,
                 status=instance.status,
                 created_at=instance.created_at,
-                updated_at=instance.updated_at
+                updated_at=instance.updated_at,
+                progress_file_id=instance.progress_file_id,
+                dummy_data_usage=instance.dummy_data_usage
             )
             
         except Exception as e:
@@ -302,7 +303,9 @@ class WorkflowService:
                     current_step_key=instance.current_step_key,
                     created_at=instance.created_at,
                     updated_at=instance.updated_at,
-                    completed_at=instance.completed_at
+                    completed_at=instance.completed_at,
+                    progress_file_id=instance.progress_file_id,
+                    dummy_data_usage=instance.dummy_data_usage
                 )
                 workflow_summaries.append(summary)
             
@@ -327,7 +330,9 @@ class WorkflowService:
                     current_step_key=instance.current_step_key,
                     created_at=instance.created_at,
                     updated_at=instance.updated_at,
-                    completed_at=instance.completed_at
+                    completed_at=instance.completed_at,
+                    progress_file_id=instance.progress_file_id,
+                    dummy_data_usage=instance.dummy_data_usage
                 )
                 workflow_summaries.append(summary)
             
@@ -352,7 +357,9 @@ class WorkflowService:
                     current_step_key=instance.current_step_key,
                     created_at=instance.created_at,
                     updated_at=instance.updated_at,
-                    completed_at=instance.completed_at
+                    completed_at=instance.completed_at,
+                    progress_file_id=instance.progress_file_id,
+                    dummy_data_usage=instance.dummy_data_usage
                 )
                 workflow_summaries.append(summary)
             

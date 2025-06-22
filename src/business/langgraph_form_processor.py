@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Literal, TypedDict
@@ -16,6 +17,98 @@ from src.database.workflow_repositories import (
     WorkflowInstanceRepository, StepInstanceRepository
 )
 from src.model.workflow_entities import StepStatus, WorkflowInstance
+
+
+def clean_llm_response(response_content: str) -> str:
+    """Clean and extract JSON from LLM response"""
+    content = response_content.strip()
+
+    # Remove markdown code blocks
+    if content.startswith('```json'):
+        content = content[7:]
+    elif content.startswith('```'):
+        content = content[3:]
+
+    if content.endswith('```'):
+        content = content[:-3]
+
+    content = content.strip()
+
+    # Try to find JSON object in the content
+    # Look for { ... } pattern
+    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+    if json_match:
+        content = json_match.group(0)
+
+    # Clean up common formatting issues
+    content = re.sub(r'\n\s*', ' ', content)  # Remove newlines and extra spaces
+    content = re.sub(r',\s*}', '}', content)  # Remove trailing commas
+    content = re.sub(r',\s*]', ']', content)  # Remove trailing commas in arrays
+
+    return content
+
+
+def robust_json_parse(response_content: str) -> dict:
+    """Robustly parse JSON from LLM response with multiple fallback strategies"""
+
+    # Strategy 1: Direct parsing
+    try:
+        return json.loads(response_content)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Clean and parse
+    try:
+        cleaned_content = clean_llm_response(response_content)
+        return json.loads(cleaned_content)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: Extract JSON patterns manually
+    try:
+        # Look for answer, confidence, reasoning, needs_intervention pattern
+        answer_match = re.search(r'"answer"\s*:\s*"([^"]*)"', response_content)
+        confidence_match = re.search(r'"confidence"\s*:\s*(\d+)', response_content)
+        reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]*)"', response_content)
+        intervention_match = re.search(r'"needs_intervention"\s*:\s*(true|false)', response_content)
+
+        if answer_match and confidence_match:
+            return {
+                "answer": answer_match.group(1),
+                "confidence": int(confidence_match.group(1)),
+                "reasoning": reasoning_match.group(1) if reasoning_match else "Parsed from partial response",
+                "needs_intervention": intervention_match.group(1).lower() == 'true' if intervention_match else False
+            }
+    except Exception:
+        pass
+
+    # Strategy 4: Look for actions array pattern
+    try:
+        actions_match = re.search(r'"actions"\s*:\s*\[(.*?)\]', response_content, re.DOTALL)
+        if actions_match:
+            actions_content = actions_match.group(1)
+            # Try to parse individual actions
+            action_objects = []
+            action_pattern = r'\{[^}]*\}'
+            for action_match in re.finditer(action_pattern, actions_content):
+                try:
+                    action_obj = json.loads(action_match.group(0))
+                    action_objects.append(action_obj)
+                except:
+                    pass
+
+            if action_objects:
+                return {"actions": action_objects}
+    except Exception:
+        pass
+
+    # If all strategies fail, return a default structure
+    return {
+        "answer": "",
+        "confidence": 0,
+        "reasoning": f"Failed to parse LLM response: {response_content[:100]}...",
+        "needs_intervention": True
+    }
 
 
 class FormAnalysisState(TypedDict):
@@ -81,6 +174,20 @@ class StepAnalyzer:
             temperature=0,
         )
         self._page_context = {}  # Store page context for analysis
+        self._current_workflow_id = None  # Thread isolation for LLM calls
+
+    def set_workflow_id(self, workflow_id: str):
+        """Set the current workflow ID for thread isolation"""
+        self._current_workflow_id = workflow_id
+
+    def _invoke_llm_with_thread_id(self, messages: List, workflow_id: str = None):
+        """Invoke LLM with thread isolation using workflow_id as thread_id"""
+        thread_id = workflow_id or self._current_workflow_id
+        if thread_id:
+            config = {"configurable": {"thread_id": thread_id}}
+            return self.llm.invoke(messages, config=config)
+        else:
+            return self.llm.invoke(messages)
     
     def analyze_step(self, html_content: str, workflow_id: str, current_step_key: str) -> Dict[str, Any]:
         """
@@ -522,8 +629,8 @@ class StepAnalyzer:
                 "recommended_action": "continue_current_step"
             }}
             """
-        
-        response = self.llm.invoke([HumanMessage(content=prompt)])
+
+        response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)])
         try:
             result = json.loads(response.content)
             
@@ -883,9 +990,11 @@ class StepAnalyzer:
             primary_result = self._try_answer_with_data(question, profile, "profile_data")
             
             # If primary answer is successful and confident, use it
-            if (primary_result["confidence"] >= 50 and 
+            if (primary_result["confidence"] >= 30 and  # Lowered from 50 to 30 to prioritize fill_data
                 primary_result["answer"] and 
                 not primary_result["needs_intervention"]):
+                print(
+                    f"DEBUG: Using profile_data for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 return primary_result
             
             # If profile_dummy_data is available and primary answer failed, try dummy data
@@ -901,11 +1010,12 @@ class StepAnalyzer:
                     return dummy_result
             
             # NEW: If both profile_data and profile_dummy_data failed, try intelligent dummy generation
-            if (primary_result["confidence"] < 50 or 
+            if (primary_result["confidence"] < 30 or  # Adjusted threshold to match above
                 not primary_result["answer"] or 
                 primary_result["needs_intervention"]):
-                
-                print(f"DEBUG: Attempting intelligent dummy data generation for field {question['field_name']}")
+
+                print(
+                    f"DEBUG: Attempting intelligent dummy data generation for field {question['field_name']} - primary confidence: {primary_result['confidence']}, answer: '{primary_result['answer']}', needs_intervention: {primary_result['needs_intervention']}")
                 smart_dummy_result = self._generate_smart_dummy_data(question, profile, primary_result)
                 
                 if smart_dummy_result["confidence"] > primary_result["confidence"]:
@@ -930,125 +1040,184 @@ class StepAnalyzer:
             }
 
     def _generate_smart_dummy_data(self, question: Dict[str, Any], profile: Dict[str, Any], primary_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate intelligent dummy data using human-like reasoning"""
+        """Generate intelligent dummy data using LLM"""
         try:
-            field_name = question.get("field_name", "").lower()
+            field_name = question.get("field_name", "")
             field_type = question.get("field_type", "")
             field_label = question.get("field_label", "")
-            question_text = question.get("question", "")
             options = question.get("options", [])
-            
-            # Analyze the question like a human would
-            prompt = f"""
-            # Role
-            You are an intelligent form-filling assistant with human-like reasoning capabilities.
-            You need to analyze questions that couldn't be answered from user profile data and determine if you can generate reasonable dummy data.
 
-            # Context
-            The following question could not be answered from the user's profile data:
-            - Field Name: {field_name}
-            - Field Type: {field_type}
-            - Field Label: {field_label}
-            - Question: {question_text}
-            - Options: {json.dumps(options, indent=2) if options else "None"}
-            
-            User Profile Context (for reference):
-            {json.dumps(profile, indent=2)}
-            
-            Primary Analysis Result:
-            - Answer: {primary_result.get("answer", "")}
-            - Confidence: {primary_result.get("confidence", 0)}
-            - Reasoning: {primary_result.get("reasoning", "")}
-
-            # Task
-            Think like a human: Can you generate reasonable dummy data for this question?
-            
-            Consider:
-            1. Is this a factual question that can be reasonably guessed? (e.g., common names, dates, addresses)
-            2. Is this a preference/opinion question where any reasonable choice is acceptable?
-            3. Is this a required field that must be filled to proceed?
-            4. Would a human be able to make a reasonable guess or provide a common answer?
-            5. Are there contextual clues from the user's profile that can guide the answer?
-
-            Guidelines for dummy data generation:
-            - For names: Use common, culturally appropriate names
-            - For dates: Use reasonable dates based on context
-            - For addresses: Use realistic but generic addresses
-            - For phone numbers: Use valid format but fictional numbers
-            - For emails: Use realistic but fictional emails
-            - For multiple choice: Select most common/reasonable option
-            - For yes/no: Choose based on most common scenario
-            - For text fields: Provide reasonable placeholder text
-
-            NEVER generate dummy data for:
-            - Government IDs, passport numbers, social security numbers
-            - Bank account numbers, credit card numbers
-            - Highly personal medical information
-            - Legal documents or signatures
-            - Security questions or passwords
-
-            # Response Format (JSON only):
-            {{
-                "can_generate_dummy": true/false,
-                "answer": "generated dummy data or empty string",
-                "confidence": 0-100,
-                "reasoning": "explanation of why dummy data was generated or why it needs human intervention",
-                "needs_intervention": true/false,
-                "dummy_data_type": "factual/preference/required/contextual"
-            }}
+            # Create context for the LLM
+            context = f"""
+            Field Name: {field_name}
+            Field Type: {field_type}
+            Field Label: {field_label}
             """
+
+            if options:
+                context += f"\nAvailable Options: {[opt.get('value', opt.get('text', '')) for opt in options]}"
+
+            # Special handling for checkbox fields that should be mutually exclusive
+            is_mutually_exclusive_checkbox = (
+                    field_type == "checkbox" and
+                    any(keyword in field_name.lower() or keyword in field_label.lower()
+                        for keyword in ["purpose", "type", "category", "status", "gender", "title"])
+            )
             
-            response = self.llm.invoke([HumanMessage(content=prompt)])
+            prompt = f"""
+            Generate appropriate dummy data for this form field:
             
+            {context}
+            
+            Requirements:
+            1. Generate realistic, appropriate dummy data
+            2. For sensitive fields (bank account, passport, SSN, credit card), return empty string
+            3. For contact info, use realistic but fake data (e.g., "555-123-4567" for phone)
+            4. For names, use common placeholder names
+            5. For addresses, use realistic but generic addresses
+            6. For dates, use reasonable dates (e.g., birth date should be adult age)
+            
+            {"7. IMPORTANT: This appears to be a mutually exclusive checkbox group. Select ONLY ONE option, not multiple." if is_mutually_exclusive_checkbox else ""}
+            
+            Return JSON in this exact format:
+            {{
+                "answer": "your_generated_value",
+                "confidence": 85,
+                "reasoning": "why this value was chosen"
+            }}
+            
+            For radio/checkbox with options, return the option value, not the display text.
+            {"For mutually exclusive checkboxes, return only ONE value." if is_mutually_exclusive_checkbox else ""}
+            """
+
+            # Use thread-isolated LLM call if workflow_id is available
+            if self._current_workflow_id:
+                response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)], self._current_workflow_id)
+            else:
+                response = self.llm.invoke([HumanMessage(content=prompt)])
+
+            # Parse the response using robust JSON parsing
             try:
-                result = json.loads(response.content)
-                
-                can_generate = result.get("can_generate_dummy", False)
-                answer = result.get("answer", "")
-                confidence = result.get("confidence", 0)
-                reasoning = result.get("reasoning", "")
-                needs_intervention = result.get("needs_intervention", True)
-                dummy_type = result.get("dummy_data_type", "unknown")
-                
-                # Additional validation
-                if can_generate and answer and confidence >= 60:
-                    needs_intervention = False
+                result = robust_json_parse(response.content)
+
+                # Ensure answer is a string, not a list
+                if isinstance(result.get("answer"), list):
+                    if is_mutually_exclusive_checkbox:
+                        # For mutually exclusive checkboxes, take only the first item
+                        result["answer"] = str(result["answer"][0]) if result["answer"] else ""
+                    else:
+                        # For regular checkboxes, join with commas
+                        result["answer"] = ",".join(str(item) for item in result["answer"])
                 else:
-                    needs_intervention = True
-                    confidence = min(confidence, 30)  # Cap confidence if intervention needed
-                
-                return {
-                    "question_id": question["id"],
-                    "field_selector": question["field_selector"],
-                    "field_name": question["field_name"],
-                    "answer": answer if can_generate else "",
-                    "confidence": confidence,
-                    "reasoning": f"AI-generated dummy data ({dummy_type}): {reasoning}",
-                    "needs_intervention": needs_intervention,
-                    "dummy_data_type": dummy_type
+                    result["answer"] = str(result.get("answer", ""))
+
+                # Validate the generated data
+                if field_type in ["radio", "checkbox"] and options:
+                    # Check if the answer matches any available option
+                    answer_values = [v.strip() for v in result["answer"].split(",") if v.strip()]
+                    valid_option_values = [str(opt.get("value", "")).lower() for opt in options]
+
+                    # Filter to only include valid options
+                    valid_answers = []
+                    for answer_val in answer_values:
+                        if answer_val.lower() in valid_option_values:
+                            valid_answers.append(answer_val)
+
+                    if valid_answers:
+                        if is_mutually_exclusive_checkbox:
+                            # For mutually exclusive, take only the first valid option
+                            result["answer"] = valid_answers[0]
+                        else:
+                            # For regular checkboxes, join all valid options
+                            result["answer"] = ",".join(valid_answers)
+                    else:
+                        # If no valid options found, pick the first available option
+                        if options:
+                            result["answer"] = str(options[0].get("value", ""))
+                            result["reasoning"] = "Selected first available option as fallback"
+
+                # CRITICAL: Add required fields for AI answer format
+                final_result = {
+                    "question_id": question.get("id", ""),
+                    "field_selector": question.get("field_selector", ""),
+                    "field_name": question.get("field_name", ""),
+                    "answer": result.get("answer", ""),
+                    "confidence": result.get("confidence", 70),
+                    "reasoning": result.get("reasoning", "Generated dummy data"),
+                    "needs_intervention": False,  # AI provided an answer, no intervention needed
+                    "used_dummy_data": True,  # This will be set by the caller
+                    "dummy_data_source": "ai_generated"  # This will be set by the caller
                 }
-                
-            except json.JSONDecodeError:
-                return {
-                    "question_id": question["id"],
-                    "field_selector": question["field_selector"],
-                    "field_name": question["field_name"],
-                    "answer": "",
-                    "confidence": 0,
-                    "reasoning": "Failed to parse AI response for dummy data generation",
-                    "needs_intervention": True
-                }
+
+                print(
+                    f"DEBUG: Smart dummy data generated for {field_name}: answer='{final_result['answer']}', confidence={final_result['confidence']}")
+
+                return final_result
+
+            except Exception as parse_error:
+                print(f"DEBUG: Smart dummy data JSON parse error: {str(parse_error)}")
+                # Fallback to basic dummy data generation
+                return self._generate_basic_dummy_data(question)
                 
         except Exception as e:
-            return {
-                "question_id": question["id"],
-                "field_selector": question["field_selector"],
-                "field_name": question["field_name"],
-                "answer": "",
-                "confidence": 0,
-                "reasoning": f"Error in smart dummy data generation: {str(e)}",
-                "needs_intervention": True
-            }
+            print(f"DEBUG: Smart dummy data generation error: {str(e)}")
+            # Fallback to basic dummy data generation
+            return self._generate_basic_dummy_data(question)
+
+    def _generate_basic_dummy_data(self, question: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate basic dummy data as fallback"""
+        field_type = question.get("field_type", "")
+        field_name = question.get("field_name", "").lower()
+        options = question.get("options", [])
+
+        # Basic dummy data patterns
+        if "email" in field_name:
+            answer = "user@example.com"
+            confidence = 70
+            reasoning = "Basic email dummy data"
+        elif "phone" in field_name or "telephone" in field_name:
+            answer = "555-123-4567"
+            confidence = 70
+            reasoning = "Basic phone dummy data"
+        elif "name" in field_name:
+            if "first" in field_name:
+                answer = "John"
+                confidence = 70
+                reasoning = "Basic first name dummy data"
+            elif "last" in field_name:
+                answer = "Doe"
+                confidence = 70
+                reasoning = "Basic last name dummy data"
+            else:
+                answer = "John Doe"
+                confidence = 70
+                reasoning = "Basic name dummy data"
+        elif field_type in ["radio", "checkbox"] and options:
+            # For radio/checkbox, select the first option
+            answer = options[0].get("value", "") if options else ""
+            confidence = 60
+            reasoning = "Selected first available option"
+        elif field_type == "number":
+            answer = "123"
+            confidence = 60
+            reasoning = "Basic number dummy data"
+        else:
+            answer = ""
+            confidence = 30
+            reasoning = "No appropriate dummy data pattern found"
+
+        # Return in the correct format with all required fields
+        return {
+            "question_id": question.get("id", ""),
+            "field_selector": question.get("field_selector", ""),
+            "field_name": question.get("field_name", ""),
+            "answer": answer,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "needs_intervention": answer == "",  # Only need intervention if no answer generated
+            "used_dummy_data": True,  # This will be set by the caller
+            "dummy_data_source": "ai_generated"  # This will be set by the caller
+        }
 
     def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str) -> Dict[str, Any]:
         """Try to answer a question using a specific data source"""
@@ -1074,37 +1243,89 @@ class StepAnalyzer:
             {json.dumps(data_source, indent=2)}
             
             # Instructions
-            1. Find the most appropriate value from the user data for this field
-            2. Consider the field type and requirements
-            3. If no suitable data is found, set "needs_intervention" to true
-            4. Provide confidence level (0-100) based on data quality match
-            5. If the data is insufficient or unclear for this specific question, mark it as needing human intervention
+            1. **PRIORITIZE EXACT MATCHES**: Look for data that exactly matches the field name or purpose
+            2. **SEARCH NESTED STRUCTURES**: Thoroughly search through ALL nested objects and arrays
+            3. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping for common patterns:
+               - For "telephoneNumber" field: Check contactInformation.telephoneNumber, phone, mobile, telephone
+               - For "telephoneNumberType" field: Check contactInformation.telephoneType, phoneType, type
+               - For "telephoneNumberPurpose" field: Check usage patterns, purpose, where it's used
+               - For name fields: Check personalDetails.givenName, personalDetails.familyName, name fields
+               - For email fields: Check contactInformation.primaryEmail, email, emailAddress
+               - For address fields: Check contactInformation.currentAddress, address fields
+               - For date fields: Check personalDetails.dateOfBirth, dateOfBirth, dates
+            4. **SEMANTIC MATCHING**: If no exact match, look for semantically similar fields
+            5. **CONFIDENCE SCORING**: 
+               - 90-100: Exact field name match with valid data
+               - 70-89: Semantic match with high confidence
+               - 50-69: Reasonable match but some uncertainty
+               - 30-49: Weak match, might need verification
+               - 0-29: No suitable data found
+            6. **VALIDATION**: Ensure the data type matches the field requirements
+            7. **MUTUAL EXCLUSIVITY**: For purpose/type/category checkboxes, select only ONE value
+            8. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
+            
+            # Special Instructions for Telephone Fields:
+            - For "telephoneNumber": Extract the actual phone number (remove country codes if needed for local format)
+            - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", etc.)
+            - For "telephoneNumberPurpose": Analyze usage context (if from contactInformation, likely "useInUK")
             
             # Response Format (JSON only):
             {{
                 "answer": "your answer here or empty if no data available",
                 "confidence": 85,
-                "reasoning": "explanation of why this answer was chosen or why intervention is needed",
+                "reasoning": "detailed explanation of data source and matching logic",
                 "needs_intervention": false
             }}
             
-            # Examples of when needs_intervention should be true:
-            - Data doesn't contain relevant information for this field
-            - The question requires specific knowledge not in the data
-            - The field is required but no matching data exists
-            - The question is ambiguous and requires clarification
-            """
+            # Examples of HIGH confidence scenarios:
+            - Field "telephoneNumber" matches contactInformation.telephoneNumber
+            - Field "givenName" matches personalDetails.givenName
+            - Field "email" matches contactInformation.primaryEmail
             
-            response = self.llm.invoke([HumanMessage(content=prompt)])
+            # Examples of when needs_intervention should be true:
+            - No matching data found in any nested structure
+            - Data exists but is empty/null/undefined
+            - Field is required but confidence is below 50
+            - Data type mismatch that cannot be resolved
+            
+            # Examples of when needs_intervention should be false:
+            - Exact match found in data source
+            - Semantic match found in data source
+            - Data type matches field requirements
+            - Data is empty/null/undefined but not required
+            """
+
+            response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)])
             
             try:
-                # Try to parse JSON response
-                result = json.loads(response.content)
+                # Try to parse JSON response using robust parsing
+                result = robust_json_parse(response.content)
                 
                 # Determine if intervention is needed based on AI response and confidence
                 needs_intervention = result.get("needs_intervention", False)
                 confidence = result.get("confidence", 0)
                 answer = result.get("answer", "")
+
+                # Normalize answer to string format
+                if isinstance(answer, list):
+                    # Special handling for checkbox fields that should be mutually exclusive
+                    field_name = question.get("field_name", "").lower()
+                    field_label = question.get("field_label", "").lower()
+                    is_mutually_exclusive = any(keyword in field_name or keyword in field_label
+                                                for keyword in ["purpose", "type", "category", "status"])
+
+                    if is_mutually_exclusive and len(answer) > 1:
+                        # For mutually exclusive fields, take only the first value
+                        answer = str(answer[0]) if answer else ""
+                        print(
+                            f"DEBUG: _try_answer_with_data - Converted mutually exclusive list to single value: {answer}")
+                    else:
+                        # For regular checkboxes, join with commas
+                        answer = ",".join(str(item) for item in answer) if answer else ""
+                elif answer is None:
+                    answer = ""
+                else:
+                    answer = str(answer)
                 
                 # Additional logic: if confidence is very low or answer is empty for required fields
                 if not needs_intervention:
@@ -1117,20 +1338,26 @@ class StepAnalyzer:
                     "question_id": question["id"],
                     "field_selector": question["field_selector"],
                     "field_name": question["field_name"],
+                    "field_type": question.get("field_type", ""),
+                    "field_label": question.get("field_label", ""),
+                    "options": question.get("options", []),
                     "answer": answer,
                     "confidence": confidence,
                     "reasoning": result.get("reasoning", ""),
                     "needs_intervention": needs_intervention
                 }
-            except json.JSONDecodeError:
-                # Fallback if JSON parsing fails - assume intervention needed
+            except Exception as parse_error:
+                # Fallback if even robust parsing fails
                 return {
                     "question_id": question["id"],
                     "field_selector": question["field_selector"],
                     "field_name": question["field_name"],
+                    "field_type": question.get("field_type", ""),
+                    "field_label": question.get("field_label", ""),
+                    "options": question.get("options", []),
                     "answer": "",
                     "confidence": 0,
-                    "reasoning": "AI response could not be parsed as JSON - intervention needed",
+                    "reasoning": f"JSON parsing failed: {str(parse_error)}",
                     "needs_intervention": True
                 }
                 
@@ -1139,13 +1366,16 @@ class StepAnalyzer:
                 "question_id": question["id"],
                 "field_selector": question["field_selector"],
                 "field_name": question["field_name"],
+                "field_type": question.get("field_type", ""),
+                "field_label": question.get("field_label", ""),
+                "options": question.get("options", []),
                 "answer": "",
                 "confidence": 0,
                 "reasoning": f"Error with {source_name}: {str(e)}",
                 "needs_intervention": True
             }
 
-    def _generate_form_action(self, merged_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _generate_form_action(self, merged_data: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         """Generate form action from merged question-answer data"""
         # Check if we have a valid answer with reasonable confidence
         answer = merged_data.get("answer", "")
@@ -1159,140 +1389,152 @@ class StepAnalyzer:
         selector = merged_data["field_selector"]
         field_name = merged_data["field_name"]
         field_type = merged_data.get("field_type", "")
+        options = merged_data.get("options", [])
+
+        actions = []
 
         # Determine action type and value based on field type
         if field_type == "radio":
-            # For radio buttons, we need to find the specific radio button to click
-            # The selector should point to the specific radio option
-            action_type = "click"
-            # Find the matching option value to create a more specific selector
-            options = merged_data.get("options", [])
-            specific_value = None
-            for option in options:
-                if (str(answer).lower() == str(option.get("value", "")).lower() or
-                        str(answer).lower() == str(option.get("text", "")).lower()):
-                    specific_value = option.get("value")
-                    break
-
-            if specific_value:
-                # Create more specific selector for the radio button
-                specific_selector = f"input[type='radio'][name='{field_name}'][value='{specific_value}']"
-                return {
-                    "selector": specific_selector,
-                    "action_type": action_type,
-                    "value": None,  # For radio/checkbox, clicking is the action
-                    "field_name": field_name,
-                    "confidence": confidence,
-                    "reasoning": merged_data.get("reasoning", ""),
-                    "order": hash(field_name) % 1000
-                }
-
+            # For radio buttons, generate click action
+            # Update selector to include the specific value
+            if "[value='" not in selector and options:
+                # Find the matching option
+                for option in options:
+                    if option.get("value") == answer or option.get("text") == answer:
+                        updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
+                        actions.append({
+                            "selector": updated_selector,
+                            "type": "click",
+                            "value": option.get('value', answer)
+                        })
+                        break
+            else:
+                actions.append({
+                    "selector": selector,
+                    "type": "click",
+                    "value": answer
+                })
+                
         elif field_type == "checkbox":
-            # Similar to radio, but for checkboxes
-            action_type = "click"
-            options = merged_data.get("options", [])
-            specific_value = None
-            for option in options:
-                if (str(answer).lower() == str(option.get("value", "")).lower() or
-                        str(answer).lower() == str(option.get("text", "")).lower()):
-                    specific_value = option.get("value")
-                    break
+            # For checkboxes, handle multiple values separated by commas
+            values = [v.strip() for v in answer.split(",") if v.strip()]
 
-            if specific_value:
-                specific_selector = f"input[type='checkbox'][name='{field_name}'][value='{specific_value}']"
-                return {
-                    "selector": specific_selector,
-                    "action_type": action_type,
-                    "value": None,
-                    "field_name": field_name,
-                    "confidence": confidence,
-                    "reasoning": merged_data.get("reasoning", ""),
-                    "order": hash(field_name) % 1000
-                }
+            for value in values:
+                # Create selector for this specific checkbox value
+                if "[value='" not in selector and options:
+                    # Find the matching option
+                    for option in options:
+                        if option.get("value") == value or option.get("text") == value:
+                            # Build selector with specific value
+                            updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
+                            actions.append({
+                                "selector": updated_selector,
+                                "type": "click",
+                                "value": option.get('value', value)
+                            })
+                            break
+                else:
+                    # Use the selector as-is if it already includes value
+                    actions.append({
+                        "selector": selector,
+                        "type": "click",
+                        "value": value
+                    })
 
-        elif field_type == "select":
-            action_type = "select"
-            # For select elements, we set the value directly
-            return {
+        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local"]:
+            # For input fields, use input action with value
+            actions.append({
                 "selector": selector,
-                "action_type": action_type,
-                "value": answer,
-                "field_name": field_name,
-                "confidence": confidence,
-                "reasoning": merged_data.get("reasoning", ""),
-                "order": hash(field_name) % 1000
-            }
+                "type": "input",
+                "value": answer
+            })
+            
+        elif field_type == "select":
+            # For select dropdowns, use input action with value
+            actions.append({
+                "selector": selector,
+                "type": "input",
+                "value": answer
+            })
 
+        elif field_type == "textarea":
+            # For textarea, use input action with value
+            actions.append({
+                "selector": selector,
+                "type": "input",
+                "value": answer
+            })
         else:
-            # For text inputs, textarea, etc. - allow even if no answer
-            action_type = "input"
-        return {
-            "selector": selector,
-            "action_type": action_type,
-                "value": answer,  # Can be empty
-            "field_name": field_name,
-                "confidence": confidence,
-                "reasoning": merged_data.get("reasoning", ""),
-                "order": hash(field_name) % 1000
-            }
+            # Default case - try input first, then click
+            actions.append({
+                "selector": selector,
+                "type": "input",
+                "value": answer
+            })
 
-        # If we get here, no action could be generated
-        return None
+        return actions if actions else None
 
     def _find_answer_for_question(self, question: Dict[str, Any], answers: List[Dict[str, Any]]) -> Optional[
         Dict[str, Any]]:
         """Find the answer for a given question"""
+        question_selector = question.get("field_selector", "")
+        question_id = question.get("id", "")
+        question_field_name = question.get("field_name", "")
+        
         for answer in answers:
-            if answer["field_selector"] == question["field_selector"]:
+            # Try multiple matching strategies
+            # Strategy 1: Match by field_selector (if both have it)
+            answer_selector = answer.get("field_selector", "")
+            if question_selector and answer_selector and answer_selector == question_selector:
                 return answer
+
+            # Strategy 2: Match by question_id (if answer has it)
+            answer_question_id = answer.get("question_id", "")
+            if question_id and answer_question_id and answer_question_id == question_id:
+                return answer
+
+            # Strategy 3: Match by field_name (if both have it)
+            answer_field_name = answer.get("field_name", "")
+            if question_field_name and answer_field_name and answer_field_name == question_field_name:
+                return answer
+        
         return None
 
     def _create_answer_data(self, question: Dict[str, Any], ai_answer: Optional[Dict[str, Any]], needs_intervention: bool) -> List[Dict[str, Any]]:
         """Create answer data array based on field type and AI answer
         
-        New logic:
-        - If AI answered successfully (not needs_intervention): only store the answer like input format
-        - If needs intervention (interrupt): store all options for user selection
+        Updated logic:
+        - If AI provided an answer (including dummy data): mark as check=1 and show the answer
+        - If no answer at all: mark as check=0 for user selection
         """
         field_type = question["field_type"]
         options = question.get("options", [])
         ai_answer_value = ai_answer.get("answer", "") if ai_answer else ""
+        has_ai_answer = bool(ai_answer_value and ai_answer_value.strip())
+
+        # Check if this is dummy data (AI generated or provided)
+        is_dummy_data = ai_answer.get("used_dummy_data", False) if ai_answer else False
+
+        print(f"DEBUG: _create_answer_data - Field: {question.get('field_name', 'unknown')}")
+        print(f"DEBUG: _create_answer_data - AI answer: '{ai_answer_value}'")
+        print(f"DEBUG: _create_answer_data - Has AI answer: {has_ai_answer}")
+        print(f"DEBUG: _create_answer_data - Is dummy data: {is_dummy_data}")
+        print(f"DEBUG: _create_answer_data - Needs intervention: {needs_intervention}")
         
         if field_type in ["radio", "checkbox", "select"] and options:
-            if not needs_intervention and ai_answer_value:
+            if has_ai_answer:  # AI provided an answer (real or dummy)
                 # AI已回答：只存储答案，类似input格式
                 return [{
                     "name": ai_answer_value,
                     "value": ai_answer_value,
-                    "check": 1,
+                    "check": 1,  # Mark as selected because AI provided an answer
                     "selector": question["field_selector"]
                 }]
             else:
-                # 需要人工干预：存储完整选项列表
+                # 没有答案：存储完整选项列表供用户选择
                 answer_data = []
                 
-                # Handle multiple answers for checkbox (comma-separated)
-                ai_values = []
-                if not needs_intervention and ai_answer_value:
-                    if field_type == "checkbox" and "," in ai_answer_value:
-                        # Multiple selections for checkbox
-                        ai_values = [v.strip().lower() for v in ai_answer_value.split(",")]
-                    else:
-                        # Single selection
-                        ai_values = [ai_answer_value.lower()]
-                
                 for option in options:
-                    is_selected = False
-                    if ai_values:
-                        option_value = str(option.get("value", "")).lower()
-                        option_text = str(option.get("text", "")).lower()
-                        
-                        # Check if any AI value matches this option
-                        for ai_val in ai_values:
-                            if ai_val == option_value or ai_val == option_text:
-                                is_selected = True
-                                break
-                    
                     # 构建选择器
                     if field_type == "select":
                         selector = question["field_selector"]
@@ -1302,22 +1544,29 @@ class StepAnalyzer:
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),
                         "value": option.get("value", ""),
-                        "check": 1 if is_selected else 0,  # 1 = selected/clicked
+                        "check": 0,  # Not selected - waiting for user input
                         "selector": selector
                     })
                 
                 return answer_data
         else:
             # For text inputs, textarea, etc.
-            answer_value = ai_answer_value if not needs_intervention else ""
-            has_value = bool(answer_value and answer_value.strip())  # Check if there's actually a non-empty value
-            
-            return [{
-                "name": answer_value,
-                "value": answer_value,
-                "check": 1 if has_value else 0,  # 1 = has input value, 0 = empty
-                "selector": question["field_selector"]  # Use the field's selector
-            }]
+            # If AI provided an answer (including dummy data), use it and mark as filled
+            if has_ai_answer:
+                return [{
+                    "name": ai_answer_value,
+                    "value": ai_answer_value,
+                    "check": 1,  # Mark as filled because AI provided an answer
+                    "selector": question["field_selector"]
+                }]
+            else:
+                # No answer from AI - show empty field for user input
+                return [{
+                    "name": "",
+                    "value": "",
+                    "check": 0,  # Empty field - waiting for user input
+                    "selector": question["field_selector"]
+                }]
 
 
 class LangGraphFormProcessor:
@@ -1336,10 +1585,29 @@ class LangGraphFormProcessor:
             model=os.getenv("MODEL_WORKFLOW_NAME"),
             temperature=0,
         )
+
+        # Thread isolation for LLM calls
+        self._current_workflow_id = None
         
         # Create workflow
         self.workflow = self._create_workflow()
         self.app = self.workflow.compile(checkpointer=MemorySaver())
+
+    def set_workflow_id(self, workflow_id: str):
+        """Set the current workflow ID for thread isolation"""
+        self._current_workflow_id = workflow_id
+        # Also set it for the step analyzer
+        if hasattr(self.step_analyzer, 'set_workflow_id'):
+            self.step_analyzer.set_workflow_id(workflow_id)
+
+    def _invoke_llm_with_thread_id(self, messages: List, workflow_id: str = None):
+        """Invoke LLM with thread isolation using workflow_id as thread_id"""
+        thread_id = workflow_id or self._current_workflow_id
+        if thread_id:
+            config = {"configurable": {"thread_id": thread_id}}
+            return self.llm.invoke(messages, config=config)
+        else:
+            return self.llm.invoke(messages)
     
     def _create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
@@ -1404,6 +1672,9 @@ class LangGraphFormProcessor:
             print(f"DEBUG: process_form - HTML length: {len(form_html)}")
             print(f"DEBUG: process_form - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
             print(f"DEBUG: process_form - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+
+            # Set workflow_id for thread isolation
+            self.set_workflow_id(workflow_id)
             
             # Create initial state
             initial_state = FormAnalysisState(
@@ -1642,30 +1913,80 @@ class LangGraphFormProcessor:
             
             questions = state.get("field_questions", [])
             answers = state.get("ai_answers", [])
+
+            print(f"DEBUG: Q&A Merger - Processing {len(questions)} questions and {len(answers)} answers")
+
+            # Validate that we have questions to process
+            if not questions:
+                print("DEBUG: Q&A Merger - No questions to process")
+                state["merged_qa_data"] = []
+                return state
             
             # Group questions by question text to merge related fields
             question_groups = {}
-            for question in questions:
+            for i, question in enumerate(questions):
+                # Validate question structure
+                if not isinstance(question, dict):
+                    print(f"DEBUG: Q&A Merger - Skipping invalid question at index {i}: not a dict")
+                    continue
+
+                if "question" not in question:
+                    print(f"DEBUG: Q&A Merger - Skipping question at index {i}: missing 'question' field")
+                    continue
+                
                 question_text = question["question"]
                 if question_text not in question_groups:
                     question_groups[question_text] = []
                 question_groups[question_text].append(question)
+
+            print(f"DEBUG: Q&A Merger - Created {len(question_groups)} question groups")
             
             merged_data = []
             
             for question_text, grouped_questions in question_groups.items():
                 print(f"DEBUG: Q&A Merger - Processing question group: '{question_text}' with {len(grouped_questions)} fields")
+
+                # Validate grouped questions
+                valid_questions = []
+                for question in grouped_questions:
+                    required_fields = ["field_selector", "field_name", "field_type", "field_label", "required", "id"]
+                    missing_fields = [field for field in required_fields if field not in question]
+
+                    if missing_fields:
+                        print(f"DEBUG: Q&A Merger - Question missing fields {missing_fields}: {question}")
+                        # Try to provide default values for missing fields
+                        for field in missing_fields:
+                            if field == "field_selector":
+                                question[field] = f"[data-field='{question.get('field_name', 'unknown')}']"
+                            elif field == "field_name":
+                                question[field] = f"field_{len(valid_questions)}"
+                            elif field == "field_type":
+                                question[field] = "text"
+                            elif field == "field_label":
+                                question[field] = question.get("question", "Unknown Field")
+                            elif field == "required":
+                                question[field] = False
+                            elif field == "id":
+                                question[field] = f"q_{question.get('field_name', 'unknown')}_{uuid.uuid4().hex[:8]}"
+
+                        print(f"DEBUG: Q&A Merger - Added default values for missing fields")
+
+                    valid_questions.append(question)
+
+                if not valid_questions:
+                    print(f"DEBUG: Q&A Merger - No valid questions in group '{question_text}', skipping")
+                    continue
                 
                 # Determine the primary question (usually the first one or the main input field)
-                primary_question = self._find_primary_question(grouped_questions)
+                primary_question = self._find_primary_question(valid_questions)
                 
                 # Collect all related fields and their answers
                 all_field_data = []
                 all_needs_intervention = []
                 all_confidences = []
                 all_reasonings = []
-                
-                for question in grouped_questions:
+
+                for question in valid_questions:
                     # Find corresponding answer
                     ai_answer = self.step_analyzer._find_answer_for_question(question, answers)
                     
@@ -1683,7 +2004,7 @@ class LangGraphFormProcessor:
                     all_field_data.extend(field_answer_data)
                 
                 # Determine the overall answer type based on the field types in the group
-                answer_type = self._determine_group_answer_type(grouped_questions)
+                answer_type = self._determine_group_answer_type(valid_questions)
                 
                 # Determine overall intervention status (if any field needs intervention)
                 overall_needs_intervention = any(all_needs_intervention)
@@ -1711,24 +2032,24 @@ class LangGraphFormProcessor:
                         },
                         "answer": {
                             "type": answer_type,
-                            "selector": primary_question["field_selector"],  # Use primary field's selector
+                            "selector": primary_question.get("field_selector", ""),  # Use get with default
                             "data": all_field_data  # Combined data from all related fields
                         }
                     },
                     # Keep metadata for internal use (using primary question's metadata)
                     "_metadata": {
-                        "id": primary_question["id"],
-                        "field_selector": primary_question["field_selector"],
-                        "field_name": primary_question["field_name"],
-                        "field_type": primary_question["field_type"],
-                        "field_label": primary_question["field_label"],
-                        "required": primary_question["required"],
-                        "options": self._combine_all_options(grouped_questions),  # Combined options from all fields
+                        "id": primary_question.get("id", ""),
+                        "field_selector": primary_question.get("field_selector", ""),
+                        "field_name": primary_question.get("field_name", ""),
+                        "field_type": primary_question.get("field_type", ""),
+                        "field_label": primary_question.get("field_label", ""),
+                        "required": primary_question.get("required", False),
+                        "options": self._combine_all_options(valid_questions),  # Combined options from all fields
                         "confidence": avg_confidence,
                         "reasoning": combined_reasoning,
                         "needs_intervention": overall_needs_intervention,
                         "has_valid_answer": has_valid_answer,  # Track if answer exists
-                        "grouped_fields": [q["field_name"] for q in grouped_questions]  # Track all grouped fields
+                        "grouped_fields": [q.get("field_name", "") for q in valid_questions]  # Track all grouped fields
                     }
                 }
                 
@@ -1740,13 +2061,16 @@ class LangGraphFormProcessor:
                     interrupt_status = "normal" if has_valid_answer else "no_answer_but_no_interrupt"
                 
                 merged_data.append(merged_item)
-                print(f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(grouped_questions)}, status={interrupt_status}")
+                print(
+                    f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(valid_questions)}, status={interrupt_status}")
             
             state["merged_qa_data"] = merged_data
             print(f"DEBUG: Q&A Merger - Created {len(merged_data)} merged question groups from {len(questions)} original questions")
             
         except Exception as e:
             print(f"DEBUG: Q&A Merger - Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             state["error_details"] = f"Q&A merging failed: {str(e)}"
         
         return state
@@ -1861,6 +2185,25 @@ class LangGraphFormProcessor:
                     continue
                 
                 answer_data = question_data.get("answer", {})
+
+                # Extract answer value from the data array
+                answer_value = self._extract_answer_from_data(answer_data)
+
+                print(f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')}")
+                print(f"DEBUG: Action Generator - Field type: {metadata.get('field_type', 'unknown')}")
+                print(f"DEBUG: Action Generator - Answer value: '{answer_value}'")
+                print(f"DEBUG: Action Generator - Needs intervention: {metadata.get('needs_intervention', False)}")
+                print(f"DEBUG: Action Generator - Has valid answer: {metadata.get('has_valid_answer', False)}")
+
+                # Skip only if no answer at all (regardless of intervention status)
+                if not answer_value:
+                    print(
+                        f"DEBUG: Action Generator - Skipping {metadata.get('field_name', 'unknown')} - no answer available")
+                    continue
+
+                # If we have an answer (real data or dummy data), generate action
+                print(
+                    f"DEBUG: Action Generator - Generating action for {metadata.get('field_name', 'unknown')} with answer: '{answer_value}'")
                 
                 # Create a compatible data structure for the existing action generator
                 compatible_item = {
@@ -1870,22 +2213,46 @@ class LangGraphFormProcessor:
                     "options": metadata.get("options", []),
                     "confidence": metadata.get("confidence", 0),
                     "reasoning": metadata.get("reasoning", ""),
-                    "answer": self._extract_answer_from_data(answer_data)
+                    "answer": answer_value
                 }
-                
-                action = self.step_analyzer._generate_form_action(compatible_item)
-                if action:
-                    actions.append(action)
-                    print(f"DEBUG: Action Generator - Generated action for {metadata.get('field_name', 'unknown')}: {action['action_type']}")
-            
-            # Sort actions by order
-            actions.sort(key=lambda x: x.get("order", 0))
+
+                # Try to generate action using traditional method
+                try:
+                    action_result = self._generate_form_action(compatible_item)
+                    if action_result:
+                        if isinstance(action_result, list):
+                            # Handle multiple actions (e.g., multiple checkboxes)
+                            for action in action_result:
+                                print(
+                                    f"DEBUG: Action Generator - Generated action for {metadata.get('field_name', 'unknown')}: {action['type']} = '{action.get('value', 'N/A')}'")
+                            actions.extend(action_result)
+                            break  # Successfully generated actions
+                        else:
+                            # Handle single action (legacy format)
+                            print(
+                                f"DEBUG: Action Generator - Generated action for {metadata.get('field_name', 'unknown')}: {action_result['type']} = '{action_result.get('value', 'N/A')}'")
+                            actions.append(action_result)
+                            break  # Successfully generated action
+                except Exception as action_error:
+                    print(
+                        f"DEBUG: Action Generator - Failed to generate action for {metadata.get('field_name', 'unknown')}: {str(action_error)}")
+                    continue
+
+            # Sort actions by order (not needed for new format, but keep for compatibility)
+            # actions.sort(key=lambda x: x.get("order", 0))
             
             state["form_actions"] = actions
-            print(f"DEBUG: Action Generator - Generated {len(actions)} actions")
+            print(f"DEBUG: Action Generator - Generated {len(actions)} actions total")
+
+            # Debug: Print all generated actions
+            for i, action in enumerate(actions, 1):
+                print(
+                    f"DEBUG: Action {i}: {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
             
         except Exception as e:
             print(f"DEBUG: Action Generator - Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             state["error_details"] = f"Action generation failed: {str(e)}"
         
         return state
@@ -1893,11 +2260,27 @@ class LangGraphFormProcessor:
     def _extract_answer_from_data(self, answer_data: Dict[str, Any]) -> str:
         """Extract answer value from answer data structure"""
         data_array = answer_data.get("data", [])
-        
-        # Find the checked item
+
+        # Find all checked items
+        checked_items = []
         for item in data_array:
             if item.get("check") == 1:
-                return item.get("value", item.get("name", ""))
+                value = item.get("value", item.get("name", ""))
+                # Ensure value is a string
+                if isinstance(value, list):
+                    # If value is a list, join it or take first element
+                    value = ",".join(str(v) for v in value) if value else ""
+                elif value is None:
+                    value = ""
+                else:
+                    value = str(value)
+
+                if value:  # Only add non-empty values
+                    checked_items.append(value)
+
+        # Return comma-separated values for multiple selections
+        if checked_items:
+            return ",".join(checked_items)
         
         # If no checked item, return empty string
         return ""
@@ -1906,8 +2289,35 @@ class LangGraphFormProcessor:
         """Node: Use LLM to generate actions in the format required by graph.py"""
         try:
             print("DEBUG: LLM Action Generator - Starting")
-            
-            # Prepare enhanced prompt with HTML and profile data
+
+            # Collect dummy data that was generated in previous steps
+            dummy_data_context = {}
+            merged_data = state.get("merged_qa_data", [])
+
+            # Extract dummy data from merged_qa_data for LLM context
+            for item in merged_data:
+                metadata = item.get("_metadata", {})
+                question_data = item.get("question", {})
+                answer_data = question_data.get("answer", {})
+
+                field_name = metadata.get("field_name", "")
+                field_selector = metadata.get("field_selector", "")
+
+                # Extract any existing answers (including dummy data)
+                data_array = answer_data.get("data", [])
+                for data_item in data_array:
+                    if data_item.get("check") == 1:
+                        dummy_data_context[field_name] = {
+                            "selector": field_selector,
+                            "value": data_item.get("value", data_item.get("name", "")),
+                            "field_type": metadata.get("field_type", ""),
+                            "reasoning": metadata.get("reasoning", "")
+                        }
+                        break
+
+            print(f"DEBUG: LLM Action Generator - Extracted dummy data context: {dummy_data_context}")
+
+            # Prepare enhanced prompt with HTML, profile data, and dummy data context
             prompt = f"""
             # Role 
             You are a backend of a Google plugin, analyzing the html web pages sent from the front end, 
@@ -1920,25 +2330,40 @@ class LangGraphFormProcessor:
             # User Profile Data:
             {json.dumps(state["profile_data"], indent=2, ensure_ascii=False)}
 
+            # Previously Generated Dummy Data (USE THESE VALUES):
+            {json.dumps(dummy_data_context, indent=2, ensure_ascii=False)}
+
+            # CRITICAL INSTRUCTIONS FOR DATA USAGE:
+            ## Data Priority Rules (MUST FOLLOW):
+            1. **HIGHEST PRIORITY**: Use the "Previously Generated Dummy Data" above for fields that have been analyzed
+            2. **SECOND PRIORITY**: Use REAL data from User Profile Data for any remaining fields
+            3. **EXACT matching priority**: Look for exact field name matches first (e.g., "telephoneNumber" -> telephoneNumber)
+            4. **Semantic matching**: If no exact match, find semantically similar fields (e.g., "phone" -> telephoneNumber)
+            5. **Nested data access**: User profile data may be nested (e.g., contactInformation.telephoneNumber)
+            6. **Data type conversion**: Convert data types as needed (e.g., boolean to checkbox selection)
+            7. **Required field priority**: Always fill required fields first
+            8. **If no matching data exists**: Generate reasonable dummy data for that field
+
+            ## Data Matching Examples:
+            - HTML field "telephoneNumber" -> Previously Generated Dummy Data "telephoneNumber": "5551234567"
+            - HTML field "telephoneNumberPurpose" -> Previously Generated Dummy Data "telephoneNumberPurpose[0]": "useInUK"
+            - HTML field "email" -> User data "contactInformation.primaryEmail": "user@email.com"
+            - HTML field "firstName" -> User data "personalDetails.firstName": "John"
+
             # Response json format (EXACTLY like this):
             {{
               "actions": [
                 {{
-                  "selector": "input[type='text'][name='username']",
+                  "selector": "input[type='number'][name='telephoneNumber']",
                   "type": "input",
-                  "value": "张三"
+                  "value": "5551234567"
                 }},
                 {{
-                  "selector": "input[type='radio'][name='gender'][value='male']",
+                  "selector": "input[type='checkbox'][name='telephoneNumberPurpose[0]'][value='useInUK']",
                   "type": "click"
                 }},
                 {{
-                  "selector": "select[name='country']",
-                  "type": "input",
-                  "value": "china"
-                }},
-                {{
-                  "selector": "a[href='/next-page']",
+                  "selector": "input[type='checkbox'][name='telephoneNumberType[2]'][value='mobile']",
                   "type": "click"
                 }},
                 {{
@@ -1950,54 +2375,84 @@ class LangGraphFormProcessor:
 
             # Instructions:
             ## For Traditional Forms:
-            1. Analyze the HTML form elements
-            2. Match form fields with appropriate data from the user profile
-            3. Generate CSS selectors for each form element
-            4. For input fields (text, email, password, etc.): use "type": "input" and provide "value"
-            5. For radio buttons and checkboxes: use "type": "click" (no value needed)
-            6. For select dropdowns: use "type": "input" and provide "value"
-            7. For submit buttons: use "type": "click" (no value needed)
+            1. **FIRST**: Check the "Previously Generated Dummy Data" section for any pre-analyzed fields
+            2. **SECOND**: Analyze the User Profile Data structure to understand available real data
+            3. **THIRD**: Analyze the HTML form elements to identify fillable fields
+            4. **FOURTH**: Match form fields with appropriate data using the priority rules above
+            5. **FIFTH**: Generate CSS selectors for each form element that needs to be filled
+            6. For input fields (text, email, password, number, etc.): use "type": "input" and provide "value" from dummy data, profile data, or reasonable new dummy data
+            7. For radio buttons and checkboxes: use "type": "click" (no value needed) - select based on dummy data, profile data, or reasonable choices
+            8. For select dropdowns: use "type": "input" and provide "value" from dummy data or profile data
+            9. **IMPORTANT**: For checkbox groups that appear to be mutually exclusive (like "purpose" or "type"), select only ONE option
+            10. **ALWAYS add submit action**: After filling form fields, add a submit button click action to proceed to next step
 
             ## For Task List Pages (Government/Application Pages):
-            8. Look for task lists with status indicators (like "In progress", "Cannot start yet", "Completed")
-            9. For tasks with "In progress" status that have clickable links: generate "type": "click" actions
-            10. For tasks with "Cannot start yet" status: do NOT generate actions (skip them)
-            11. For completed tasks: generally skip unless specifically needed
-            12. Use the exact href attribute value in the selector: a[href="exact-path"]
+            11. Look for task lists with status indicators (like "In progress", "Cannot start yet", "Completed")
+            12. For tasks with "In progress" status that have clickable links: generate "type": "click" actions
+            13. For tasks with "Cannot start yet" status: do NOT generate actions (skip them)
+            14. For completed tasks: generally skip unless specifically needed
+            15. Use the exact href attribute value in the selector: a[href="exact-path"]
 
             ## Priority Rules:
+            - **HIGHEST PRIORITY**: Use previously generated dummy data values for consistency
+            - **SECOND PRIORITY**: Generate actions for all fillable form fields with real or reasonable dummy data
             - If the page contains a task list with "In progress" items, prioritize clicking those links
-            - If the page is a traditional form, prioritize filling form fields
+            - If the page is a traditional form, prioritize filling form fields with dummy data first, then profile data, then add submit action
             - If both exist, handle both types of actions
             - Always use precise CSS selectors that will uniquely identify the element
+            - **ALWAYS end with submit/continue button action for forms**
 
             ## CSS Selector Examples:
             - For links: a[href="/STANDALONE_ACCOUNT_REGISTRATION/3434-0940-8939-9272/identity"]
             - For form inputs: input[type="text"][name="firstName"]
+            - For number inputs: input[type="number"][name="telephoneNumber"]
             - For radio buttons: input[type="radio"][name="gender"][value="male"]
-            - For checkboxes: input[type="checkbox"][name="agree"][value="yes"]
+            - For checkboxes: input[type="checkbox"][name="interests"][value="sports"]
             - For select dropdowns: select[name="country"]
-            - For buttons: button[type="submit"] or input[type="submit"]
+            - For submit buttons: input[type="submit"] or button[type="submit"]
 
             # Analysis Steps:
-            1. First, determine if this is a task list page or a traditional form
-            2. If task list: identify tasks with "In progress" status and clickable links
-            3. If traditional form: identify form fields that can be filled with profile data
-            4. Generate appropriate actions based on the page type
-            5. Return ONLY the JSON response, no other text
+            1. **Check Previously Generated Dummy Data**: Use these values first for any matching fields
+            2. **Parse User Profile Data**: Understand the structure and available real data
+            3. **Determine page type**: Task list page or traditional form
+            4. **If task list**: Identify tasks with "In progress" status and clickable links
+            5. **If traditional form**: 
+               a. Identify all fillable form fields (input, select, radio, checkbox)
+               b. Match each field with dummy data first, then profile data using priority rules
+               c. Generate actions with the matched data values
+               d. For mutually exclusive checkboxes (purpose/type/category), select only ONE option
+               e. Generate one action per form field that needs to be filled
+               f. Add submit button action at the end
+            6. **Generate appropriate actions** based on the page type and available data
+            7. **Return ONLY the JSON response**, no other text
+
+            ## REMEMBER:
+            - **FIRST**: Use Previously Generated Dummy Data for consistency
+            - **SECOND**: Use REAL data from the User Profile Data when available
+            - Generate reasonable dummy data if no real data matches (e.g., for telephone: use format like "555-123-4567")
+            - For checkbox groups with "purpose", "type", "category" in the name, select ONLY ONE option (they are usually mutually exclusive)
+            - Include the actual data values in the "value" field for input actions
+            - Always end with a submit button click to proceed to the next step
+            - Pay attention to nested data structures in both dummy data and profile data
 
             Please provide the complete JSON response for this page:
             """
 
-            print(f"DEBUG: LLM Action Generator - Sending enhanced prompt to LLM")
-            
-            response = self.llm.invoke([HumanMessage(content=prompt)])
+            print(f"DEBUG: LLM Action Generator - Sending enhanced prompt to LLM with dummy data context")
+            print(f"DEBUG: LLM Action Generator - Profile data keys: {list(state['profile_data'].keys())}")
+            print(f"DEBUG: LLM Action Generator - Dummy data fields: {list(dummy_data_context.keys())}")
+
+            # Use thread-isolated LLM call if workflow_id is available
+            if self._current_workflow_id:
+                response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)], self._current_workflow_id)
+            else:
+                response = self.llm.invoke([HumanMessage(content=prompt)])
             
             print(f"DEBUG: LLM Action Generator - Received response: {response.content}")
 
             try:
-                # Try to parse JSON response
-                llm_result = json.loads(response.content)
+                # Try to parse JSON response using robust parsing
+                llm_result = robust_json_parse(response.content)
                 
                 if "actions" in llm_result:
                     # Store the LLM-generated actions in the dedicated field
@@ -2006,41 +2461,27 @@ class LangGraphFormProcessor:
                     
                     # Log the types of actions generated for debugging
                     action_types = {}
+                    action_values = []
                     for action in llm_result["actions"]:
                         action_type = action.get("type", "unknown")
                         action_types[action_type] = action_types.get(action_type, 0) + 1
+                        if action.get("value"):
+                            action_values.append(f"{action.get('selector', 'unknown')}: {action.get('value')}")
                     print(f"DEBUG: LLM Action Generator - Action types: {action_types}")
+                    print(f"DEBUG: LLM Action Generator - Action values: {action_values}")
                     
                     state["messages"].append({
                         "type": "system",
-                        "content": f"LLM generated {len(llm_result['actions'])} actions successfully. Types: {action_types}"
+                        "content": f"LLM generated {len(llm_result['actions'])} actions successfully using dummy data context. Types: {action_types}"
                     })
                 else:
                     print("DEBUG: LLM Action Generator - No 'actions' key in response")
                     state["llm_generated_actions"] = []
-                    
-            except json.JSONDecodeError as e:
+
+            except Exception as e:
                 print(f"DEBUG: LLM Action Generator - JSON parse error: {str(e)}")
                 print(f"DEBUG: LLM Action Generator - Raw response: {response.content}")
-                
-                # Fallback: try to extract JSON from response
-                content = response.content.strip()
-                if content.startswith('```json'):
-                    content = content[7:]
-                if content.endswith('```'):
-                    content = content[:-3]
-                content = content.strip()
-                
-                try:
-                    llm_result = json.loads(content)
-                    if "actions" in llm_result:
-                        state["llm_generated_actions"] = llm_result["actions"]
-                        print(f"DEBUG: LLM Action Generator - Successfully parsed actions after cleanup")
-                    else:
-                        state["llm_generated_actions"] = []
-                except:
-                    state["llm_generated_actions"] = []
-                    print("DEBUG: LLM Action Generator - Failed to parse JSON even after cleanup")
+                state["llm_generated_actions"] = []
 
         except Exception as e:
             print(f"DEBUG: LLM Action Generator - Exception: {str(e)}")
