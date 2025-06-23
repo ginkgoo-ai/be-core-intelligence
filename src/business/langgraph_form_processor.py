@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Literal, TypedDict
@@ -14,7 +16,7 @@ from pydantic import SecretStr, BaseModel
 from sqlalchemy.orm import Session
 
 from src.database.workflow_repositories import (
-    WorkflowInstanceRepository, StepInstanceRepository
+    StepInstanceRepository
 )
 from src.model.workflow_entities import StepStatus, WorkflowInstance
 
@@ -913,7 +915,7 @@ class StepAnalyzer:
                         if form_heading_text and not context["form_title"]:
                             context["form_title"] = form_heading_text
                         break
-            
+
             # Extract description from p tags or intro text
             description_candidates = []
             if hasattr(form_element, 'find_all'):
@@ -921,10 +923,10 @@ class StepAnalyzer:
                     p_text = p_tag.get_text(strip=True)
                     if p_text and len(p_text) > 20:  # Meaningful description
                         description_candidates.append(p_text)
-                
-                if description_candidates:
-                    # Use the first meaningful description
-                    context["description"] = description_candidates[0][:200]  # Limit length
+
+                    if description_candidates:
+                        # Use the first meaningful description
+                        context["description"] = description_candidates[0][:200]  # Limit length
             
         except Exception as e:
             print(f"DEBUG: Error extracting page context: {str(e)}")
@@ -988,9 +990,9 @@ class StepAnalyzer:
         try:
             # First attempt: try to answer with profile_data only
             primary_result = self._try_answer_with_data(question, profile, "profile_data")
-            
-            # If primary answer is successful and confident, use it
-            if (primary_result["confidence"] >= 30 and  # Lowered from 50 to 30 to prioritize fill_data
+
+            # MODIFIED: Lower the threshold to prioritize real data more aggressively
+            if (primary_result["confidence"] >= 20 and  # Lowered from 30 to 20 to prioritize fill_data even more
                 primary_result["answer"] and 
                 not primary_result["needs_intervention"]):
                 print(
@@ -1001,16 +1003,24 @@ class StepAnalyzer:
             if profile_dummy_data:
                 print(f"DEBUG: Trying dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
                 dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
-                
-                # If dummy data provides a better answer, use it and mark as dummy data usage
-                if (dummy_result["confidence"] > primary_result["confidence"] and 
-                    dummy_result["answer"]):
+
+                # MODIFIED: Only use dummy data if primary result is really bad (confidence < 20)
+                if (dummy_result["confidence"] > primary_result["confidence"] and
+                        dummy_result["answer"] and
+                        primary_result["confidence"] < 20):  # Only if primary result is very poor
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
                     return dummy_result
+
+            # If primary result has some confidence (>=20), use it even if not perfect
+            if primary_result["confidence"] >= 20 and primary_result["answer"]:
+                print(
+                    f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
+                primary_result["used_dummy_data"] = False
+                return primary_result
             
             # NEW: If both profile_data and profile_dummy_data failed, try intelligent dummy generation
-            if (primary_result["confidence"] < 30 or  # Adjusted threshold to match above
+            if (primary_result["confidence"] < 20 or  # Adjusted threshold to match above
                 not primary_result["answer"] or 
                 primary_result["needs_intervention"]):
 
@@ -1242,57 +1252,66 @@ class StepAnalyzer:
             # User Data ({source_name}):
             {json.dumps(data_source, indent=2)}
             
-            # Instructions
-            1. **PRIORITIZE EXACT MATCHES**: Look for data that exactly matches the field name or purpose
-            2. **SEARCH NESTED STRUCTURES**: Thoroughly search through ALL nested objects and arrays
-            3. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping for common patterns:
+            # CRITICAL INSTRUCTIONS - PRIORITIZE REAL DATA USAGE:
+            1. **ALWAYS PREFER REAL DATA**: If you find ANY matching data in the user data, use it with high confidence (70+)
+            2. **AGGRESSIVE MATCHING**: Be more flexible in matching field names to data keys
+            3. **SEARCH NESTED STRUCTURES**: Thoroughly search through ALL nested objects and arrays
+            4. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping for common patterns:
                - For "telephoneNumber" field: Check contactInformation.telephoneNumber, phone, mobile, telephone
-               - For "telephoneNumberType" field: Check contactInformation.telephoneType, phoneType, type
+               - For "telephoneNumberType" field: Check contactInformation.telephoneType, phoneType, type (Mobile->mobile, Home->home, Business->business)
                - For "telephoneNumberPurpose" field: Check usage patterns, purpose, where it's used
                - For name fields: Check personalDetails.givenName, personalDetails.familyName, name fields
                - For email fields: Check contactInformation.primaryEmail, email, emailAddress
                - For address fields: Check contactInformation.currentAddress, address fields
                - For date fields: Check personalDetails.dateOfBirth, dateOfBirth, dates
-            4. **SEMANTIC MATCHING**: If no exact match, look for semantically similar fields
-            5. **CONFIDENCE SCORING**: 
+            5. **SEMANTIC MATCHING**: If no exact match, look for semantically similar fields
+            6. **CONFIDENCE SCORING - FAVOR REAL DATA**: 
                - 90-100: Exact field name match with valid data
-               - 70-89: Semantic match with high confidence
-               - 50-69: Reasonable match but some uncertainty
+               - 70-89: Semantic match with real data (BE GENEROUS HERE)
+               - 50-69: Reasonable match with real data
                - 30-49: Weak match, might need verification
                - 0-29: No suitable data found
-            6. **VALIDATION**: Ensure the data type matches the field requirements
-            7. **MUTUAL EXCLUSIVITY**: For purpose/type/category checkboxes, select only ONE value
-            8. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
+            7. **VALIDATION**: Ensure the data type matches the field requirements
+            8. **MUTUAL EXCLUSIVITY**: For purpose/type/category checkboxes, select only ONE value
+            9. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
             
             # Special Instructions for Telephone Fields:
-            - For "telephoneNumber": Extract the actual phone number (remove country codes if needed for local format)
-            - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", etc.)
-            - For "telephoneNumberPurpose": Analyze usage context (if from contactInformation, likely "useInUK")
+            - For "telephoneNumber": Extract the actual phone number from contactInformation.telephoneNumber
+            - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", "Business" -> "business")
+            - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
+            
+            # EXAMPLES - USE THESE AS REFERENCE:
+            - Field "telephoneNumber" + Data "contactInformation.telephoneNumber: '+1234567890'" = Answer: "+1234567890", Confidence: 95
+            - Field "telephoneNumberType[2]" + Data "contactInformation.telephoneType: 'Mobile'" = Answer: "mobile", Confidence: 90
+            - Field "givenName" + Data "personalDetails.givenName: 'John'" = Answer: "John", Confidence: 95
             
             # Response Format (JSON only):
             {{
                 "answer": "your answer here or empty if no data available",
                 "confidence": 85,
-                "reasoning": "detailed explanation of data source and matching logic",
+                "reasoning": "detailed explanation of data source and matching logic - BE SPECIFIC about which data field you used",
                 "needs_intervention": false
             }}
             
-            # Examples of HIGH confidence scenarios:
+            # Examples of HIGH confidence scenarios (70+):
             - Field "telephoneNumber" matches contactInformation.telephoneNumber
             - Field "givenName" matches personalDetails.givenName
             - Field "email" matches contactInformation.primaryEmail
+            - Field "telephoneNumberType" can be mapped from contactInformation.telephoneType
             
             # Examples of when needs_intervention should be true:
             - No matching data found in any nested structure
             - Data exists but is empty/null/undefined
-            - Field is required but confidence is below 50
+            - Field is required but confidence is below 30
             - Data type mismatch that cannot be resolved
             
             # Examples of when needs_intervention should be false:
-            - Exact match found in data source
-            - Semantic match found in data source
+            - Exact match found in data source (high confidence 70+)
+            - Semantic match found in data source (medium confidence 50+)
             - Data type matches field requirements
-            - Data is empty/null/undefined but not required
+            - Data is empty/null/undefined but field not required
+            
+            REMEMBER: Your goal is to USE the real data provided whenever possible. Be generous with confidence scores for real data matches!
             """
 
             response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)])
@@ -1568,30 +1587,262 @@ class StepAnalyzer:
                     "selector": question["field_selector"]
                 }]
 
+    async def analyze_step_async(self, html_content: str, workflow_id: str, current_step_key: str) -> Dict[str, Any]:
+        """
+        异步版本的步骤分析 - 分析当前页面属于当前步骤还是下一步骤
+        
+        改进逻辑：
+        - 同时获取当前步骤和下一步骤的上下文信息
+        - 使用 LLM 比较页面内容更符合哪个步骤
+        - 如果属于下一步，完成当前步骤并激活下一步
+        """
+        try:
+            # 提取页面问题
+            page_analysis = self._extract_page_questions(html_content)
+
+            # 获取当前步骤上下文
+            current_step_context = self._get_step_context(workflow_id, current_step_key)
+
+            # 获取下一步骤上下文
+            next_step_key = self._find_next_step(workflow_id, current_step_key)
+            next_step_context = None
+            if next_step_key:
+                next_step_context = self._get_step_context(workflow_id, next_step_key)
+
+            # 使用 LLM 进行比较分析 (异步版本)
+            analysis_result = await self._analyze_with_llm_async(
+                page_analysis=page_analysis,
+                current_step_context=current_step_context,
+                next_step_context=next_step_context,
+                current_step_key=current_step_key,
+                next_step_key=next_step_key
+            )
+
+            # 如果页面属于下一步骤，执行步骤转换
+            if analysis_result.get("belongs_to_next_step", False) and next_step_key:
+                print(f"DEBUG: Page belongs to next step {next_step_key}, executing step transition")
+
+                # 获取当前步骤实例
+                current_step = self.step_repo.get_step_by_key(workflow_id, current_step_key)
+                if current_step:
+                    # 1. 完成当前步骤
+                    self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
+                    current_step.completed_at = datetime.utcnow()
+                    print(f"DEBUG: Completed current step {current_step_key}")
+
+                    # 2. 激活下一个步骤
+                    next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
+                    if next_step:
+                        self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
+                        next_step.started_at = datetime.utcnow()
+                        print(f"DEBUG: Activated next step {next_step_key}")
+
+                        # 3. 更新工作流实例的当前步骤
+                        from src.database.workflow_repositories import WorkflowInstanceRepository
+                        instance_repo = WorkflowInstanceRepository(self.db)
+                        instance_repo.update_instance_status(
+                            workflow_id,
+                            None,  # 保持当前工作流状态
+                            next_step_key  # 更新当前步骤键
+                        )
+                        print(f"DEBUG: Updated workflow current step to {next_step_key}")
+
+                        # 4. 更新分析结果，指示应该使用下一步骤执行
+                        analysis_result.update({
+                            "should_use_next_step": True,
+                            "next_step_key": next_step_key,
+                            "next_step_instance_id": next_step.step_instance_id,
+                            "step_transition_completed": True
+                        })
+
+                # 提交数据库更改
+                self.db.commit()
+                print(f"DEBUG: Step transition completed and committed")
+            else:
+                # 页面属于当前步骤，继续使用当前步骤
+                analysis_result.update({
+                    "should_use_next_step": False,
+                    "step_transition_completed": False
+                })
+
+            return analysis_result
+
+        except Exception as e:
+            print(f"Error analyzing step: {str(e)}")
+            # 发生错误时回滚数据库更改
+            self.db.rollback()
+            return {
+                "belongs_to_current_step": True,
+                "belongs_to_next_step": False,
+                "should_use_next_step": False,
+                "main_question": "",
+                "step_transition_completed": False,
+                "next_step_key": None,
+                "reasoning": f"Error analyzing step: {str(e)}"
+            }
+
+    async def _analyze_with_llm_async(self, page_analysis: Dict[str, Any],
+                                      current_step_context: Dict[str, Any],
+                                      next_step_context: Optional[Dict[str, Any]],
+                                      current_step_key: str,
+                                      next_step_key: Optional[str]) -> Dict[str, Any]:
+        """异步版本的 LLM 步骤分析"""
+        try:
+            # 构建分析提示
+            prompt = f"""
+            # Role
+            You are a workflow step analyzer. Determine which step this page belongs to.
+            
+            # Task
+            Analyze the current page content and determine if it belongs to the current step or the next step.
+            
+            # Page Analysis:
+            {json.dumps(page_analysis, indent=2, ensure_ascii=False)}
+            
+            # Current Step Context ({current_step_key}):
+            {json.dumps(current_step_context, indent=2, ensure_ascii=False)}
+            
+            # Next Step Context ({next_step_key if next_step_key else 'None'}):
+            {json.dumps(next_step_context, indent=2, ensure_ascii=False) if next_step_context else 'No next step available'}
+            
+            # Instructions
+            1. Compare the page content with both step contexts
+            2. Determine which step the page content best matches
+            3. Consider the questions being asked, form fields, and page title
+            4. Provide confidence scores for your analysis
+            
+            # Response Format (JSON only):
+            {{
+                "belongs_to_current_step": true/false,
+                "belongs_to_next_step": true/false,
+                "main_question": "primary question or topic on the page",
+                "confidence_current": 0-100,
+                "confidence_next": 0-100,
+                "reasoning": "detailed explanation of the analysis"
+            }}
+            
+            **IMPORTANT**: Return ONLY the JSON response, no other text.
+            """
+
+            # 使用异步 LLM 调用
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+            try:
+                result = robust_json_parse(response.content)
+
+                # 验证和设置默认值
+                if not isinstance(result, dict):
+                    raise ValueError("Response is not a valid JSON object")
+
+                result.setdefault("belongs_to_current_step", True)
+                result.setdefault("belongs_to_next_step", False)
+                result.setdefault("main_question", "")
+                result.setdefault("confidence_current", 50)
+                result.setdefault("confidence_next", 0)
+                result.setdefault("reasoning", "No reasoning provided")
+
+                return result
+
+            except Exception as parse_error:
+                print(f"DEBUG: JSON parsing error in _analyze_with_llm_async: {str(parse_error)}")
+                return {
+                    "belongs_to_current_step": True,
+                    "belongs_to_next_step": False,
+                    "main_question": "",
+                    "confidence_current": 50,
+                    "confidence_next": 0,
+                    "reasoning": f"Failed to parse LLM response: {str(parse_error)}"
+                }
+
+        except Exception as e:
+            print(f"DEBUG: Error in _analyze_with_llm_async: {str(e)}")
+            return {
+                "belongs_to_current_step": True,
+                "belongs_to_next_step": False,
+                "main_question": "",
+                "confidence_current": 50,
+                "confidence_next": 0,
+                "reasoning": f"Error during LLM analysis: {str(e)}"
+            }
+
 
 class LangGraphFormProcessor:
-    """LangGraph-based form processor for workflow integration"""
+    """Form processor using LangGraph workflow"""
     
     def __init__(self, db_session: Session):
+        """Initialize processor with database session"""
         self.db = db_session
-        self.instance_repo = WorkflowInstanceRepository(db_session)
-        self.step_repo = StepInstanceRepository(db_session)
+        self.step_repo = StepInstanceRepository(db_session)  # 添加 StepInstanceRepository
         self.step_analyzer = StepAnalyzer(db_session)  # 添加 StepAnalyzer
-        
-        # Initialize LLM
         self.llm = ChatOpenAI(
             base_url=os.getenv("MODEL_BASE_URL"),
             api_key=SecretStr(os.getenv("MODEL_API_KEY")),
             model=os.getenv("MODEL_WORKFLOW_NAME"),
             temperature=0,
         )
+        self._current_workflow_id = None  # Thread isolation for LLM calls
 
-        # Thread isolation for LLM calls
-        self._current_workflow_id = None
-        
-        # Create workflow
-        self.workflow = self._create_workflow()
-        self.app = self.workflow.compile(checkpointer=MemorySaver())
+        # 🚀 OPTIMIZATION 3: Smart caching system
+        self._field_analysis_cache = {}  # Cache for field analysis results
+        self._batch_analysis_cache = {}  # Cache for batch analysis results
+        self._cache_max_size = 100  # Maximum cache entries
+        self._cache_ttl = 3600  # Cache TTL in seconds (1 hour)
+
+        # Create the workflow app
+        workflow = self._create_workflow()
+        memory = MemorySaver()
+        self.app = workflow.compile(checkpointer=memory)
+
+    def _get_cache_key(self, data: Dict[str, Any]) -> str:
+        """Generate cache key from data"""
+        import hashlib
+        # Create a deterministic hash from the data
+        data_str = json.dumps(data, sort_keys=True, ensure_ascii=False)
+        return hashlib.md5(data_str.encode()).hexdigest()
+
+    def _is_cache_valid(self, cache_entry: Dict[str, Any]) -> bool:
+        """Check if cache entry is still valid"""
+        if not cache_entry:
+            return False
+
+        timestamp = cache_entry.get("timestamp", 0)
+        current_time = time.time()
+        return (current_time - timestamp) < self._cache_ttl
+
+    def _get_from_cache(self, cache_key: str, cache_type: str = "field") -> Optional[Dict[str, Any]]:
+        """Get result from cache if valid"""
+        cache = self._field_analysis_cache if cache_type == "field" else self._batch_analysis_cache
+
+        if cache_key in cache:
+            entry = cache[cache_key]
+            if self._is_cache_valid(entry):
+                print(f"DEBUG: Cache HIT for {cache_type} analysis: {cache_key[:8]}...")
+                return entry.get("result")
+            else:
+                # Remove expired entry
+                del cache[cache_key]
+                print(f"DEBUG: Cache EXPIRED for {cache_type} analysis: {cache_key[:8]}...")
+
+        print(f"DEBUG: Cache MISS for {cache_type} analysis: {cache_key[:8]}...")
+        return None
+
+    def _save_to_cache(self, cache_key: str, result: Any, cache_type: str = "field"):
+        """Save result to cache"""
+        cache = self._field_analysis_cache if cache_type == "field" else self._batch_analysis_cache
+
+        # Clean up cache if it's getting too large
+        if len(cache) >= self._cache_max_size:
+            # Remove oldest entries (simple FIFO strategy)
+            oldest_keys = list(cache.keys())[:len(cache) - self._cache_max_size + 10]
+            for key in oldest_keys:
+                del cache[key]
+            print(f"DEBUG: Cache cleanup - removed {len(oldest_keys)} old entries")
+
+        cache[cache_key] = {
+            "result": result,
+            "timestamp": time.time()
+        }
+        print(f"DEBUG: Cache SAVE for {cache_type} analysis: {cache_key[:8]}...")
 
     def set_workflow_id(self, workflow_id: str):
         """Set the current workflow ID for thread isolation"""
@@ -2767,3 +3018,916 @@ class LangGraphFormProcessor:
                 workflow_dummy_data.append(workflow_record)
         
         return workflow_dummy_data
+
+    async def _invoke_llm_with_thread_id_async(self, messages: List, workflow_id: str = None):
+        """Async version of LLM invocation with thread isolation"""
+        try:
+            # Use async LLM call
+            response = await self.llm.ainvoke(messages)
+            return response
+        except Exception as e:
+            print(f"DEBUG: Async LLM invocation error: {str(e)}")
+            raise e
+
+    async def _try_answer_with_data_async(self, question: Dict[str, Any], data_source: Dict[str, Any],
+                                          source_name: str) -> Dict[str, Any]:
+        """Async version of _try_answer_with_data"""
+        try:
+            # Create prompt for AI (same as sync version)
+            prompt = f"""
+            # Role 
+            You are a backend of a Google plugin, analyzing the html web pages sent from the front end, 
+            analyzing the form items that need to be filled in them, retrieving the customer data that has been provided, 
+            filling in the form content, and returning it to the front end in a fixed json format.
+
+            # Task
+            Based on the user data from {source_name}, determine the appropriate value for this form field:
+            
+            Field Name: {question['field_name']}
+            Field Type: {question['field_type']}
+            Field Label: {question['field_label']}
+            Field Selector: {question['field_selector']}
+            Required: {question['required']}
+            Question: {question['question']}
+            
+            # User Data ({source_name}):
+            {json.dumps(data_source, indent=2)}
+            
+            # Instructions
+            1. **PRIORITIZE REAL DATA**: If you find matching data in the user data, use it with high confidence (70-95)
+            2. **EXACT MATCHES**: Look for exact field name matches first
+            3. **SEMANTIC MATCHES**: Look for semantically similar fields (e.g., "phone" matches "telephoneNumber")
+            4. **NESTED DATA**: Check nested objects and arrays for relevant data
+            5. **CONFIDENCE SCORING**: 
+               - 90-95: Perfect exact match
+               - 70-89: Good semantic match
+               - 50-69: Reasonable inference
+               - 30-49: Uncertain match
+               - 0-29: No good match found
+            
+            # Response Format (JSON only):
+            {{
+                "answer": "value_to_fill_or_empty_string",
+                "confidence": 0-100,
+                "reasoning": "explanation_of_choice",
+                "needs_intervention": true/false,
+                "data_source_path": "path.to.data.in.source",
+                "field_match_type": "exact|semantic|inferred|none"
+            }}
+            
+            **IMPORTANT**: Return ONLY the JSON response, no other text.
+            """
+
+            # Use async LLM call
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+            # Parse response
+            try:
+                result = robust_json_parse(response.content)
+
+                # Validate required fields
+                if not isinstance(result, dict):
+                    raise ValueError("Response is not a valid JSON object")
+
+                # Set defaults for missing fields
+                result.setdefault("answer", "")
+                result.setdefault("confidence", 0)
+                result.setdefault("reasoning", "No reasoning provided")
+                result.setdefault("needs_intervention", True)
+                result.setdefault("data_source_path", "")
+                result.setdefault("field_match_type", "none")
+
+                # Add metadata
+                result["question_id"] = question["id"]
+                result["field_selector"] = question["field_selector"]
+                result["field_name"] = question["field_name"]
+                result["source_name"] = source_name
+
+                return result
+
+            except Exception as parse_error:
+                print(f"DEBUG: JSON parsing error in _try_answer_with_data_async: {str(parse_error)}")
+                print(f"DEBUG: Raw response: {response.content}")
+                return {
+                    "question_id": question["id"],
+                    "field_selector": question["field_selector"],
+                    "field_name": question["field_name"],
+                    "answer": "",
+                    "confidence": 0,
+                    "reasoning": f"Failed to parse AI response: {str(parse_error)}",
+                    "needs_intervention": True,
+                    "source_name": source_name
+                }
+
+        except Exception as e:
+            print(f"DEBUG: Error in _try_answer_with_data_async: {str(e)}")
+            return {
+                "question_id": question["id"],
+                "field_selector": question["field_selector"],
+                "field_name": question["field_name"],
+                "answer": "",
+                "confidence": 0,
+                "reasoning": f"Error during analysis: {str(e)}",
+                "needs_intervention": True,
+                "source_name": source_name
+            }
+
+    async def _generate_smart_dummy_data_async(self, question: Dict[str, Any], profile: Dict[str, Any],
+                                               fallback_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Async version of _generate_smart_dummy_data"""
+        try:
+            # Create intelligent dummy data generation prompt
+            prompt = f"""
+            # Role
+            You are an intelligent form data generator. Generate realistic, contextually appropriate dummy data for form fields.
+
+            # Task
+            Generate appropriate dummy data for this form field:
+            
+            Field Name: {question['field_name']}
+            Field Type: {question['field_type']}
+            Field Label: {question['field_label']}
+            Required: {question['required']}
+            Question: {question['question']}
+            
+            # Context (available user data for context):
+            {json.dumps(profile, indent=2, ensure_ascii=False)}
+            
+            # Previous Analysis Result:
+            {json.dumps(fallback_result, indent=2, ensure_ascii=False)}
+            
+            # Instructions
+            1. Generate realistic dummy data that matches the field type and purpose
+            2. Use context from available user data when possible (e.g., if user has UK address, generate UK phone number)
+            3. Follow common formats and conventions for the field type
+            4. Ensure the data is appropriate for the field's purpose
+            5. Set confidence based on how well you can generate appropriate data
+            
+            # Field Type Guidelines:
+            - **Phone/Telephone**: Use format appropriate to user's country/region
+            - **Email**: Generate realistic email addresses
+            - **Names**: Use common names appropriate to user's region
+            - **Addresses**: Generate realistic addresses
+            - **Dates**: Use reasonable dates for the context
+            - **Numbers**: Use appropriate ranges and formats
+            - **Text**: Generate contextually appropriate text
+            - **Checkboxes/Radio**: Choose most likely option
+            - **Select**: Choose most common/appropriate option
+            
+            # Response Format (JSON only):
+            {{
+                "answer": "generated_dummy_value",
+                "confidence": 40-80,
+                "reasoning": "explanation_of_dummy_data_choice",
+                "needs_intervention": false,
+                "dummy_data_type": "phone|email|name|address|date|number|text|selection|other"
+            }}
+            
+            **IMPORTANT**: Return ONLY the JSON response, no other text.
+            """
+
+            # Use async LLM call
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+            # Parse response
+            try:
+                result = robust_json_parse(response.content)
+
+                # Validate and set defaults
+                if not isinstance(result, dict):
+                    raise ValueError("Response is not a valid JSON object")
+
+                result.setdefault("answer", "")
+                result.setdefault("confidence", 40)
+                result.setdefault("reasoning", "Generated dummy data")
+                result.setdefault("needs_intervention", False)
+                result.setdefault("dummy_data_type", "other")
+
+                # Add metadata
+                result["question_id"] = question["id"]
+                result["field_selector"] = question["field_selector"]
+                result["field_name"] = question["field_name"]
+
+                # Ensure confidence is reasonable for dummy data (40-80 range)
+                if result["confidence"] > 80:
+                    result["confidence"] = 80
+                elif result["confidence"] < 40:
+                    result["confidence"] = 40
+
+                return result
+
+            except Exception as parse_error:
+                print(f"DEBUG: JSON parsing error in _generate_smart_dummy_data_async: {str(parse_error)}")
+                return {
+                    "question_id": question["id"],
+                    "field_selector": question["field_selector"],
+                    "field_name": question["field_name"],
+                    "answer": "",
+                    "confidence": 0,
+                    "reasoning": f"Failed to generate dummy data: {str(parse_error)}",
+                    "needs_intervention": True
+                }
+
+        except Exception as e:
+            print(f"DEBUG: Error in _generate_smart_dummy_data_async: {str(e)}")
+            return {
+                "question_id": question["id"],
+                "field_selector": question["field_selector"],
+                "field_name": question["field_name"],
+                "answer": "",
+                "confidence": 0,
+                "reasoning": f"Error generating dummy data: {str(e)}",
+                "needs_intervention": True
+            }
+
+    async def process_form_async(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
+                                 profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Async version of process_form using LangGraph workflow"""
+        try:
+            print(f"DEBUG: process_form_async - Starting with workflow_id: {workflow_id}, step_key: {step_key}")
+            print(f"DEBUG: process_form_async - HTML length: {len(form_html)}")
+            print(
+                f"DEBUG: process_form_async - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+            print(
+                f"DEBUG: process_form_async - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+
+            # Set workflow_id for thread isolation
+            self.set_workflow_id(workflow_id)
+
+            # Create initial state
+            initial_state = FormAnalysisState(
+                workflow_id=workflow_id,
+                step_key=step_key,
+                form_html=form_html,
+                profile_data=profile_data or {},
+                profile_dummy_data=profile_dummy_data or {},
+                parsed_form=None,
+                detected_fields=[],
+                field_questions=[],
+                ai_answers=[],
+                merged_qa_data=[],
+                form_actions=[],
+                llm_generated_actions=[],
+                saved_step_data=None,
+                dummy_data_usage=[],
+                analysis_complete=False,
+                error_details=None,
+                messages=[]
+            )
+
+            # Process each node asynchronously
+            try:
+                # HTML Parser node
+                initial_state = self._html_parser_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # Field Detector node
+                initial_state = self._field_detector_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # Question Generator node
+                initial_state = self._question_generator_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # Profile Retriever node
+                initial_state = self._profile_retriever_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # AI Answerer node (async)
+                initial_state = await self._ai_answerer_node_async(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # QA Merger node
+                initial_state = self._qa_merger_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # LLM Action Generator node (async)
+                initial_state = await self._llm_action_generator_node_async(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # Result Saver node
+                initial_state = self._result_saver_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                result = initial_state
+
+            except Exception as workflow_error:
+                print(f"DEBUG: process_form_async - Workflow error: {str(workflow_error)}")
+                result = {
+                    "error_details": str(workflow_error),
+                    "merged_qa_data": [],
+                    "llm_generated_actions": [],
+                    "messages": []
+                }
+
+            print(f"DEBUG: process_form_async - Workflow completed")
+            print(f"DEBUG: process_form_async - Result keys: {list(result.keys())}")
+
+            # Check for errors
+            if result.get("error_details"):
+                return {
+                    "success": False,
+                    "error": result["error_details"],
+                    "data": [],
+                    "actions": []
+                }
+
+            # Return successful result with merged Q&A data
+            return {
+                "success": True,
+                "data": result.get("merged_qa_data", []),  # 返回合并的问答数据
+                "actions": result.get("llm_generated_actions", []),  # 返回LLM生成的动作
+                "messages": result.get("messages", []),
+                "processing_metadata": {
+                    "fields_detected": len(result.get("detected_fields", [])),
+                    "questions_generated": len(result.get("field_questions", [])),
+                    "answers_generated": len(result.get("ai_answers", [])),
+                    "actions_generated": len(result.get("llm_generated_actions", [])),
+                    "workflow_id": workflow_id,
+                    "step_key": step_key
+                }
+            }
+
+        except Exception as e:
+            print(f"DEBUG: process_form_async - Exception: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Form processing failed: {str(e)}",
+                "data": [],
+                "actions": []
+            }
+
+    async def _ai_answerer_node_async(self, state: FormAnalysisState) -> FormAnalysisState:
+        """Node: Generate AI answers for questions (OPTIMIZED async version with parallel processing)"""
+        try:
+            print("DEBUG: AI Answerer Async - Starting with parallel processing")
+
+            profile_data = state.get("profile_data", {})
+            profile_dummy_data = state.get("profile_dummy_data", {})
+            field_questions = state["field_questions"]
+
+            if not field_questions:
+                print("DEBUG: AI Answerer Async - No questions to process")
+                state["ai_answers"] = []
+                state["dummy_data_usage"] = []
+                return state
+
+            print(f"DEBUG: AI Answerer Async - Processing {len(field_questions)} questions with advanced optimizations")
+
+            # 🚀 OPTIMIZATION 4: Try early return for exact matches first (fastest)
+            early_return_result = self._can_use_early_return(field_questions, profile_data)
+
+            if early_return_result:
+                exact_matches = early_return_result["exact_matches"]
+                remaining_questions = early_return_result["remaining_questions"]
+
+                print(
+                    f"DEBUG: AI Answerer Async - Early return: {len(exact_matches)} exact matches, {len(remaining_questions)} need LLM processing")
+
+                if remaining_questions:
+                    # Process remaining questions with batch optimization
+                    try:
+                        batch_answers = await self._batch_analyze_fields_async(remaining_questions, profile_data)
+                        # Combine exact matches with batch results
+                        answers = exact_matches + batch_answers
+                    except Exception as batch_error:
+                        print(f"DEBUG: AI Answerer Async - Batch processing for remaining failed: {str(batch_error)}")
+                        # Fallback to individual processing for remaining questions
+                        tasks = [self._generate_ai_answer_async(q, profile_data, profile_dummy_data) for q in
+                                 remaining_questions]
+                        individual_answers = await asyncio.gather(*tasks, return_exceptions=True)
+                        valid_individual = [ans for ans in individual_answers if not isinstance(ans, Exception)]
+                        answers = exact_matches + valid_individual
+                else:
+                    # All questions had exact matches
+                    answers = exact_matches
+            else:
+                # 🚀 OPTIMIZATION 2: Try batch processing first (much faster)
+                batch_answers = []
+                remaining_questions = []
+
+                try:
+                    # Attempt batch analysis for all questions
+                    batch_answers = await self._batch_analyze_fields_async(field_questions, profile_data)
+
+                    # Check if batch processing was successful
+                    if len(batch_answers) == len(field_questions):
+                        print(
+                            f"DEBUG: AI Answerer Async - Batch processing successful for all {len(batch_answers)} fields")
+                        answers = batch_answers
+                    else:
+                        print(
+                            f"DEBUG: AI Answerer Async - Batch processing partial success: {len(batch_answers)}/{len(field_questions)}")
+                        # Identify questions that need individual processing
+                        processed_field_names = {ans.get("field_name") for ans in batch_answers}
+                        remaining_questions = [q for q in field_questions if
+                                               q["field_name"] not in processed_field_names]
+
+                        if remaining_questions:
+                            print(
+                                f"DEBUG: AI Answerer Async - Processing {len(remaining_questions)} remaining questions individually")
+                            # 🚀 FALLBACK: Parallel processing for remaining questions
+                            tasks = []
+                            for question in remaining_questions:
+                                task = self._generate_ai_answer_async(question, profile_data, profile_dummy_data)
+                                tasks.append(task)
+
+                            individual_answers = await asyncio.gather(*tasks, return_exceptions=True)
+
+                            # Combine batch and individual results
+                            all_answers = batch_answers.copy()
+                            for answer in individual_answers:
+                                if not isinstance(answer, Exception):
+                                    all_answers.append(answer)
+
+                            answers = all_answers
+                        else:
+                            answers = batch_answers
+
+                except Exception as batch_error:
+                    print(f"DEBUG: AI Answerer Async - Batch processing failed: {str(batch_error)}")
+                    print("DEBUG: AI Answerer Async - Falling back to individual parallel processing")
+
+                    # 🚀 FALLBACK: Original parallel processing approach
+                    tasks = []
+                    for question in field_questions:
+                        task = self._generate_ai_answer_async(question, profile_data, profile_dummy_data)
+                        tasks.append(task)
+
+                    # Execute all AI answer generation tasks concurrently
+                    start_time = time.time()
+                    answers = await asyncio.gather(*tasks, return_exceptions=True)
+                    end_time = time.time()
+
+                    print(
+                        f"DEBUG: AI Answerer Async - Fallback parallel processing completed in {end_time - start_time:.2f}s")
+
+            # Process results and handle any exceptions
+            valid_answers = []
+            dummy_usage = []
+
+            for i, answer in enumerate(answers):
+                if isinstance(answer, Exception):
+                    print(f"DEBUG: AI Answerer Async - Error processing question {i}: {str(answer)}")
+                    # Create fallback answer for failed questions
+                    question = field_questions[i]
+                    fallback_answer = {
+                        "question_id": question["id"],
+                        "field_selector": question["field_selector"],
+                        "field_name": question["field_name"],
+                        "answer": "",
+                        "confidence": 0,
+                        "reasoning": f"Error processing question: {str(answer)}",
+                        "needs_intervention": True,
+                        "used_dummy_data": False
+                    }
+                    valid_answers.append(fallback_answer)
+                else:
+                    valid_answers.append(answer)
+
+                    # Track dummy data usage
+                    if answer.get("used_dummy_data", False):
+                        dummy_source = answer.get("dummy_data_source", "unknown")
+                        dummy_usage.append({
+                            "question": field_questions[i].get("question", ""),
+                            "field_name": field_questions[i].get("field_name", ""),
+                            "answer": answer.get("answer", ""),
+                            "dummy_data_source": dummy_source,
+                            "dummy_data_type": answer.get("dummy_data_type", "unknown"),
+                            "confidence": answer.get("confidence", 0),
+                            "reasoning": answer.get("reasoning", "")
+                        })
+
+                        if dummy_source == "ai_generated":
+                            print(
+                                f"DEBUG: AI Answerer Async - Generated smart dummy data for {field_questions[i]['field_name']}: {answer['answer']} (confidence: {answer['confidence']})")
+                        else:
+                            print(
+                                f"DEBUG: AI Answerer Async - Used provided dummy data for {field_questions[i]['field_name']}: {answer['answer']}")
+                    else:
+                        print(
+                            f"DEBUG: AI Answerer Async - Used profile data for {field_questions[i]['field_name']}: confidence={answer['confidence']}")
+
+            state["ai_answers"] = valid_answers
+            state["dummy_data_usage"] = dummy_usage
+
+            print(
+                f"DEBUG: AI Answerer Async - Generated {len(valid_answers)} answers, {len(dummy_usage)} used dummy data")
+
+        except Exception as e:
+            print(f"DEBUG: AI Answerer Async - Error: {str(e)}")
+            state["error_details"] = f"AI answer generation failed: {str(e)}"
+
+        return state
+
+    async def _generate_ai_answer_async(self, question: Dict[str, Any], profile: Dict[str, Any],
+                                        profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Async version of _generate_ai_answer"""
+        try:
+            # First attempt: try to answer with profile_data only
+            primary_result = await self._try_answer_with_data_async(question, profile, "profile_data")
+
+            # MODIFIED: Lower the threshold to prioritize real data more aggressively
+            if (primary_result["confidence"] >= 20 and  # Lowered from 30 to 20 to prioritize fill_data even more
+                    primary_result["answer"] and
+                    not primary_result["needs_intervention"]):
+                print(
+                    f"DEBUG: Using profile_data for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
+                return primary_result
+
+            # If profile_dummy_data is available and primary answer failed, try dummy data
+            if profile_dummy_data:
+                print(
+                    f"DEBUG: Trying dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
+                dummy_result = await self._try_answer_with_data_async(question, profile_dummy_data,
+                                                                      "profile_dummy_data")
+
+                # MODIFIED: Only use dummy data if primary result is really bad (confidence < 20)
+                if (dummy_result["confidence"] > primary_result["confidence"] and
+                        dummy_result["answer"] and
+                        primary_result["confidence"] < 20):  # Only if primary result is very poor
+                    dummy_result["used_dummy_data"] = True
+                    dummy_result["dummy_data_source"] = "profile_dummy_data"
+                    return dummy_result
+
+            # If primary result has some confidence (>=20), use it even if not perfect
+            if primary_result["confidence"] >= 20 and primary_result["answer"]:
+                print(
+                    f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
+                primary_result["used_dummy_data"] = False
+                return primary_result
+
+            # NEW: If both profile_data and profile_dummy_data failed, try intelligent dummy generation
+            if (primary_result["confidence"] < 20 or  # Adjusted threshold to match above
+                    not primary_result["answer"] or
+                    primary_result["needs_intervention"]):
+
+                print(
+                    f"DEBUG: Attempting intelligent dummy data generation for field {question['field_name']} - primary confidence: {primary_result['confidence']}, answer: '{primary_result['answer']}', needs_intervention: {primary_result['needs_intervention']}")
+                smart_dummy_result = await self._generate_smart_dummy_data_async(question, profile, primary_result)
+
+                if smart_dummy_result["confidence"] > primary_result["confidence"]:
+                    smart_dummy_result["used_dummy_data"] = True
+                    smart_dummy_result["dummy_data_source"] = "ai_generated"
+                    return smart_dummy_result
+
+            # Return the primary result if no dummy data could help
+            primary_result["used_dummy_data"] = False
+            return primary_result
+
+        except Exception as e:
+            return {
+                "question_id": question["id"],
+                "field_selector": question["field_selector"],
+                "field_name": question["field_name"],
+                "answer": "",
+                "confidence": 0,
+                "reasoning": f"Error generating answer: {str(e)}",
+                "needs_intervention": True,
+                "used_dummy_data": False
+            }
+
+    async def _llm_action_generator_node_async(self, state: FormAnalysisState) -> FormAnalysisState:
+        """Node: Generate form actions using LLM (async version)"""
+        try:
+            print("DEBUG: LLM Action Generator Async - Starting")
+
+            merged_qa_data = state.get("merged_qa_data", [])
+            if not merged_qa_data:
+                print("DEBUG: LLM Action Generator Async - No merged Q&A data available")
+                state["llm_generated_actions"] = []
+                return state
+
+            # Create prompt for LLM action generation
+            prompt = f"""
+            # Role
+            You are a form automation expert. Generate precise form actions based on Q&A analysis.
+
+            # Task
+            Generate form actions for each field based on the analysis results:
+
+            # Q&A Analysis Data:
+            {json.dumps(merged_qa_data, indent=2, ensure_ascii=False)}
+
+            # Instructions
+            1. For each field with a valid answer, generate appropriate form actions
+            2. Skip fields where needs_intervention=true or answer is empty
+            3. Handle different field types appropriately:
+               - text/email/tel/number: use "fill" action
+               - checkbox: use "check" action if answer matches option value
+               - radio: use "select" action for the matching option
+               - select: use "select" action for the matching option
+            4. Use exact CSS selectors from the analysis
+            5. Ensure values match the expected format for each field type
+
+            # Response Format (JSON array):
+            [
+                {{
+                    "selector": "CSS_SELECTOR",
+                    "type": "fill|check|select|click",
+                    "value": "VALUE_TO_USE",
+                    "field_name": "FIELD_NAME",
+                    "confidence": CONFIDENCE_SCORE
+                }},
+                ...
+            ]
+
+            **IMPORTANT**: Return ONLY the JSON array, no other text.
+            """
+
+            # Use async LLM call
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+
+            try:
+                # Parse the response
+                actions = robust_json_parse(response.content)
+
+                # Validate that it's a list
+                if not isinstance(actions, list):
+                    if isinstance(actions, dict) and "actions" in actions:
+                        actions = actions["actions"]
+                    else:
+                        print(f"DEBUG: LLM Action Generator Async - Response is not a list: {type(actions)}")
+                        actions = []
+
+                # Validate each action
+                validated_actions = []
+                for action in actions:
+                    if isinstance(action, dict) and all(key in action for key in ["selector", "type"]):
+                        # Ensure required fields exist
+                        action.setdefault("value", "")
+                        action.setdefault("field_name", "")
+                        action.setdefault("confidence", 50)
+                        validated_actions.append(action)
+                    else:
+                        print(f"DEBUG: LLM Action Generator Async - Invalid action format: {action}")
+
+                state["llm_generated_actions"] = validated_actions
+                print(f"DEBUG: LLM Action Generator Async - Generated {len(validated_actions)} actions")
+
+            except Exception as parse_error:
+                print(f"DEBUG: LLM Action Generator Async - JSON parsing error: {str(parse_error)}")
+                print(f"DEBUG: Raw response: {response.content}")
+                state["llm_generated_actions"] = []
+
+        except Exception as e:
+            print(f"DEBUG: LLM Action Generator Async - Error: {str(e)}")
+            state["error_details"] = f"LLM action generation failed: {str(e)}"
+            state["llm_generated_actions"] = []
+
+        return state
+
+    async def _batch_analyze_fields_async(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> List[
+        Dict[str, Any]]:
+        """🚀 OPTIMIZATION 2: Batch LLM call with caching - analyze multiple fields in one request"""
+        try:
+            if not questions:
+                return []
+
+            # 🚀 OPTIMIZATION 3: Check cache first
+            cache_data = {
+                "questions": [{"field_name": q["field_name"], "field_type": q["field_type"], "question": q["question"]}
+                              for q in questions],
+                "profile_data": profile_data
+            }
+            cache_key = self._get_cache_key(cache_data)
+
+            # Try to get from cache
+            cached_result = self._get_from_cache(cache_key, "batch")
+            if cached_result:
+                print(f"DEBUG: Batch Analysis - Using cached result for {len(questions)} fields")
+                return cached_result
+
+            print(f"DEBUG: Batch Analysis - Processing {len(questions)} fields in single LLM call (cache miss)")
+
+            # Create batch analysis prompt
+            fields_data = []
+            for i, question in enumerate(questions):
+                fields_data.append({
+                    "index": i,
+                    "field_name": question['field_name'],
+                    "field_type": question['field_type'],
+                    "field_label": question['field_label'],
+                    "question": question['question'],
+                    "required": question['required'],
+                    "selector": question['field_selector']
+                })
+
+            prompt = f"""
+            # Role 
+            You are a form data analysis expert. Analyze multiple form fields simultaneously and provide answers based on user data.
+
+            # Task
+            Analyze ALL the following form fields and provide answers based on the user data:
+            
+            # Form Fields to Analyze:
+            {json.dumps(fields_data, indent=2, ensure_ascii=False)}
+            
+            # User Data (fill_data):
+            {json.dumps(profile_data, indent=2, ensure_ascii=False)}
+            
+            # Instructions
+            1. **PRIORITIZE REAL DATA**: Use user data whenever possible with high confidence (70-95)
+            2. **BATCH EFFICIENCY**: Process all fields in one analysis
+            3. **FIELD MATCHING**: Look for exact and semantic matches
+            4. **CONFIDENCE SCORING**: 
+               - 90-95: Perfect exact match
+               - 70-89: Good semantic match  
+               - 50-69: Reasonable inference
+               - 30-49: Uncertain match
+               - 0-29: No good match found
+            
+            # Response Format (JSON array with one object per field):
+            [
+                {{
+                    "index": 0,
+                    "field_name": "field_name",
+                    "answer": "value_or_empty_string",
+                    "confidence": 0-100,
+                    "reasoning": "explanation",
+                    "needs_intervention": true/false,
+                    "data_source_path": "path.to.data",
+                    "field_match_type": "exact|semantic|inferred|none"
+                }},
+                ...
+            ]
+            
+            **IMPORTANT**: Return ONLY the JSON array, no other text. Process ALL {len(questions)} fields.
+            """
+
+            # Single LLM call for all fields
+            start_time = time.time()
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            end_time = time.time()
+
+            print(f"DEBUG: Batch Analysis - LLM call completed in {end_time - start_time:.2f}s")
+
+            try:
+                results = robust_json_parse(response.content)
+
+                if not isinstance(results, list):
+                    raise ValueError("Response is not a list")
+
+                # Validate and format results
+                formatted_results = []
+                for result in results:
+                    if isinstance(result, dict) and "index" in result:
+                        index = result["index"]
+                        if 0 <= index < len(questions):
+                            question = questions[index]
+                            formatted_result = {
+                                "question_id": question["id"],
+                                "field_selector": question["field_selector"],
+                                "field_name": question["field_name"],
+                                "answer": result.get("answer", ""),
+                                "confidence": result.get("confidence", 0),
+                                "reasoning": result.get("reasoning", "Batch analysis result"),
+                                "needs_intervention": result.get("needs_intervention", True),
+                                "data_source_path": result.get("data_source_path", ""),
+                                "field_match_type": result.get("field_match_type", "none"),
+                                "used_dummy_data": False,
+                                "source_name": "profile_data"
+                            }
+                            formatted_results.append(formatted_result)
+
+                # Ensure we have results for all questions
+                if len(formatted_results) != len(questions):
+                    print(
+                        f"DEBUG: Batch Analysis - Warning: Expected {len(questions)} results, got {len(formatted_results)}")
+                    # Fill missing results with fallback
+                    processed_indices = {r.get("index", -1) for r in results if isinstance(r, dict)}
+                    for i, question in enumerate(questions):
+                        if i not in processed_indices:
+                            fallback_result = {
+                                "question_id": question["id"],
+                                "field_selector": question["field_selector"],
+                                "field_name": question["field_name"],
+                                "answer": "",
+                                "confidence": 0,
+                                "reasoning": "Missing from batch analysis",
+                                "needs_intervention": True,
+                                "used_dummy_data": False,
+                                "source_name": "profile_data"
+                            }
+                            formatted_results.append(fallback_result)
+
+                print(f"DEBUG: Batch Analysis - Successfully processed {len(formatted_results)} fields")
+
+                # 🚀 OPTIMIZATION 3: Save to cache for future use
+                self._save_to_cache(cache_key, formatted_results, "batch")
+
+                return formatted_results
+
+            except Exception as parse_error:
+                print(f"DEBUG: Batch Analysis - Parse error: {str(parse_error)}")
+                print(f"DEBUG: Raw response: {response.content[:500]}...")
+                raise parse_error
+
+        except Exception as e:
+            print(f"DEBUG: Batch Analysis - Error: {str(e)}")
+            # Fallback to individual processing
+            return []
+
+    def _can_use_early_return(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> Optional[
+        List[Dict[str, Any]]]:
+        """🚀 OPTIMIZATION 4: Early return for simple exact matches"""
+        try:
+            if not questions or not profile_data:
+                return None
+
+            print(f"DEBUG: Early Return - Checking {len(questions)} fields for exact matches")
+
+            early_results = []
+            exact_matches = 0
+
+            for question in questions:
+                field_name = question.get("field_name", "").lower()
+                field_type = question.get("field_type", "").lower()
+
+                # Check for exact field name matches in profile data
+                exact_match_value = None
+                exact_match_path = None
+
+                # Direct field name match
+                if field_name in profile_data:
+                    exact_match_value = profile_data[field_name]
+                    exact_match_path = field_name
+
+                # Check nested structures for common patterns
+                if not exact_match_value:
+                    for key, value in profile_data.items():
+                        if isinstance(value, dict):
+                            # Check nested objects
+                            if field_name in value:
+                                exact_match_value = value[field_name]
+                                exact_match_path = f"{key}.{field_name}"
+                                break
+
+                            # Check for semantic matches in nested objects
+                            if field_name == "telephonenumber" and "telephoneNumber" in value:
+                                exact_match_value = value["telephoneNumber"]
+                                exact_match_path = f"{key}.telephoneNumber"
+                                break
+                            elif field_name == "email" and "primaryEmail" in value:
+                                exact_match_value = value["primaryEmail"]
+                                exact_match_path = f"{key}.primaryEmail"
+                                break
+
+                if exact_match_value and str(exact_match_value).strip():
+                    # Found exact match
+                    result = {
+                        "question_id": question["id"],
+                        "field_selector": question["field_selector"],
+                        "field_name": question["field_name"],
+                        "answer": str(exact_match_value),
+                        "confidence": 95,  # High confidence for exact matches
+                        "reasoning": f"Exact match found at {exact_match_path}",
+                        "needs_intervention": False,
+                        "data_source_path": exact_match_path,
+                        "field_match_type": "exact",
+                        "used_dummy_data": False,
+                        "source_name": "profile_data"
+                    }
+                    early_results.append(result)
+                    exact_matches += 1
+                else:
+                    # No exact match found, will need LLM processing
+                    early_results.append(None)
+
+            # Only use early return if we have a high percentage of exact matches
+            exact_match_ratio = exact_matches / len(questions)
+            if exact_match_ratio >= 0.7:  # 70% or more exact matches
+                print(
+                    f"DEBUG: Early Return - Found {exact_matches}/{len(questions)} exact matches ({exact_match_ratio:.1%})")
+
+                # Fill in the None values with empty results for LLM processing
+                final_results = []
+                questions_for_llm = []
+
+                for i, result in enumerate(early_results):
+                    if result:
+                        final_results.append(result)
+                    else:
+                        questions_for_llm.append(questions[i])
+
+                # Return the exact matches and mark remaining questions for LLM processing
+                return {
+                    "exact_matches": final_results,
+                    "remaining_questions": questions_for_llm
+                }
+
+            print(
+                f"DEBUG: Early Return - Only {exact_matches}/{len(questions)} exact matches ({exact_match_ratio:.1%}), using full LLM processing")
+            return None
+
+        except Exception as e:
+            print(f"DEBUG: Early Return - Error: {str(e)}")
+            return None

@@ -767,7 +767,7 @@ async def process_form(
     处理表单数据 - 使用智能步骤分析
     Args:
         workflow_id: 工作流ID
-        form_data: 表单数据，包含 form_html, profile_data 和 profile_dummy_data
+        form_data: 表单数据，包含 form_html, profile_data/fill_data 和 profile_dummy_data
     Returns:
         处理结果
     """
@@ -802,14 +802,23 @@ async def process_form(
             workflow_instance.current_step_key = current_step.step_key
             db.commit()
 
-        # 使用 StepService 进行智能表单处理（包含步骤分析和切换逻辑）
+        # 处理数据字段映射：支持 fill_data 或 profile_data
+        profile_data = form_data.get("profile_data") or form_data.get("fill_data", {})
+        profile_dummy_data = form_data.get("profile_dummy_data", {})
+
+        print(
+            f"DEBUG: API process_form - Using profile_data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+        print(
+            f"DEBUG: API process_form - Using profile_dummy_data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+
+        # 直接使用异步调用，不需要 asyncio.to_thread 包装
         step_service = StepService(db)
-        form_result = step_service.process_form_for_step(
+        form_result = await step_service.process_form_for_step(
             workflow_id=workflow_id,
             step_key=current_step.step_key,
             form_html=form_data.get("form_html", ""),
-            profile_data=form_data.get("profile_data", {}),
-            profile_dummy_data=form_data.get("profile_dummy_data", {})
+            profile_data=profile_data,
+            profile_dummy_data=profile_dummy_data
         )
 
         # 转换 FormProcessResult 为 API 响应格式

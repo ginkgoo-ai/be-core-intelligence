@@ -617,8 +617,9 @@ class StepService:
         except Exception as e:
             self.db.rollback()
             raise e
-    
-    def process_form_for_step(self, workflow_id: str, step_key: str, form_html: str, profile_data: dict, profile_dummy_data: dict = None) -> FormProcessResult:
+
+    async def process_form_for_step(self, workflow_id: str, step_key: str, form_html: str, profile_data: dict,
+                                    profile_dummy_data: dict = None) -> FormProcessResult:
         """Process form HTML for a specific step using LangGraph AI workflow"""
         try:
             logger.info(f"Processing form for workflow {workflow_id}, step {step_key}")
@@ -632,7 +633,7 @@ class StepService:
             
             # 首先进行步骤分析，判断页面属于当前步骤还是下一步骤
             logger.debug("Starting step analysis")
-            step_analysis = self.form_processor.step_analyzer.analyze_step(form_html, workflow_id, step_key)
+            step_analysis = await self.form_processor.step_analyzer.analyze_step_async(form_html, workflow_id, step_key)
             
             # 如果页面属于下一步骤且已完成步骤转换，使用新的步骤键
             actual_step_key = step_key
@@ -645,7 +646,8 @@ class StepService:
             
             # Use LangGraph form processor to analyze and generate actions
             logger.info(f"Starting LangGraph form processing for session {session_id}")
-            result = self.form_processor.process_form(workflow_id, actual_step_key, form_html, profile_data, profile_dummy_data or {})
+            result = await self.form_processor.process_form_async(workflow_id, actual_step_key, form_html, profile_data,
+                                                                  profile_dummy_data or {})
             
             if result["success"]:
                 logger.info(f"Form processing successful: {len(result['actions'])} actions generated")
