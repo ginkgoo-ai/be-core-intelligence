@@ -129,7 +129,7 @@ class AutosaveConfirmation(BaseModel):
 class FormActionModel(BaseModel):
     """Form action model"""
     selector: str = Field(..., description="CSS选择器")
-    action_type: str = Field(..., description="动作类型(input, click, select)")
+    action_type: str = Field(..., description="动作类型(input, click)")
     value: Optional[str] = Field(None, description="值")
     order: int = Field(..., description="执行顺序")
 

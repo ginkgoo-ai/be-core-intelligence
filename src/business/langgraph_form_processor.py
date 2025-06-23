@@ -157,7 +157,7 @@ class AIAnswer(BaseModel):
 class FormAction(BaseModel):
     """Form action model"""
     selector: str
-    action_type: str  # input, click, select
+    action_type: str  # input, click
     value: Optional[str] = None
     order: int
 
@@ -1396,14 +1396,13 @@ class StepAnalyzer:
             }
 
     def _generate_form_action(self, merged_data: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-        """Generate form action from merged question-answer data"""
-        # Check if we have a valid answer with reasonable confidence
+        """Generate form action from merged question-answer data - ALWAYS GENERATES ACTION"""
+        # Get answer and confidence
         answer = merged_data.get("answer", "")
         confidence = merged_data.get("confidence", 0)
 
-        # Lower confidence threshold and allow empty answers for some field types
-        if not answer and confidence < 10:
-            return None
+        # CRITICAL: Always generate action with selector and type
+        # Even if no answer, we need to provide the basic action structure
         
         # Get field information
         selector = merged_data["field_selector"]
@@ -1416,83 +1415,123 @@ class StepAnalyzer:
         # Determine action type and value based on field type
         if field_type == "radio":
             # For radio buttons, generate click action
-            # Update selector to include the specific value
-            if "[value='" not in selector and options:
-                # Find the matching option
-                for option in options:
-                    if option.get("value") == answer or option.get("text") == answer:
-                        updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
-                        actions.append({
-                            "selector": updated_selector,
-                            "type": "click",
-                            "value": option.get('value', answer)
-                        })
-                        break
-            else:
-                actions.append({
-                    "selector": selector,
-                    "type": "click",
-                    "value": answer
-                })
-                
-        elif field_type == "checkbox":
-            # For checkboxes, handle multiple values separated by commas
-            values = [v.strip() for v in answer.split(",") if v.strip()]
-
-            for value in values:
-                # Create selector for this specific checkbox value
+            if answer:
+                # Update selector to include the specific value
                 if "[value='" not in selector and options:
                     # Find the matching option
                     for option in options:
-                        if option.get("value") == value or option.get("text") == value:
-                            # Build selector with specific value
+                        if option.get("value") == answer or option.get("text") == answer:
                             updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
                             actions.append({
                                 "selector": updated_selector,
                                 "type": "click",
-                                "value": option.get('value', value)
+                                "value": option.get('value', answer)
                             })
                             break
                 else:
-                    # Use the selector as-is if it already includes value
                     actions.append({
                         "selector": selector,
                         "type": "click",
-                        "value": value
+                        "value": answer
+                    })
+            else:
+                # No answer - generate base action for first option or default
+                if options:
+                    first_option = options[0]
+                    updated_selector = selector.replace("]", f"][value='{first_option.get('value')}']")
+                    actions.append({
+                        "selector": updated_selector,
+                        "type": "click",
+                        "value": ""  # Empty value indicates no selection yet
+                    })
+                else:
+                    actions.append({
+                        "selector": selector,
+                        "type": "click",
+                        "value": ""
+                    })
+                
+        elif field_type == "checkbox":
+            # For checkboxes, handle multiple values separated by commas
+            if answer:
+                values = [v.strip() for v in answer.split(",") if v.strip()]
+
+                for value in values:
+                    # Create selector for this specific checkbox value
+                    if "[value='" not in selector and options:
+                        # Find the matching option
+                        for option in options:
+                            if option.get("value") == value or option.get("text") == value:
+                                # Build selector with specific value
+                                updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
+                                actions.append({
+                                    "selector": updated_selector,
+                                    "type": "click",
+                                    "value": option.get('value', value)
+                                })
+                                break
+                    else:
+                        # Use the selector as-is if it already includes value
+                        actions.append({
+                            "selector": selector,
+                            "type": "click",
+                            "value": value
+                        })
+            else:
+                # No answer - generate base action for first option or default
+                if options:
+                    first_option = options[0]
+                    updated_selector = selector.replace("]", f"][value='{first_option.get('value')}']")
+                    actions.append({
+                        "selector": updated_selector,
+                        "type": "click",
+                        "value": ""  # Empty value indicates no selection yet
+                    })
+                else:
+                    actions.append({
+                        "selector": selector,
+                        "type": "click",
+                        "value": ""
                     })
 
         elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local"]:
-            # For input fields, use input action with value
+            # For input fields, use input action with value (even if empty)
             actions.append({
                 "selector": selector,
                 "type": "input",
-                "value": answer
+                "value": answer if answer else ""
             })
             
         elif field_type == "select":
-            # For select dropdowns, use input action with value
+            # For select dropdowns, use input action with value (even if empty)
             actions.append({
                 "selector": selector,
                 "type": "input",
-                "value": answer
+                "value": answer if answer else ""
             })
 
         elif field_type == "textarea":
-            # For textarea, use input action with value
+            # For textarea, use input action with value (even if empty)
             actions.append({
                 "selector": selector,
                 "type": "input",
-                "value": answer
+                "value": answer if answer else ""
             })
         else:
-            # Default case - try input first, then click
+            # Default case - always generate input action with selector and type
             actions.append({
                 "selector": selector,
                 "type": "input",
-                "value": answer
+                "value": answer if answer else ""
             })
 
-        return actions if actions else None
+        # CRITICAL: Always return actions list, never None
+        # Even if no answer, we still provide the action structure
+        return actions if actions else [{
+            "selector": selector,
+            "type": "input",
+            "value": ""
+        }]
 
     def _find_answer_for_question(self, question: Dict[str, Any], answers: List[Dict[str, Any]]) -> Optional[
         Dict[str, Any]]:
@@ -2451,15 +2490,9 @@ class LangGraphFormProcessor:
                 print(f"DEBUG: Action Generator - Needs intervention: {metadata.get('needs_intervention', False)}")
                 print(f"DEBUG: Action Generator - Has valid answer: {metadata.get('has_valid_answer', False)}")
 
-                # Skip only if no answer at all (regardless of intervention status)
-                if not answer_value:
-                    print(
-                        f"DEBUG: Action Generator - Skipping {metadata.get('field_name', 'unknown')} - no answer available")
-                    continue
-
-                # If we have an answer (real data or dummy data), generate action
+                # CRITICAL: Always generate action with selector and type, even if no answer
                 print(
-                    f"DEBUG: Action Generator - Generating action for {metadata.get('field_name', 'unknown')} with answer: '{answer_value}'")
+                    f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
                 
                 # Create a compatible data structure for the existing action generator
                 compatible_item = {
@@ -3223,27 +3256,76 @@ class LangGraphFormProcessor:
 
             except Exception as parse_error:
                 print(f"DEBUG: JSON parsing error in _generate_smart_dummy_data_async: {str(parse_error)}")
+                # Generate basic fallback dummy data if AI parsing fails
+                fallback_answer = self._generate_basic_fallback_answer(question)
                 return {
                     "question_id": question["id"],
                     "field_selector": question["field_selector"],
                     "field_name": question["field_name"],
-                    "answer": "",
-                    "confidence": 0,
-                    "reasoning": f"Failed to generate dummy data: {str(parse_error)}",
-                    "needs_intervention": True
+                    "answer": fallback_answer,
+                    "confidence": 40,
+                    "reasoning": "Generated basic fallback dummy data due to parsing error",
+                    "needs_intervention": False,
+                    "dummy_data_type": "fallback"
                 }
 
         except Exception as e:
             print(f"DEBUG: Error in _generate_smart_dummy_data_async: {str(e)}")
+            # Generate basic fallback dummy data if everything fails
+            fallback_answer = self._generate_basic_fallback_answer(question)
             return {
                 "question_id": question["id"],
                 "field_selector": question["field_selector"],
                 "field_name": question["field_name"],
-                "answer": "",
-                "confidence": 0,
-                "reasoning": f"Error generating dummy data: {str(e)}",
-                "needs_intervention": True
+                "answer": fallback_answer,
+                "confidence": 30,
+                "reasoning": f"Generated basic fallback dummy data due to error: {str(e)}",
+                "needs_intervention": False,
+                "dummy_data_type": "fallback"
             }
+
+    def _generate_basic_fallback_answer(self, question: Dict[str, Any]) -> str:
+        """Generate basic fallback dummy data when AI generation fails"""
+        field_type = question.get("field_type", "")
+        field_name = question.get("field_name", "").lower()
+
+        # Phone/telephone fields
+        if "phone" in field_name or "tel" in field_name or field_type == "tel":
+            return "07123456789"
+
+        # Email fields  
+        elif "email" in field_name or field_type == "email":
+            return "user@example.com"
+
+        # Name fields
+        elif "name" in field_name and "first" in field_name:
+            return "John"
+        elif "name" in field_name and "last" in field_name:
+            return "Smith"
+        elif "name" in field_name:
+            return "John Smith"
+
+        # Date fields
+        elif field_type in ["date", "datetime-local"]:
+            return "1990-01-01"
+
+        # Number fields  
+        elif field_type == "number" or "number" in field_name:
+            return "123"
+
+        # Address fields
+        elif "address" in field_name:
+            return "123 Main Street"
+        elif "city" in field_name:
+            return "London"
+        elif "postcode" in field_name or "postal" in field_name:
+            return "SW1A 1AA"
+
+        # Default text
+        else:
+            return "Sample Data"
+
+
 
     async def process_form_async(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -3535,65 +3617,70 @@ class LangGraphFormProcessor:
 
     async def _generate_ai_answer_async(self, question: Dict[str, Any], profile: Dict[str, Any],
                                         profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Async version of _generate_ai_answer"""
+        """Async version of _generate_ai_answer - ENSURES ALL FIELDS GET AN ANSWER"""
         try:
             # First attempt: try to answer with profile_data only
             primary_result = await self._try_answer_with_data_async(question, profile, "profile_data")
 
-            # MODIFIED: Lower the threshold to prioritize real data more aggressively
-            if (primary_result["confidence"] >= 20 and  # Lowered from 30 to 20 to prioritize fill_data even more
+            # If we have good confidence and answer from profile data, use it
+            if (primary_result["confidence"] >= 30 and  
                     primary_result["answer"] and
                     not primary_result["needs_intervention"]):
                 print(
                     f"DEBUG: Using profile_data for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
+                primary_result["used_dummy_data"] = False
                 return primary_result
 
-            # If profile_dummy_data is available and primary answer failed, try dummy data
+            # If profile_dummy_data is available, try it next
             if profile_dummy_data:
                 print(
                     f"DEBUG: Trying dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
                 dummy_result = await self._try_answer_with_data_async(question, profile_dummy_data,
                                                                       "profile_dummy_data")
 
-                # MODIFIED: Only use dummy data if primary result is really bad (confidence < 20)
+                # Use dummy data if it's better than primary or if primary is poor
                 if (dummy_result["confidence"] > primary_result["confidence"] and
-                        dummy_result["answer"] and
-                        primary_result["confidence"] < 20):  # Only if primary result is very poor
+                        dummy_result["answer"]):
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
                     return dummy_result
 
-            # If primary result has some confidence (>=20), use it even if not perfect
+            # If we still have reasonable data from profile, use it even if not perfect
             if primary_result["confidence"] >= 20 and primary_result["answer"]:
                 print(
                     f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 primary_result["used_dummy_data"] = False
                 return primary_result
 
-            # NEW: If both profile_data and profile_dummy_data failed, try intelligent dummy generation
-            if (primary_result["confidence"] < 20 or  # Adjusted threshold to match above
-                    not primary_result["answer"] or
-                    primary_result["needs_intervention"]):
+            # CRITICAL: If everything failed, FORCE generate smart dummy data
+            # This ensures NO field is left without an answer
+            print(
+                f"DEBUG: FORCING intelligent dummy data generation for field {question['field_name']} - all other methods failed")
+            smart_dummy_result = await self._generate_smart_dummy_data_async(question, profile, primary_result)
 
-                print(
-                    f"DEBUG: Attempting intelligent dummy data generation for field {question['field_name']} - primary confidence: {primary_result['confidence']}, answer: '{primary_result['answer']}', needs_intervention: {primary_result['needs_intervention']}")
-                smart_dummy_result = await self._generate_smart_dummy_data_async(question, profile, primary_result)
+            # Always use smart dummy if generated successfully
+            if smart_dummy_result["answer"]:
+                smart_dummy_result["used_dummy_data"] = True
+                smart_dummy_result["dummy_data_source"] = "ai_generated"
+                # Override needs_intervention to false since we have a fallback answer
+                smart_dummy_result["needs_intervention"] = False
+                print(f"DEBUG: FORCED dummy data for {question['field_name']}: '{smart_dummy_result['answer']}'")
+                return smart_dummy_result
 
-                if smart_dummy_result["confidence"] > primary_result["confidence"]:
-                    smart_dummy_result["used_dummy_data"] = True
-                    smart_dummy_result["dummy_data_source"] = "ai_generated"
-                    return smart_dummy_result
-
-            # Return the primary result if no dummy data could help
+            # Last resort: return primary result even if poor, but mark it clearly
             primary_result["used_dummy_data"] = False
+            primary_result["needs_intervention"] = True
+            print(f"DEBUG: Last resort - returning primary result for {question['field_name']}")
             return primary_result
 
         except Exception as e:
+            # Even in error case, try to provide SOME answer
+            print(f"DEBUG: Exception in _generate_ai_answer_async for {question['field_name']}: {str(e)}")
             return {
                 "question_id": question["id"],
                 "field_selector": question["field_selector"],
                 "field_name": question["field_name"],
-                "answer": "",
+                "answer": "",  # Will be handled by action generator
                 "confidence": 0,
                 "reasoning": f"Error generating answer: {str(e)}",
                 "needs_intervention": True,
@@ -3626,10 +3713,9 @@ class LangGraphFormProcessor:
             1. For each field with a valid answer, generate appropriate form actions
             2. Skip fields where needs_intervention=true or answer is empty
             3. Handle different field types appropriately:
-               - text/email/tel/number: use "fill" action
-               - checkbox: use "check" action if answer matches option value
-               - radio: use "select" action for the matching option
-               - select: use "select" action for the matching option
+               - text/email/tel/number/textarea/select: use "input" action with value
+               - checkbox: use "click" action (browser plugin clicks to select)
+               - radio: use "click" action (browser plugin clicks to select)
             4. Use exact CSS selectors from the analysis
             5. Ensure values match the expected format for each field type
 
@@ -3637,7 +3723,7 @@ class LangGraphFormProcessor:
             [
                 {{
                     "selector": "CSS_SELECTOR",
-                    "type": "fill|check|select|click",
+                    "type": "input|click",
                     "value": "VALUE_TO_USE",
                     "field_name": "FIELD_NAME",
                     "confidence": CONFIDENCE_SCORE
