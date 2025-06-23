@@ -224,7 +224,8 @@ class StepAnalyzer:
             
             # 如果页面属于下一步骤，执行步骤转换
             if analysis_result.get("belongs_to_next_step", False) and next_step_key:
-                print(f"DEBUG: Page belongs to next step {next_step_key}, executing step transition")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: Page belongs to next step {next_step_key}, executing step transition")
                 
                 # 获取当前步骤实例
                 current_step = self.step_repo.get_step_by_key(workflow_id, current_step_key)
@@ -232,14 +233,14 @@ class StepAnalyzer:
                     # 1. 完成当前步骤
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
                     current_step.completed_at = datetime.utcnow()
-                    print(f"DEBUG: Completed current step {current_step_key}")
+                    print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
                     
                     # 2. 激活下一个步骤
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
                         next_step.started_at = datetime.utcnow()
-                        print(f"DEBUG: Activated next step {next_step_key}")
+                        print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
                         
                         # 3. 更新工作流实例的当前步骤
                         from src.database.workflow_repositories import WorkflowInstanceRepository
@@ -249,7 +250,7 @@ class StepAnalyzer:
                             None,  # 保持当前工作流状态
                             next_step_key  # 更新当前步骤键
                         )
-                        print(f"DEBUG: Updated workflow current step to {next_step_key}")
+                        print(f"[workflow_id:{workflow_id}] DEBUG: Updated workflow current step to {next_step_key}")
                         
                         # 4. 更新分析结果，指示应该使用下一步骤执行
                         analysis_result.update({
@@ -261,7 +262,7 @@ class StepAnalyzer:
                 
                 # 提交数据库更改
                 self.db.commit()
-                print(f"DEBUG: Step transition completed and committed")
+                print(f"[workflow_id:{workflow_id}] DEBUG: Step transition completed and committed")
             else:
                 # 页面属于当前步骤，继续使用当前步骤
                 analysis_result.update({
@@ -1620,7 +1621,8 @@ class StepAnalyzer:
 
             # 如果页面属于下一步骤，执行步骤转换
             if analysis_result.get("belongs_to_next_step", False) and next_step_key:
-                print(f"DEBUG: Page belongs to next step {next_step_key}, executing step transition")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: Page belongs to next step {next_step_key}, executing step transition")
 
                 # 获取当前步骤实例
                 current_step = self.step_repo.get_step_by_key(workflow_id, current_step_key)
@@ -1628,14 +1630,14 @@ class StepAnalyzer:
                     # 1. 完成当前步骤
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
                     current_step.completed_at = datetime.utcnow()
-                    print(f"DEBUG: Completed current step {current_step_key}")
+                    print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
 
                     # 2. 激活下一个步骤
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
                         next_step.started_at = datetime.utcnow()
-                        print(f"DEBUG: Activated next step {next_step_key}")
+                        print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
 
                         # 3. 更新工作流实例的当前步骤
                         from src.database.workflow_repositories import WorkflowInstanceRepository
@@ -1645,7 +1647,7 @@ class StepAnalyzer:
                             None,  # 保持当前工作流状态
                             next_step_key  # 更新当前步骤键
                         )
-                        print(f"DEBUG: Updated workflow current step to {next_step_key}")
+                        print(f"[workflow_id:{workflow_id}] DEBUG: Updated workflow current step to {next_step_key}")
 
                         # 4. 更新分析结果，指示应该使用下一步骤执行
                         analysis_result.update({
@@ -1657,7 +1659,7 @@ class StepAnalyzer:
 
                 # 提交数据库更改
                 self.db.commit()
-                print(f"DEBUG: Step transition completed and committed")
+                print(f"[workflow_id:{workflow_id}] DEBUG: Step transition completed and committed")
             else:
                 # 页面属于当前步骤，继续使用当前步骤
                 analysis_result.update({
@@ -1998,7 +2000,8 @@ class LangGraphFormProcessor:
     def _html_parser_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Parse HTML form"""
         try:
-            print("DEBUG: HTML Parser - Starting")
+            workflow_id = state.get("workflow_id", "unknown")
+            print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Starting")
             soup = BeautifulSoup(state["form_html"], 'html.parser')
             
             # Find form element
@@ -2012,11 +2015,12 @@ class LangGraphFormProcessor:
                 "action": form.get("action", "") if hasattr(form, 'get') else "",
                 "method": form.get("method", "post") if hasattr(form, 'get') else "post"
             }
-            
-            print("DEBUG: HTML Parser - Completed successfully")
+
+            print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Completed successfully")
             
         except Exception as e:
-            print(f"DEBUG: HTML Parser - Error: {str(e)}")
+            workflow_id = state.get("workflow_id", "unknown")
+            print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Error: {str(e)}")
             state["error_details"] = f"HTML parsing failed: {str(e)}"
         
         return state
@@ -2024,7 +2028,8 @@ class LangGraphFormProcessor:
     def _field_detector_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Detect form fields"""
         try:
-            print("DEBUG: Field Detector - Starting")
+            workflow_id = state.get("workflow_id", "unknown")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Field Detector - Starting")
             
             if not state["parsed_form"]:
                 state["error_details"] = "No parsed form available"
@@ -3244,12 +3249,12 @@ class LangGraphFormProcessor:
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Async version of process_form using LangGraph workflow"""
         try:
-            print(f"DEBUG: process_form_async - Starting with workflow_id: {workflow_id}, step_key: {step_key}")
-            print(f"DEBUG: process_form_async - HTML length: {len(form_html)}")
+            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Starting with step_key: {step_key}")
+            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - HTML length: {len(form_html)}")
             print(
-                f"DEBUG: process_form_async - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+                f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
             print(
-                f"DEBUG: process_form_async - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+                f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
 
             # Set workflow_id for thread isolation
             self.set_workflow_id(workflow_id)
@@ -3320,7 +3325,7 @@ class LangGraphFormProcessor:
                 result = initial_state
 
             except Exception as workflow_error:
-                print(f"DEBUG: process_form_async - Workflow error: {str(workflow_error)}")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Workflow error: {str(workflow_error)}")
                 result = {
                     "error_details": str(workflow_error),
                     "merged_qa_data": [],
@@ -3328,8 +3333,8 @@ class LangGraphFormProcessor:
                     "messages": []
                 }
 
-            print(f"DEBUG: process_form_async - Workflow completed")
-            print(f"DEBUG: process_form_async - Result keys: {list(result.keys())}")
+            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Workflow completed")
+            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Result keys: {list(result.keys())}")
 
             # Check for errors
             if result.get("error_details"):

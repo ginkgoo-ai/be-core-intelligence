@@ -30,28 +30,28 @@ logger = LoggerConfig.setup(
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
-    logger.info("🚀 启动签证自动填表工作流系统...")
-    logger.info(f"📊 数据库类型: {'PostgreSQL' if 'postgresql' in os.getenv('DATABASE_URL', '') else 'SQLite'}")
+    logger.info("🚀 Starting Visa Auto-Fill Workflow System...")
+    logger.info(f"📊 Database Type: {'PostgreSQL' if 'postgresql' in os.getenv('DATABASE_URL', '') else 'SQLite'}")
 
     # Initialize database
     try:
         init_database()
-        logger.info("✅ 数据库初始化成功")
+        logger.info("✅ Database initialization successful")
     except Exception as e:
-        LoggerConfig.log_exception(logger, "数据库初始化失败", e)
+        LoggerConfig.log_exception(logger, "Database initialization failed", e)
         raise
 
     yield
 
     # Shutdown
-    logger.info("🛑 关闭签证自动填表工作流系统...")
+    logger.info("🛑 Shutting down Visa Auto-Fill Workflow System...")
 
 
 # Create FastAPI application
 app = FastAPI(
-    title="签证自动填表工作流系统",
+    title="Visa Auto-Fill Workflow System",
     description="""
-    ## 英国签证申请自动填表系统
+    ## UK Visa Application Auto-Fill System
     """,
     version="1.0.0",
     lifespan=lifespan,
@@ -150,7 +150,7 @@ async def root():
         ],
         "docs": "/docs",
         "health": "/health",
-        "database": "PostgreSQL" if "postgresql" in os.getenv("DATABASE_URL", "") else "SQLite"
+        "database": "PostgreSQL"
     }
 
 
@@ -166,11 +166,11 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", os.getenv("APP_PORT", "8080")))
 
     # Start the server
-    print(f"🚀 启动签证自动填表工作流系统...")
-    print(f"📊 服务地址: http://localhost:{port}")
-    print(f"📚 API文档: http://localhost:{port}/docs")
-    print(f"🔍 健康检查: http://localhost:{port}/health")
-    print("按 Ctrl+C 停止服务")
+    print(f"🚀 Starting Visa Auto-Fill Workflow System...")
+    print(f"📊 Service URL: http://localhost:{port}")
+    print(f"📚 API Docs: http://localhost:{port}/docs")
+    print(f"🔍 Health Check: http://localhost:{port}/health")
+    print("Press Ctrl+C to stop the service")
 
     # Configure and run with hypercorn
     config = Config()

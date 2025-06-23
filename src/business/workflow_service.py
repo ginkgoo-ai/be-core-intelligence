@@ -72,9 +72,10 @@ class WorkflowService:
                 workflow_def = self.definition_repo.get_definition_by_id(payload.workflow_definition_id)
                 if workflow_def and workflow_def.step_definitions:
                     step_definitions = workflow_def.step_definitions
-                    logger.info(f"✅ 使用工作流定义ID {payload.workflow_definition_id} 的步骤配置")
+                    logger.info(f"Using workflow definition ID {payload.workflow_definition_id} step configuration")
                 else:
-                    logger.warning(f"⚠️ 工作流定义未找到或无步骤配置，使用默认15步配置")
+                    logger.warning(
+                        f"Workflow definition not found or no step configuration, using default 15-step configuration")
             else:
                 # Create a default workflow definition if none specified
                 workflow_def = self.definition_repo.create_definition_full(
@@ -86,7 +87,7 @@ class WorkflowService:
                     is_active=True
                 )
                 payload.workflow_definition_id = workflow_def.workflow_definition_id
-                logger.info(f"✅ 创建默认工作流定义: {workflow_def.workflow_definition_id}")
+                logger.info(f"Created default workflow definition: {workflow_def.workflow_definition_id}")
             
             # Create workflow instance
             instance = self.instance_repo.create_instance(
@@ -94,8 +95,8 @@ class WorkflowService:
                 case_id=payload.case_id,
                 workflow_definition_id=payload.workflow_definition_id
             )
-            
-            logger.info(f"✅ 工作流实例创建成功: {instance.workflow_instance_id}")
+
+            logger.info(f"[workflow_id:{instance.workflow_instance_id}] Workflow instance created successfully")
 
             # Create step instances
             created_steps = []
@@ -107,8 +108,8 @@ class WorkflowService:
                     step_def.get("order", 1)
                 )
                 created_steps.append(step)
-            
-            logger.info(f"✅ 创建了 {len(created_steps)} 个步骤实例")
+
+            logger.info(f"[workflow_id:{instance.workflow_instance_id}] Created {len(created_steps)} step instances")
             
             # Set first step as current
             if created_steps:
@@ -118,7 +119,7 @@ class WorkflowService:
                     WorkflowStatus.IN_PROGRESS,  # 设置状态为进行中
                     first_step.step_key  # 设置当前步骤
                 )
-                logger.info(f"✅ 设置当前步骤为: {first_step.step_key}")
+                logger.info(f"[workflow_id:{instance.workflow_instance_id}] Set current step to: {first_step.step_key}")
 
             return WorkflowInstanceSummary(
                 workflow_instance_id=instance.workflow_instance_id,
@@ -134,7 +135,7 @@ class WorkflowService:
             )
             
         except Exception as e:
-            logger.error(f"❌ 创建工作流失败: {str(e)}")
+            logger.error(f"Failed to create workflow: {str(e)}")
             logger.error(f"Payload: {payload}")
             raise
     
@@ -622,35 +623,36 @@ class StepService:
                                     profile_dummy_data: dict = None) -> FormProcessResult:
         """Process form HTML for a specific step using LangGraph AI workflow"""
         try:
-            logger.info(f"Processing form for workflow {workflow_id}, step {step_key}")
+            logger.info(f"[workflow_id:{workflow_id}] Processing form for step {step_key}")
             
             # Get workflow instance
             instance = self.instance_repo.get_instance_by_id(workflow_id)
             if not instance:
                 error_msg = f"Workflow {workflow_id} not found"
-                logger.error(error_msg)
+                logger.error(f"[workflow_id:{workflow_id}] {error_msg}")
                 raise ValueError(error_msg)
             
             # 首先进行步骤分析，判断页面属于当前步骤还是下一步骤
-            logger.debug("Starting step analysis")
+            logger.debug(f"[workflow_id:{workflow_id}] Starting step analysis")
             step_analysis = await self.form_processor.step_analyzer.analyze_step_async(form_html, workflow_id, step_key)
             
             # 如果页面属于下一步骤且已完成步骤转换，使用新的步骤键
             actual_step_key = step_key
             if step_analysis.get("should_use_next_step", False) and step_analysis.get("step_transition_completed", False):
                 actual_step_key = step_analysis.get("next_step_key", step_key)
-                logger.info(f"Using next step {actual_step_key} for form processing")
+                logger.info(f"[workflow_id:{workflow_id}] Using next step {actual_step_key} for form processing")
             
             # Generate simple session ID for tracking
             session_id = f"{workflow_id}_{actual_step_key}"
             
             # Use LangGraph form processor to analyze and generate actions
-            logger.info(f"Starting LangGraph form processing for session {session_id}")
+            logger.info(f"[workflow_id:{workflow_id}] Starting LangGraph form processing for session {session_id}")
             result = await self.form_processor.process_form_async(workflow_id, actual_step_key, form_html, profile_data,
                                                                   profile_dummy_data or {})
             
             if result["success"]:
-                logger.info(f"Form processing successful: {len(result['actions'])} actions generated")
+                logger.info(
+                    f"[workflow_id:{workflow_id}] Form processing successful: {len(result['actions'])} actions generated")
                 
                 # Convert actions to FormActionModel list for API response
                 actions = []
@@ -688,12 +690,12 @@ class StepService:
                         "qa_count": len(result.get("data", []))
                     }
                 )
-                
-                logger.info(f"Form processing completed successfully for workflow {workflow_id}")
+
+                logger.info(f"[workflow_id:{workflow_id}] Form processing completed successfully")
                 return form_result
             else:
                 error_msg = result.get("error", "Unknown error occurred")
-                logger.error(f"Form processing failed: {error_msg}")
+                logger.error(f"[workflow_id:{workflow_id}] Form processing failed: {error_msg}")
                 
                 return FormProcessResult(
                     session_id=session_id,
@@ -712,14 +714,15 @@ class StepService:
                 )
                 
         except Exception as e:
-            logger.error(f"❌ Exception in process_form_for_step for workflow {workflow_id}, step {step_key}")
-            logger.error(f"Exception details: {str(e)}")
-            logger.error(f"Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
-            logger.error(f"HTML length: {len(form_html) if form_html else 0}")
+            logger.error(f"[workflow_id:{workflow_id}] Exception in process_form_for_step for step {step_key}")
+            logger.error(f"[workflow_id:{workflow_id}] Exception details: {str(e)}")
+            logger.error(
+                f"[workflow_id:{workflow_id}] Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+            logger.error(f"[workflow_id:{workflow_id}] HTML length: {len(form_html) if form_html else 0}")
             
             # Log the full traceback for debugging
             import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
+            logger.error(f"[workflow_id:{workflow_id}] Full traceback: {traceback.format_exc()}")
             
             return FormProcessResult(
                 session_id="",
@@ -763,14 +766,15 @@ class StepService:
                 WorkflowStatus.IN_PROGRESS,
                 next_step.step_key
             )
-            print(f"✅ 工作流推进到下一步: {next_step.name} ({next_step.step_key})")
+            print(
+                f"[workflow_id:{workflow_id}] Workflow advanced to next step: {next_step.name} ({next_step.step_key})")
         else:
             # 工作流完成
             self.instance_repo.update_instance_status(
                 workflow_id,
                 WorkflowStatus.COMPLETED
             )
-            print("✅ 工作流已完成")
+            print(f"[workflow_id:{workflow_id}] Workflow completed")
 
 class WorkflowDefinitionService:
     """Workflow definition management service"""
@@ -793,14 +797,14 @@ class WorkflowDefinitionService:
             )
             
             self.db.commit()
-            print(f"✅ 创建工作流定义成功: {definition.workflow_definition_id}")
+            print(f"Workflow definition created successfully: {definition.workflow_definition_id}")
             
             # Convert to response model
             return self._convert_to_detail(definition)
             
         except Exception as e:
             self.db.rollback()
-            print(f"❌ 创建工作流定义失败: {e}")
+            print(f"Failed to create workflow definition: {e}")
             raise e
     
     def get_definition_by_id(self, definition_id: str) -> Optional['WorkflowDefinitionDetail']:
@@ -813,7 +817,7 @@ class WorkflowDefinitionService:
             return self._convert_to_detail(definition)
             
         except Exception as e:
-            print(f"❌ 获取工作流定义失败: {e}")
+            print(f"Failed to get workflow definition: {e}")
             raise e
     
     def update_definition(self, definition_id: str, update_data: 'WorkflowDefinitionUpdate') -> Optional['WorkflowDefinitionDetail']:
@@ -840,13 +844,13 @@ class WorkflowDefinitionService:
                 return None
             
             self.db.commit()
-            print(f"✅ 更新工作流定义成功: {definition_id}")
+            print(f"Workflow definition updated successfully: {definition_id}")
             
             return self._convert_to_detail(definition)
             
         except Exception as e:
             self.db.rollback()
-            print(f"❌ 更新工作流定义失败: {e}")
+            print(f"Failed to update workflow definition: {e}")
             raise e
     
     def delete_definition(self, definition_id: str, hard_delete: bool = False) -> bool:
@@ -854,46 +858,46 @@ class WorkflowDefinitionService:
         try:
             if hard_delete:
                 success = self.definition_repo.hard_delete_definition(definition_id)
+                delete_type = "Hard deleted"
             else:
                 success = self.definition_repo.delete_definition(definition_id)
+                delete_type = "Soft deleted"
             
             if success:
                 self.db.commit()
-                delete_type = "硬删除" if hard_delete else "软删除"
-                print(f"✅ {delete_type}工作流定义成功: {definition_id}")
+                print(f"{delete_type} workflow definition successfully: {definition_id}")
             
             return success
             
         except Exception as e:
             self.db.rollback()
-            print(f"❌ 删除工作流定义失败: {e}")
+            print(f"Failed to delete workflow definition: {e}")
             raise e
     
-    def get_definitions_list(self, page: int = 1, page_size: int = 10, 
-                           workflow_type: str = None, is_active: bool = None,
-                           search_term: str = None) -> 'WorkflowDefinitionList':
-        """Get paginated workflow definitions list"""
+    def get_definitions_list(self, page: int = 1, page_size: int = 10,
+                             workflow_type: str = None, is_active: bool = None,
+                             search_term: str = None) -> 'WorkflowDefinitionList':
+        """Get paginated workflow definitions with filters"""
         try:
             result = self.definition_repo.get_definitions_paginated(
-                page=page, 
+                page=page,
                 page_size=page_size,
                 workflow_type=workflow_type,
                 is_active=is_active,
                 search_term=search_term
             )
-            
-            # Convert items to detail models
-            items = [self._convert_to_detail(definition) for definition in result['items']]
+
+            definitions = [self._convert_to_detail(definition) for definition in result["items"]]
             
             return WorkflowDefinitionList(
-                total=result['total'],
-                page=result['page'],
-                page_size=result['page_size'],
-                items=items
+                total=result["total"],
+                page=result["page"],
+                page_size=result["page_size"],
+                items=definitions
             )
             
         except Exception as e:
-            print(f"❌ 获取工作流定义列表失败: {e}")
+            print(f"Failed to get workflow definition list: {e}")
             raise e
     
     def get_definitions_by_type(self, workflow_type: str, is_active: bool = True) -> List['WorkflowDefinitionDetail']:
@@ -903,7 +907,7 @@ class WorkflowDefinitionService:
             return [self._convert_to_detail(definition) for definition in definitions]
             
         except Exception as e:
-            print(f"❌ 按类型获取工作流定义失败: {e}")
+            print(f"Failed to get workflow definitions by type: {e}")
             raise e
     
     def get_all_definitions(self, is_active: bool = None) -> List['WorkflowDefinitionDetail']:
@@ -913,7 +917,7 @@ class WorkflowDefinitionService:
             return [self._convert_to_detail(definition) for definition in definitions]
             
         except Exception as e:
-            print(f"❌ 获取所有工作流定义失败: {e}")
+            print(f"Failed to get all workflow definitions: {e}")
             raise e
     
     def _convert_to_detail(self, definition: WorkflowDefinition) -> 'WorkflowDefinitionDetail':

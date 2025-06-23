@@ -807,9 +807,9 @@ async def process_form(
         profile_dummy_data = form_data.get("profile_dummy_data", {})
 
         print(
-            f"DEBUG: API process_form - Using profile_data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+            f"[workflow_id:{workflow_id}] DEBUG: API process_form - Using profile_data keys: {list(profile_data.keys()) if profile_data else 'None'}")
         print(
-            f"DEBUG: API process_form - Using profile_dummy_data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+            f"[workflow_id:{workflow_id}] DEBUG: API process_form - Using profile_dummy_data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
 
         # 直接使用异步调用，不需要 asyncio.to_thread 包装
         step_service = StepService(db)
