@@ -987,62 +987,67 @@ class StepAnalyzer:
         }
     
     def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Generate AI answer for a field question"""
+        """Generate AI answer for a field question - Modified to only use external dummy data"""
         try:
-            # First attempt: try to answer with profile_data only
+            # First attempt: try to answer with profile_data (fill_data)
             primary_result = self._try_answer_with_data(question, profile, "profile_data")
 
-            # MODIFIED: Lower the threshold to prioritize real data more aggressively
-            if (primary_result["confidence"] >= 20 and  # Lowered from 30 to 20 to prioritize fill_data even more
+            # If we have good confidence and answer from profile data, use it
+            if (primary_result["confidence"] >= 20 and  # Lowered threshold to prioritize real data
                 primary_result["answer"] and 
                 not primary_result["needs_intervention"]):
                 print(
                     f"DEBUG: Using profile_data for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
+                primary_result["used_dummy_data"] = False
                 return primary_result
-            
-            # If profile_dummy_data is available and primary answer failed, try dummy data
-            if profile_dummy_data:
-                print(f"DEBUG: Trying dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
-                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
 
-                # MODIFIED: Only use dummy data if primary result is really bad (confidence < 20)
-                if (dummy_result["confidence"] > primary_result["confidence"] and
-                        dummy_result["answer"] and
-                        primary_result["confidence"] < 20):  # Only if primary result is very poor
+            # Second attempt: if profile_dummy_data is available and primary answer failed, try external dummy data
+            if profile_dummy_data:
+                print(
+                    f"DEBUG: Trying external dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
+                print(f"DEBUG: Profile dummy data keys: {list(profile_dummy_data.keys())}")
+                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
+                print(
+                    f"DEBUG: Dummy data result - answer: '{dummy_result['answer']}', confidence: {dummy_result['confidence']}, needs_intervention: {dummy_result['needs_intervention']}")
+
+                # Use dummy data if it's better than primary result OR if primary result has very low confidence
+                if (dummy_result["confidence"] > primary_result["confidence"] or
+                    (primary_result["confidence"] <= 10 and dummy_result["confidence"] >= 30)) and \
+                        dummy_result["answer"] and not dummy_result["needs_intervention"]:
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
+                    print(
+                        f"DEBUG: ✅ Using external dummy data for field {question['field_name']}: answer='{dummy_result['answer']}', confidence={dummy_result['confidence']}")
                     return dummy_result
+                else:
+                    print(
+                        f"DEBUG: ❌ Not using dummy data - dummy confidence: {dummy_result['confidence']}, primary confidence: {primary_result['confidence']}")
 
-            # If primary result has some confidence (>=20), use it even if not perfect
-            if primary_result["confidence"] >= 20 and primary_result["answer"]:
+            # If primary result has some reasonable confidence, use it even if not perfect
+            if primary_result["confidence"] >= 10 and primary_result["answer"]:
                 print(
                     f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 primary_result["used_dummy_data"] = False
                 return primary_result
-            
-            # NEW: If both profile_data and profile_dummy_data failed, try intelligent dummy generation
-            if (primary_result["confidence"] < 20 or  # Adjusted threshold to match above
-                not primary_result["answer"] or 
-                primary_result["needs_intervention"]):
 
-                print(
-                    f"DEBUG: Attempting intelligent dummy data generation for field {question['field_name']} - primary confidence: {primary_result['confidence']}, answer: '{primary_result['answer']}', needs_intervention: {primary_result['needs_intervention']}")
-                smart_dummy_result = self._generate_smart_dummy_data(question, profile, primary_result)
-                
-                if smart_dummy_result["confidence"] > primary_result["confidence"]:
-                    smart_dummy_result["used_dummy_data"] = True
-                    smart_dummy_result["dummy_data_source"] = "ai_generated"
-                    return smart_dummy_result
-            
-            # Return the primary result if no dummy data could help
-            primary_result["used_dummy_data"] = False
-            return primary_result
+            # If all attempts failed, return empty result (no AI generation)
+            print(f"DEBUG: No suitable data found for field {question['field_name']}, leaving empty")
+            return {
+                "question_id": question.get("id", ""),
+                "field_selector": question.get("field_selector", ""),
+                "field_name": question.get("field_name", ""),
+                "answer": "",  # Leave empty if no data available
+                "confidence": 0,
+                "reasoning": "No suitable data found in profile_data or profile_dummy_data",
+                "needs_intervention": True,  # Mark as needing intervention
+                "used_dummy_data": False
+            }
                 
         except Exception as e:
             return {
-                "question_id": question["id"],
-                "field_selector": question["field_selector"],
-                "field_name": question["field_name"],
+                "question_id": question.get("id", ""),
+                "field_selector": question.get("field_selector", ""),
+                "field_name": question.get("field_name", ""),
                 "answer": "",
                 "confidence": 0,
                 "reasoning": f"Error generating answer: {str(e)}",
@@ -1256,20 +1261,26 @@ class StepAnalyzer:
             # CRITICAL INSTRUCTIONS - PRIORITIZE REAL DATA USAGE:
             1. **ALWAYS PREFER REAL DATA**: If you find ANY matching data in the user data, use it with high confidence (70+)
             2. **AGGRESSIVE MATCHING**: Be more flexible in matching field names to data keys
-            3. **SEARCH NESTED STRUCTURES**: Thoroughly search through ALL nested objects and arrays
-            4. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping for common patterns:
-               - For "telephoneNumber" field: Check contactInformation.telephoneNumber, phone, mobile, telephone
-               - For "telephoneNumberType" field: Check contactInformation.telephoneType, phoneType, type (Mobile->mobile, Home->home, Business->business)
-               - For "telephoneNumberPurpose" field: Check usage patterns, purpose, where it's used
-               - For name fields: Check personalDetails.givenName, personalDetails.familyName, name fields
-               - For email fields: Check contactInformation.primaryEmail, email, emailAddress
-               - For address fields: Check contactInformation.currentAddress, address fields
-               - For date fields: Check personalDetails.dateOfBirth, dateOfBirth, dates
-            5. **SEMANTIC MATCHING**: If no exact match, look for semantically similar fields
+            3. **SEARCH NESTED STRUCTURES**: Thoroughly search through ALL nested objects and arrays - DO NOT SKIP ANY LEVELS
+            4. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping for these EXACT patterns:
+               - Field "telephoneNumber" → Check contactInformation.telephoneNumber, phone, mobile, telephone
+               - Field "telephoneNumberType" → Check contactInformation.telephoneType, phoneType (Mobile→mobile, Home→home, Business→business)  
+               - Field "telephoneNumberPurpose" → Check usage patterns, or infer from contactInformation.currentAddress.isInUK (false→outsideUK, true→useInUK)
+               - Field "givenName" → Check personalDetails.givenName, firstName, name
+               - Field "familyName" → Check personalDetails.familyName, lastName, surname
+               - Field "email" → Check contactInformation.primaryEmail, email, emailAddress
+               - Field "address" → Check contactInformation.currentAddress fields
+               - Field "dateOfBirth" → Check personalDetails.dateOfBirth, birthDate, dob
+            5. **NESTED OBJECT TRAVERSAL**: 
+               - contactInformation.telephoneNumber contains "+1234567890" 
+               - contactInformation.telephoneType contains "Mobile"
+               - contactInformation.currentAddress.isInUK contains boolean
+               - personalDetails.givenName contains first name
+               - Search ALL these paths systematically
             6. **CONFIDENCE SCORING - FAVOR REAL DATA**: 
-               - 90-100: Exact field name match with valid data
-               - 70-89: Semantic match with real data (BE GENEROUS HERE)
-               - 50-69: Reasonable match with real data
+               - 90-100: Exact nested path match (e.g., contactInformation.telephoneNumber for telephoneNumber field)
+               - 70-89: Semantic match with real data from nested structure (BE GENEROUS HERE)
+               - 50-69: Reasonable inference from nested data
                - 30-49: Weak match, might need verification
                - 0-29: No suitable data found
             7. **VALIDATION**: Ensure the data type matches the field requirements
@@ -2473,11 +2484,11 @@ class LangGraphFormProcessor:
                 # Extract metadata for action generation
                 metadata = item.get("_metadata", {})
                 question_data = item.get("question", {})
-                
-                # Skip if question needs intervention (interrupt)
-                if question_data.get("type") == "interrupt":
-                    print(f"DEBUG: Action Generator - Skipping {metadata.get('field_name', 'unknown')} due to interrupt")
-                    continue
+
+                # CHANGED: Don't skip interrupt fields - generate basic actions for them too
+                is_interrupt = question_data.get("type") == "interrupt"
+                print(
+                    f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')} (interrupt: {is_interrupt})")
                 
                 answer_data = question_data.get("answer", {})
 
@@ -2582,6 +2593,14 @@ class LangGraphFormProcessor:
             # Collect dummy data that was generated in previous steps
             dummy_data_context = {}
             merged_data = state.get("merged_qa_data", [])
+
+            # Check if we have any form fields to process
+            if not merged_data:
+                print(
+                    "DEBUG: LLM Action Generator - No form fields detected, checking for task list or direct HTML processing")
+                # This might be a task list page or other non-form page
+                # Let LLM directly analyze the HTML for clickable elements
+                return self._process_non_form_page(state)
 
             # Extract dummy data from merged_qa_data for LLM context
             for item in merged_data:
@@ -2775,6 +2794,89 @@ class LangGraphFormProcessor:
         except Exception as e:
             print(f"DEBUG: LLM Action Generator - Exception: {str(e)}")
             state["error_details"] = f"LLM action generation failed: {str(e)}"
+            state["llm_generated_actions"] = []
+
+        return state
+
+    def _process_non_form_page(self, state: FormAnalysisState) -> FormAnalysisState:
+        """Process non-form pages like task lists, navigation pages"""
+        try:
+            print("DEBUG: Processing non-form page (task list or navigation page)")
+
+            # Prepare simplified prompt for non-form pages
+            prompt = f"""
+            # Role 
+            You are a web automation expert analyzing HTML pages for actionable elements.
+
+            # HTML Content:
+            {state["form_html"]}
+
+            # Instructions:
+            Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
+            Focus on:
+            1. **Task list items with "In progress" status** - these should be clicked
+            2. **Links that represent next steps** in a workflow or application process
+            3. **Submit buttons or continue buttons**
+            4. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
+
+            # Priority Rules:
+            - **HIGHEST PRIORITY**: Links or buttons with "In progress" status
+            - **SECOND PRIORITY**: Submit/Continue/Next buttons
+            - **THIRD PRIORITY**: Navigation links that advance the process
+            - **SKIP**: Disabled buttons, "Cannot start yet" items, or non-actionable elements
+
+            # Response Format (JSON only):
+            {{
+              "actions": [
+                {{
+                  "selector": "a[href='/path/to/next/step']",
+                  "type": "click"
+                }}
+              ]
+            }}
+
+            **Return ONLY the JSON response, no other text.**
+            """
+
+            print(f"DEBUG: Non-form page - Sending prompt to LLM")
+
+            # Use thread-isolated LLM call
+            if self._current_workflow_id:
+                response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)], self._current_workflow_id)
+            else:
+                response = self.llm.invoke([HumanMessage(content=prompt)])
+
+            print(f"DEBUG: Non-form page - LLM response: {response.content}")
+
+            try:
+                # Parse JSON response
+                llm_result = robust_json_parse(response.content)
+
+                if "actions" in llm_result and llm_result["actions"]:
+                    state["llm_generated_actions"] = llm_result["actions"]
+                    print(f"DEBUG: Non-form page - Generated {len(llm_result['actions'])} actions")
+
+                    # Log actions for debugging
+                    for i, action in enumerate(llm_result["actions"]):
+                        print(
+                            f"DEBUG: Non-form action {i + 1}: {action.get('selector', 'unknown')} -> {action.get('type', 'unknown')}")
+
+                    state["messages"].append({
+                        "type": "system",
+                        "content": f"Generated {len(llm_result['actions'])} actions for non-form page (task list/navigation)"
+                    })
+                else:
+                    print("DEBUG: Non-form page - No actions generated by LLM")
+                    state["llm_generated_actions"] = []
+
+            except Exception as e:
+                print(f"DEBUG: Non-form page - JSON parse error: {str(e)}")
+                print(f"DEBUG: Non-form page - Raw response: {response.content}")
+                state["llm_generated_actions"] = []
+
+        except Exception as e:
+            print(f"DEBUG: Non-form page processing error: {str(e)}")
+            state["error_details"] = f"Non-form page processing failed: {str(e)}"
             state["llm_generated_actions"] = []
 
         return state
@@ -3093,13 +3195,19 @@ class LangGraphFormProcessor:
             
             # Instructions
             1. **PRIORITIZE REAL DATA**: If you find matching data in the user data, use it with high confidence (70-95)
-            2. **EXACT MATCHES**: Look for exact field name matches first
+            2. **EXACT NESTED MATCHES**: Look for exact field name matches in nested structures first
             3. **SEMANTIC MATCHES**: Look for semantically similar fields (e.g., "phone" matches "telephoneNumber")
-            4. **NESTED DATA**: Check nested objects and arrays for relevant data
-            5. **CONFIDENCE SCORING**: 
-               - 90-95: Perfect exact match
-               - 70-89: Good semantic match
-               - 50-69: Reasonable inference
+            4. **NESTED DATA SEARCH**: Check nested objects and arrays for relevant data - BE THOROUGH
+            5. **SPECIFIC FIELD MAPPINGS**:
+               - Field "telephoneNumber" → contactInformation.telephoneNumber
+               - Field "telephoneNumberType" → contactInformation.telephoneType (Mobile→mobile, etc.)
+               - Field "telephoneNumberPurpose" → infer from contactInformation.currentAddress.isInUK
+               - Field "givenName" → personalDetails.givenName
+               - Field "email" → contactInformation.primaryEmail
+            6. **CONFIDENCE SCORING**: 
+               - 90-95: Perfect nested path match (contactInformation.telephoneNumber)
+               - 70-89: Good semantic match in nested structure
+               - 50-69: Reasonable inference from nested data
                - 30-49: Uncertain match
                - 0-29: No good match found
             
@@ -3482,7 +3590,8 @@ class LangGraphFormProcessor:
                 if remaining_questions:
                     # Process remaining questions with batch optimization
                     try:
-                        batch_answers = await self._batch_analyze_fields_async(remaining_questions, profile_data)
+                        batch_answers = await self._batch_analyze_fields_async(remaining_questions, profile_data,
+                                                                               profile_dummy_data)
                         # Combine exact matches with batch results
                         answers = exact_matches + batch_answers
                     except Exception as batch_error:
@@ -3503,7 +3612,8 @@ class LangGraphFormProcessor:
 
                 try:
                     # Attempt batch analysis for all questions
-                    batch_answers = await self._batch_analyze_fields_async(field_questions, profile_data)
+                    batch_answers = await self._batch_analyze_fields_async(field_questions, profile_data,
+                                                                           profile_dummy_data)
 
                     # Check if batch processing was successful
                     if len(batch_answers) == len(field_questions):
@@ -3617,13 +3727,13 @@ class LangGraphFormProcessor:
 
     async def _generate_ai_answer_async(self, question: Dict[str, Any], profile: Dict[str, Any],
                                         profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Async version of _generate_ai_answer - ENSURES ALL FIELDS GET AN ANSWER"""
+        """Async version of _generate_ai_answer - Modified to only use external dummy data"""
         try:
-            # First attempt: try to answer with profile_data only
+            # First attempt: try to answer with profile_data (fill_data)
             primary_result = await self._try_answer_with_data_async(question, profile, "profile_data")
 
             # If we have good confidence and answer from profile data, use it
-            if (primary_result["confidence"] >= 30 and  
+            if (primary_result["confidence"] >= 20 and  # Lowered threshold to prioritize real data
                     primary_result["answer"] and
                     not primary_result["needs_intervention"]):
                 print(
@@ -3631,56 +3741,57 @@ class LangGraphFormProcessor:
                 primary_result["used_dummy_data"] = False
                 return primary_result
 
-            # If profile_dummy_data is available, try it next
+            # Second attempt: if profile_dummy_data is available and primary answer failed, try external dummy data
             if profile_dummy_data:
                 print(
-                    f"DEBUG: Trying dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
+                    f"DEBUG: Trying external dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
+                print(f"DEBUG: Profile dummy data keys: {list(profile_dummy_data.keys())}")
                 dummy_result = await self._try_answer_with_data_async(question, profile_dummy_data,
                                                                       "profile_dummy_data")
+                print(
+                    f"DEBUG: Dummy data result - answer: '{dummy_result['answer']}', confidence: {dummy_result['confidence']}, needs_intervention: {dummy_result['needs_intervention']}")
 
-                # Use dummy data if it's better than primary or if primary is poor
-                if (dummy_result["confidence"] > primary_result["confidence"] and
-                        dummy_result["answer"]):
+                # Use dummy data if it's better than primary result OR if primary result has very low confidence
+                if (dummy_result["confidence"] > primary_result["confidence"] or
+                    (primary_result["confidence"] <= 10 and dummy_result["confidence"] >= 30)) and \
+                        dummy_result["answer"] and not dummy_result["needs_intervention"]:
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
+                    print(
+                        f"DEBUG: ✅ Using external dummy data for field {question['field_name']}: answer='{dummy_result['answer']}', confidence={dummy_result['confidence']}")
                     return dummy_result
+                else:
+                    print(
+                        f"DEBUG: ❌ Not using dummy data - dummy confidence: {dummy_result['confidence']}, primary confidence: {primary_result['confidence']}")
 
-            # If we still have reasonable data from profile, use it even if not perfect
-            if primary_result["confidence"] >= 20 and primary_result["answer"]:
+            # If primary result has some reasonable confidence, use it even if not perfect
+            if primary_result["confidence"] >= 10 and primary_result["answer"]:
                 print(
                     f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 primary_result["used_dummy_data"] = False
                 return primary_result
 
-            # CRITICAL: If everything failed, FORCE generate smart dummy data
-            # This ensures NO field is left without an answer
-            print(
-                f"DEBUG: FORCING intelligent dummy data generation for field {question['field_name']} - all other methods failed")
-            smart_dummy_result = await self._generate_smart_dummy_data_async(question, profile, primary_result)
-
-            # Always use smart dummy if generated successfully
-            if smart_dummy_result["answer"]:
-                smart_dummy_result["used_dummy_data"] = True
-                smart_dummy_result["dummy_data_source"] = "ai_generated"
-                # Override needs_intervention to false since we have a fallback answer
-                smart_dummy_result["needs_intervention"] = False
-                print(f"DEBUG: FORCED dummy data for {question['field_name']}: '{smart_dummy_result['answer']}'")
-                return smart_dummy_result
-
-            # Last resort: return primary result even if poor, but mark it clearly
-            primary_result["used_dummy_data"] = False
-            primary_result["needs_intervention"] = True
-            print(f"DEBUG: Last resort - returning primary result for {question['field_name']}")
-            return primary_result
+            # If all attempts failed, return empty result (no AI generation)
+            print(f"DEBUG: No suitable data found for field {question['field_name']}, leaving empty")
+            return {
+                "question_id": question.get("id", ""),
+                "field_selector": question.get("field_selector", ""),
+                "field_name": question.get("field_name", ""),
+                "answer": "",  # Leave empty if no data available
+                "confidence": 0,
+                "reasoning": "No suitable data found in profile_data or profile_dummy_data",
+                "needs_intervention": True,  # Mark as needing intervention
+                "used_dummy_data": False
+            }
 
         except Exception as e:
-            # Even in error case, try to provide SOME answer
+            # Return empty result on error
             print(f"DEBUG: Exception in _generate_ai_answer_async for {question['field_name']}: {str(e)}")
             return {
-                "question_id": question["id"],
-                "field_selector": question["field_selector"],
-                "field_name": question["field_name"],
-                "answer": "",  # Will be handled by action generator
+                "question_id": question.get("id", ""),
+                "field_selector": question.get("field_selector", ""),
+                "field_name": question.get("field_name", ""),
+                "answer": "",  # Leave empty on error
                 "confidence": 0,
                 "reasoning": f"Error generating answer: {str(e)}",
                 "needs_intervention": True,
@@ -3694,9 +3805,10 @@ class LangGraphFormProcessor:
 
             merged_qa_data = state.get("merged_qa_data", [])
             if not merged_qa_data:
-                print("DEBUG: LLM Action Generator Async - No merged Q&A data available")
-                state["llm_generated_actions"] = []
-                return state
+                print("DEBUG: LLM Action Generator Async - No merged Q&A data available, checking for non-form page")
+                # This might be a task list page or other non-form page
+                # Let LLM directly analyze the HTML for clickable elements
+                return await self._process_non_form_page_async(state)
 
             # Create prompt for LLM action generation
             prompt = f"""
@@ -3776,7 +3888,89 @@ class LangGraphFormProcessor:
 
         return state
 
-    async def _batch_analyze_fields_async(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> List[
+    async def _process_non_form_page_async(self, state: FormAnalysisState) -> FormAnalysisState:
+        """Process non-form pages like task lists, navigation pages (async version)"""
+        try:
+            print("DEBUG: Processing non-form page (task list or navigation page) - Async")
+
+            # Prepare simplified prompt for non-form pages
+            prompt = f"""
+            # Role 
+            You are a web automation expert analyzing HTML pages for actionable elements.
+
+            # HTML Content:
+            {state["form_html"]}
+
+            # Instructions:
+            Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
+            Focus on:
+            1. **Task list items with "In progress" status** - these should be clicked
+            2. **Links that represent next steps** in a workflow or application process
+            3. **Submit buttons or continue buttons**
+            4. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
+
+            # Priority Rules:
+            - **HIGHEST PRIORITY**: Links or buttons with "In progress" status
+            - **SECOND PRIORITY**: Submit/Continue/Next buttons
+            - **THIRD PRIORITY**: Navigation links that advance the process
+            - **SKIP**: Disabled buttons, "Cannot start yet" items, or non-actionable elements
+
+            # Response Format (JSON only):
+            {{
+              "actions": [
+                {{
+                  "selector": "a[href='/path/to/next/step']",
+                  "type": "click"
+                }}
+              ]
+            }}
+
+            **Return ONLY the JSON response, no other text.**
+            """
+
+            print(f"DEBUG: Non-form page async - Sending prompt to LLM")
+
+            # Use async LLM call
+            response = await self._invoke_llm_with_thread_id_async([HumanMessage(content=prompt)],
+                                                                   self._current_workflow_id)
+
+            print(f"DEBUG: Non-form page async - LLM response: {response.content}")
+
+            try:
+                # Parse JSON response
+                llm_result = robust_json_parse(response.content)
+
+                if "actions" in llm_result and llm_result["actions"]:
+                    state["llm_generated_actions"] = llm_result["actions"]
+                    print(f"DEBUG: Non-form page async - Generated {len(llm_result['actions'])} actions")
+
+                    # Log actions for debugging
+                    for i, action in enumerate(llm_result["actions"]):
+                        print(
+                            f"DEBUG: Non-form async action {i + 1}: {action.get('selector', 'unknown')} -> {action.get('type', 'unknown')}")
+
+                    state["messages"].append({
+                        "type": "system",
+                        "content": f"Generated {len(llm_result['actions'])} actions for non-form page (task list/navigation) - async"
+                    })
+                else:
+                    print("DEBUG: Non-form page async - No actions generated by LLM")
+                    state["llm_generated_actions"] = []
+
+            except Exception as e:
+                print(f"DEBUG: Non-form page async - JSON parse error: {str(e)}")
+                print(f"DEBUG: Non-form page async - Raw response: {response.content}")
+                state["llm_generated_actions"] = []
+
+        except Exception as e:
+            print(f"DEBUG: Non-form page async processing error: {str(e)}")
+            state["error_details"] = f"Non-form page processing failed: {str(e)}"
+            state["llm_generated_actions"] = []
+
+        return state
+
+    async def _batch_analyze_fields_async(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
+                                          profile_dummy_data: Dict[str, Any] = None) -> List[
         Dict[str, Any]]:
         """🚀 OPTIMIZATION 2: Batch LLM call with caching - analyze multiple fields in one request"""
         try:
@@ -3787,7 +3981,8 @@ class LangGraphFormProcessor:
             cache_data = {
                 "questions": [{"field_name": q["field_name"], "field_type": q["field_type"], "question": q["question"]}
                               for q in questions],
-                "profile_data": profile_data
+                "profile_data": profile_data,
+                "profile_dummy_data": profile_dummy_data
             }
             cache_key = self._get_cache_key(cache_data)
 
@@ -3825,14 +4020,23 @@ class LangGraphFormProcessor:
             # User Data (fill_data):
             {json.dumps(profile_data, indent=2, ensure_ascii=False)}
             
+            # Profile Dummy Data (backup data):
+            {json.dumps(profile_dummy_data, indent=2, ensure_ascii=False) if profile_dummy_data else "None"}
+            
             # Instructions
-            1. **PRIORITIZE REAL DATA**: Use user data whenever possible with high confidence (70-95)
-            2. **BATCH EFFICIENCY**: Process all fields in one analysis
-            3. **FIELD MATCHING**: Look for exact and semantic matches
-            4. **CONFIDENCE SCORING**: 
-               - 90-95: Perfect exact match
-               - 70-89: Good semantic match  
-               - 50-69: Reasonable inference
+            1. **DATA PRIORITY**: 
+               - FIRST: Try to match with User Data (fill_data) 
+               - SECOND: If no match in fill_data, try Profile Dummy Data
+               - Use Profile Dummy Data with confidence 70+ if it matches field patterns
+            2. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping:
+               - Field "telephoneNumber" → Check contactInformation.telephoneNumber in dummy data
+               - Field "telephoneNumberType" → Check contactInformation.telephoneType (Mobile→mobile, etc.)
+               - Field "telephoneNumberPurpose" → Infer from contactInformation.currentAddress.isInUK
+               - Search nested structures thoroughly
+            3. **CONFIDENCE SCORING**: 
+               - 90-95: Perfect exact match in fill_data
+               - 70-89: Good match in dummy data nested structure
+               - 50-69: Reasonable inference from any data
                - 30-49: Uncertain match
                - 0-29: No good match found
             
@@ -3874,6 +4078,11 @@ class LangGraphFormProcessor:
                         index = result["index"]
                         if 0 <= index < len(questions):
                             question = questions[index]
+                            # Determine if dummy data was used based on data_source_path or reasoning
+                            used_dummy_data = ("contactInformation" in result.get("data_source_path", "") or
+                                               "dummy" in result.get("reasoning", "").lower() or
+                                               result.get("confidence", 0) >= 70 and result.get("answer", ""))
+                            
                             formatted_result = {
                                 "question_id": question["id"],
                                 "field_selector": question["field_selector"],
@@ -3884,8 +4093,9 @@ class LangGraphFormProcessor:
                                 "needs_intervention": result.get("needs_intervention", True),
                                 "data_source_path": result.get("data_source_path", ""),
                                 "field_match_type": result.get("field_match_type", "none"),
-                                "used_dummy_data": False,
-                                "source_name": "profile_data"
+                                "used_dummy_data": used_dummy_data,
+                                "dummy_data_source": "profile_dummy_data" if used_dummy_data else "",
+                                "source_name": "profile_dummy_data" if used_dummy_data else "profile_data"
                             }
                             formatted_results.append(formatted_result)
 

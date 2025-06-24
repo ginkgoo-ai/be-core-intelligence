@@ -23,7 +23,7 @@ workflow_router = APIRouter(prefix="/workflows", tags=["workflow"])
 class FormProcessRequest(BaseModel):
     """Request model for form processing"""
     form_html: str
-    profile_data: dict
+    fill_data: dict
     profile_dummy_data: Optional[dict] = None  # Add optional dummy data field
 
 
@@ -760,14 +760,14 @@ async def get_step_merged_data(
 @workflow_router.post("/{workflow_id}/process-form")
 async def process_form(
         workflow_id: str,
-        form_data: Dict[str, Any],
+        request: FormProcessRequest,
         db: Session = Depends(get_db_session)
 ) -> Dict[str, Any]:
     """
     处理表单数据 - 使用智能步骤分析
     Args:
         workflow_id: 工作流ID
-        form_data: 表单数据，包含 form_html, profile_data/fill_data 和 profile_dummy_data
+        request: 表单处理请求，包含 form_html, fill_data 和 profile_dummy_data
     Returns:
         处理结果
     """
@@ -802,12 +802,12 @@ async def process_form(
             workflow_instance.current_step_key = current_step.step_key
             db.commit()
 
-        # 处理数据字段映射：支持 fill_data 或 profile_data
-        profile_data = form_data.get("profile_data") or form_data.get("fill_data", {})
-        profile_dummy_data = form_data.get("profile_dummy_data", {})
+        # 处理数据字段映射：只使用 fill_data 和 profile_dummy_data
+        profile_data = request.fill_data or {}
+        profile_dummy_data = request.profile_dummy_data or {}
 
         print(
-            f"[workflow_id:{workflow_id}] DEBUG: API process_form - Using profile_data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+            f"[workflow_id:{workflow_id}] DEBUG: API process_form - Using fill_data keys: {list(profile_data.keys()) if profile_data else 'None'}")
         print(
             f"[workflow_id:{workflow_id}] DEBUG: API process_form - Using profile_dummy_data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
 
@@ -816,7 +816,7 @@ async def process_form(
         form_result = await step_service.process_form_for_step(
             workflow_id=workflow_id,
             step_key=current_step.step_key,
-            form_html=form_data.get("form_html", ""),
+            form_html=request.form_html,
             profile_data=profile_data,
             profile_dummy_data=profile_dummy_data
         )
