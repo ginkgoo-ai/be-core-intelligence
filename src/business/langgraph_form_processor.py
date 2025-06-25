@@ -351,26 +351,12 @@ class StepAnalyzer:
         if aria_label:
             return aria_label
 
-        # Strategy 2: For radio/checkbox fields, look for fieldset legend first
+        # Strategy 2: For radio/checkbox fields, look for specific option label, NOT fieldset legend
         field_type = element.get("type", "").lower()
         if field_type in ["radio", "checkbox"]:
-            # Look for parent fieldset and its legend
-            current = element
-            for _ in range(5):  # Check up to 5 levels up
-                parent = current.find_parent()
-                if not parent:
-                    break
-                if parent.name == "fieldset":
-                    legend = parent.find("legend")
-                    if legend:
-                        legend_text = legend.get_text(strip=True)
-                        # Clean up legend text (remove "Required" indicators etc.)
-                        import re
-                        legend_text = re.sub(r'\(Required\)', '', legend_text, flags=re.IGNORECASE).strip()
-                        if legend_text:
-                            print(f"DEBUG: _find_field_label - Found fieldset legend for {element.get('name', 'unknown')}: '{legend_text}'")
-                            return legend_text
-                current = parent
+            # For radio/checkbox, we want the specific option text, not the general question
+            # Skip fieldset legend and look for the specific option's label
+            pass  # We'll use other strategies to find the specific option text
 
         # Strategy 3: Try to find associated label by ID
         field_id = element.get("id", "").strip()
@@ -420,15 +406,37 @@ class StepAnalyzer:
             if label_text:
                 return label_text
 
-        # Strategy 6: Look for nearby text content (like spans, divs with text)
+        # Strategy 6: Look for nearby text content (enhanced for radio/checkbox)
         parent = element.find_parent()
         if parent:
-            # Look for text in parent that's not part of other form elements
-            for child in parent.children:
-                if hasattr(child, 'name') and child.name in ['span', 'div', 'p']:
-                    text = child.get_text(strip=True)
-                    if text and len(text) < 100:  # Reasonable label length
-                        return text
+            # For radio/checkbox, look for associated text more aggressively
+            if field_type in ["radio", "checkbox"]:
+                # Look for next sibling span/div with text (common pattern)
+                next_sibling = element.find_next_sibling()
+                while next_sibling:
+                    if hasattr(next_sibling, 'name') and next_sibling.name in ['span', 'div', 'p', 'label']:
+                        text = next_sibling.get_text(strip=True)
+                        if text and len(text) < 200:  # Reasonable label length for radio options
+                            print(
+                                f"DEBUG: _find_field_label - Found option text for {element.get('value', 'unknown')}: '{text}'")
+                            return text
+                    next_sibling = next_sibling.find_next_sibling()
+
+                # Look for text within the same parent container
+                for child in parent.children:
+                    if hasattr(child, 'name') and child.name in ['span', 'div', 'p']:
+                        text = child.get_text(strip=True)
+                        if text and len(text) < 200 and text not in ["(Required)", "Required"]:
+                            print(
+                                f"DEBUG: _find_field_label - Found option text in parent for {element.get('value', 'unknown')}: '{text}'")
+                            return text
+            else:
+                # Original logic for other field types
+                for child in parent.children:
+                    if hasattr(child, 'name') and child.name in ['span', 'div', 'p']:
+                        text = child.get_text(strip=True)
+                        if text and len(text) < 100:  # Reasonable label length
+                            return text
 
         # Strategy 7: Use placeholder attribute
         placeholder = element.get("placeholder", "").strip()
@@ -933,6 +941,37 @@ class StepAnalyzer:
         
         return context
 
+    def _find_general_question_for_radio_checkbox(self, field: Dict[str, Any]) -> str:
+        """Find the general question (fieldset legend) for radio/checkbox fields"""
+        field_name = field.get("name", "")
+
+        try:
+            import re
+
+            # Generate a reasonable question from field name
+            if field_name:
+                # Convert field name to readable question
+                question = field_name.replace("_", " ").replace("-", " ").replace(".", " ")
+                question = re.sub(r'([a-z])([A-Z])', r'\1 \2', question)  # Handle camelCase
+                question = " ".join(word.capitalize() for word in question.split())
+
+                # Add question format for common patterns
+                if any(keyword in question.lower() for keyword in ['contact', 'phone', 'telephone']):
+                    return f"Are you able to be contacted by telephone?"
+                elif any(keyword in question.lower() for keyword in ['prefer', 'choice', 'select']):
+                    return f"What is your {question.lower()}?"
+                elif 'reason' in question.lower():
+                    return f"Please explain the {question.lower()}"
+                else:
+                    return f"Please select your {question.lower()}"
+
+            # Fallback
+            return "Please make a selection"
+
+        except Exception as e:
+            print(f"DEBUG: Error finding general question: {e}")
+            return field_name.replace("_", " ").title() if field_name else "Please make a selection"
+
     def _generate_field_question(self, field: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a question for a form field using page context"""
         field_name = field.get("name", "")
@@ -942,22 +981,36 @@ class StepAnalyzer:
         
         # Generate question text using field-specific information first
         question_text = ""
-        
-        # Strategy 1: Use field label directly (most specific)
-        if field_label:
-            question_text = field_label.strip()
-        
-        # Strategy 2: Use placeholder if no label
-        elif placeholder:
-            question_text = placeholder.strip()
-        
-        # Strategy 3: Generate from field name
-        elif field_name:
-            question_text = field_name.replace("_", " ").replace("-", " ").title()
-        
-        # Strategy 4: Fallback to field type
+
+        # Special handling for radio/checkbox: need to find the general question, not option-specific text
+        if field_type in ["radio", "checkbox"]:
+            # For radio/checkbox, field_label is the specific option text
+            # We need to find the general question (fieldset legend)
+            question_text = self._find_general_question_for_radio_checkbox(field)
+
+            # If we couldn't find a general question, fallback to field name
+            if not question_text:
+                if field_name:
+                    question_text = field_name.replace("_", " ").replace("-", " ").title()
+                else:
+                    question_text = f"{field_type} selection"
         else:
-            question_text = f"{field_type} field"
+            # For other field types, use the standard strategy
+            # Strategy 1: Use field label directly (most specific)
+            if field_label:
+                question_text = field_label.strip()
+
+            # Strategy 2: Use placeholder if no label
+            elif placeholder:
+                question_text = placeholder.strip()
+
+            # Strategy 3: Generate from field name
+            elif field_name:
+                question_text = field_name.replace("_", " ").replace("-", " ").title()
+
+            # Strategy 4: Fallback to field type
+            else:
+                question_text = f"{field_type} field"
         
         # Clean up the question text
         question_text = question_text.strip()
@@ -1575,6 +1628,7 @@ class StepAnalyzer:
         Updated logic:
         - If AI provided an answer (including dummy data): mark as check=1 and show the answer
         - If no answer at all: mark as check=0 for user selection
+        - For radio/checkbox: use option text as name, not question text
         """
         field_type = question["field_type"]
         options = question.get("options", [])
@@ -1592,13 +1646,42 @@ class StepAnalyzer:
         
         if field_type in ["radio", "checkbox", "select"] and options:
             if has_ai_answer:  # AI provided an answer (real or dummy)
-                # AI已回答：只存储答案，类似input格式
-                return [{
-                    "name": ai_answer_value,
-                    "value": ai_answer_value,
-                    "check": 1,  # Mark as selected because AI provided an answer
-                    "selector": question["field_selector"]
-                }]
+                # AI已回答：找到匹配的选项并使用选项文本
+                matched_option = None
+                for option in options:
+                    if (option.get("value", "").lower() == ai_answer_value.lower() or
+                            option.get("text", "").lower() == ai_answer_value.lower()):
+                        matched_option = option
+                        break
+
+                if matched_option:
+                    # 使用匹配选项的文本作为答案显示
+                    return [{
+                        "name": matched_option.get("text", matched_option.get("value", "")),
+                        "value": matched_option.get("value", ""),
+                        "check": 1,  # Mark as selected because AI provided an answer
+                        "selector": question["field_selector"]
+                    }]
+                else:
+                    # 没找到匹配选项，选择第一个可用选项作为默认值（而不是使用AI原始答案）
+                    if options:
+                        default_option = options[0]
+                        print(
+                            f"DEBUG: _create_answer_data - No matching option found for AI answer '{ai_answer_value}', using first option: '{default_option.get('text', '')}'")
+                        return [{
+                            "name": default_option.get("text", default_option.get("value", "")),
+                            "value": default_option.get("value", ""),
+                            "check": 1,  # Mark as selected because AI provided an answer
+                            "selector": question["field_selector"]
+                        }]
+                    else:
+                        # 没有选项，使用AI原始答案作为fallback
+                        return [{
+                            "name": ai_answer_value,
+                            "value": ai_answer_value,
+                            "check": 1,  # Mark as selected because AI provided an answer
+                            "selector": question["field_selector"]
+                        }]
             else:
                 # 没有答案：存储完整选项列表供用户选择
                 answer_data = []
@@ -1611,7 +1694,7 @@ class StepAnalyzer:
                         selector = f"input[name='{question['field_name']}'][value='{option.get('value', '')}']"
                     
                     answer_data.append({
-                        "name": option.get("text", option.get("value", "")),
+                        "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
                         "value": option.get("value", ""),
                         "check": 0,  # Not selected - waiting for user input
                         "selector": selector
@@ -2331,7 +2414,7 @@ class LangGraphFormProcessor:
                 merged_item = {
                     "question": {
                         "data": {
-                            "name": question_text
+                            "name": question_text  # Always use question text for question.data.name
                         },
                         "answer": {
                             "type": answer_type,
