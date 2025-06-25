@@ -182,14 +182,13 @@ class StepAnalyzer:
         """Set the current workflow ID for thread isolation"""
         self._current_workflow_id = workflow_id
 
-    def _invoke_llm_with_thread_id(self, messages: List, workflow_id: str = None):
-        """Invoke LLM with thread isolation using workflow_id as thread_id"""
-        thread_id = workflow_id or self._current_workflow_id
-        if thread_id:
-            config = {"configurable": {"thread_id": thread_id}}
-            return self.llm.invoke(messages, config=config)
-        else:
-            return self.llm.invoke(messages)
+    def _invoke_llm(self, messages: List, workflow_id: str = None):
+        """Invoke LLM (workflow_id kept for logging purposes only)"""
+        # workflow_id is kept for logging but not used in LLM call
+        used_workflow_id = workflow_id or self._current_workflow_id
+        if used_workflow_id:
+            print(f"[workflow_id:{used_workflow_id}] DEBUG: Invoking LLM")
+        return self.llm.invoke(messages)
     
     def analyze_step(self, html_content: str, workflow_id: str, current_step_key: str) -> Dict[str, Any]:
         """
@@ -633,7 +632,7 @@ class StepAnalyzer:
             }}
             """
 
-        response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)])
+        response = self._invoke_llm([HumanMessage(content=prompt)])
         try:
             result = json.loads(response.content)
             
@@ -1106,9 +1105,9 @@ class StepAnalyzer:
             {"For mutually exclusive checkboxes, return only ONE value." if is_mutually_exclusive_checkbox else ""}
             """
 
-            # Use thread-isolated LLM call if workflow_id is available
+            # Use LLM call with workflow_id for logging
             if self._current_workflow_id:
-                response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)], self._current_workflow_id)
+                response = self._invoke_llm([HumanMessage(content=prompt)], self._current_workflow_id)
             else:
                 response = self.llm.invoke([HumanMessage(content=prompt)])
 
@@ -1326,7 +1325,7 @@ class StepAnalyzer:
             REMEMBER: Your goal is to USE the real data provided whenever possible. Be generous with confidence scores for real data matches!
             """
 
-            response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)])
+            response = self._invoke_llm([HumanMessage(content=prompt)])
             
             try:
                 # Try to parse JSON response using robust parsing
@@ -1903,14 +1902,13 @@ class LangGraphFormProcessor:
         if hasattr(self.step_analyzer, 'set_workflow_id'):
             self.step_analyzer.set_workflow_id(workflow_id)
 
-    def _invoke_llm_with_thread_id(self, messages: List, workflow_id: str = None):
-        """Invoke LLM with thread isolation using workflow_id as thread_id"""
-        thread_id = workflow_id or self._current_workflow_id
-        if thread_id:
-            config = {"configurable": {"thread_id": thread_id}}
-            return self.llm.invoke(messages, config=config)
-        else:
-            return self.llm.invoke(messages)
+    def _invoke_llm(self, messages: List, workflow_id: str = None):
+        """Invoke LLM (workflow_id kept for logging purposes only)"""
+        # workflow_id is kept for logging but not used in LLM call
+        used_workflow_id = workflow_id or self._current_workflow_id
+        if used_workflow_id:
+            print(f"[workflow_id:{used_workflow_id}] DEBUG: Invoking LLM")
+        return self.llm.invoke(messages)
     
     def _create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
@@ -2001,8 +1999,7 @@ class LangGraphFormProcessor:
             )
             
             # Run the workflow
-            config = {"configurable": {"thread_id": f"{workflow_id}_{step_key}"}}
-            result = self.app.invoke(initial_state, config)
+            result = self.app.invoke(initial_state)
             
             print(f"DEBUG: process_form - Workflow completed")
             print(f"DEBUG: process_form - Result keys: {list(result.keys())}")
@@ -2750,9 +2747,9 @@ class LangGraphFormProcessor:
             print(f"DEBUG: LLM Action Generator - Profile data keys: {list(state['profile_data'].keys())}")
             print(f"DEBUG: LLM Action Generator - Dummy data fields: {list(dummy_data_context.keys())}")
 
-            # Use thread-isolated LLM call if workflow_id is available
+            # Use LLM call with workflow_id for logging
             if self._current_workflow_id:
-                response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)], self._current_workflow_id)
+                response = self._invoke_llm([HumanMessage(content=prompt)], self._current_workflow_id)
             else:
                 response = self.llm.invoke([HumanMessage(content=prompt)])
             
@@ -2840,9 +2837,9 @@ class LangGraphFormProcessor:
 
             print(f"DEBUG: Non-form page - Sending prompt to LLM")
 
-            # Use thread-isolated LLM call
+            # Use LLM call with workflow_id for logging
             if self._current_workflow_id:
-                response = self._invoke_llm_with_thread_id([HumanMessage(content=prompt)], self._current_workflow_id)
+                response = self._invoke_llm([HumanMessage(content=prompt)], self._current_workflow_id)
             else:
                 response = self.llm.invoke([HumanMessage(content=prompt)])
 
@@ -3159,9 +3156,13 @@ class LangGraphFormProcessor:
         
         return workflow_dummy_data
 
-    async def _invoke_llm_with_thread_id_async(self, messages: List, workflow_id: str = None):
-        """Async version of LLM invocation with thread isolation"""
+    async def _invoke_llm_async(self, messages: List, workflow_id: str = None):
+        """Async version of LLM invocation (workflow_id kept for logging purposes only)"""
         try:
+            # workflow_id is kept for logging but not used in LLM call
+            used_workflow_id = workflow_id or self._current_workflow_id
+            if used_workflow_id:
+                print(f"[workflow_id:{used_workflow_id}] DEBUG: Invoking LLM async")
             # Use async LLM call
             response = await self.llm.ainvoke(messages)
             return response
@@ -3931,8 +3932,8 @@ class LangGraphFormProcessor:
             print(f"DEBUG: Non-form page async - Sending prompt to LLM")
 
             # Use async LLM call
-            response = await self._invoke_llm_with_thread_id_async([HumanMessage(content=prompt)],
-                                                                   self._current_workflow_id)
+            response = await self._invoke_llm_async([HumanMessage(content=prompt)],
+                                                    self._current_workflow_id)
 
             print(f"DEBUG: Non-form page async - LLM response: {response.content}")
 
