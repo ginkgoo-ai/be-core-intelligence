@@ -1106,8 +1106,8 @@ class StepAnalyzer:
     def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate AI answer for a field question - Modified to only use external dummy data"""
         try:
-            # First attempt: try to answer with profile_data (fill_data), with dummy data as secondary context
-            primary_result = self._try_answer_with_data(question, profile, "profile_data", profile_dummy_data)
+            # First attempt: try to answer with profile_data (fill_data)
+            primary_result = self._try_answer_with_data(question, profile, "profile_data")
 
             # If we have good confidence and answer from profile data, use it
             if (primary_result["confidence"] >= 20 and  # Lowered threshold to prioritize real data
@@ -1124,7 +1124,7 @@ class StepAnalyzer:
                     f"DEBUG: Trying external dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
                 print(f"DEBUG: Profile dummy data keys: {list(profile_dummy_data.keys())}")
                 print(f"DEBUG: Profile dummy data full content: {json.dumps(profile_dummy_data, indent=2)}")
-                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data", profile)
+                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
                 print(
                     f"DEBUG: Dummy data result - answer: '{dummy_result['answer']}', confidence: {dummy_result['confidence']}, needs_intervention: {dummy_result['needs_intervention']}")
 
@@ -1353,9 +1353,9 @@ class StepAnalyzer:
             "dummy_data_source": "ai_generated"  # This will be set by the caller
         }
 
-    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str,
-                              secondary_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Try to answer a question using a specific data source, with optional secondary data for context"""
+    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str) -> Dict[
+        str, Any]:
+        """Try to answer a question using a specific data source"""
         try:
             # Create prompt for AI
             prompt = f"""
@@ -1374,20 +1374,16 @@ class StepAnalyzer:
             Required: {question['required']}
             Question: {question['question']}
             
-            # Primary Data Source ({source_name}):
+            # User Data ({source_name}):
             {json.dumps(data_source, indent=2)}
-            
-            # Secondary Data Source (for context and cross-reference):
-            {json.dumps(secondary_data, indent=2) if secondary_data else "None available"}
             
             MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
             Before attempting to answer, you MUST:
-            1. List ALL top-level fields in BOTH the Primary and Secondary data sources above
-            2. List ALL nested fields (go deep into objects and arrays) in BOTH data sources
-            3. Identify any fields that could semantically relate to the question in EITHER data source
-            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*) in BOTH sources
-            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*) in BOTH sources
-            6. Cross-reference between Primary and Secondary data sources for comprehensive analysis
+            1. List ALL top-level fields in the JSON above
+            2. List ALL nested fields (go deep into objects and arrays)
+            3. Identify any fields that could semantically relate to the question
+            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
+            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
             
             # CRITICAL INSTRUCTIONS - DEEP JSON ANALYSIS AND SEMANTIC UNDERSTANDING:
              1. **COMPREHENSIVE JSON ANALYSIS**: FIRST, carefully read and analyze the ENTIRE JSON structure. List all available fields and their values before attempting to answer
