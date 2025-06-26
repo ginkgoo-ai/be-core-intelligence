@@ -1106,8 +1106,8 @@ class StepAnalyzer:
     def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate AI answer for a field question - Modified to only use external dummy data"""
         try:
-            # First attempt: try to answer with profile_data (fill_data)
-            primary_result = self._try_answer_with_data(question, profile, "profile_data")
+            # First attempt: try to answer with profile_data (fill_data), with dummy data as secondary context
+            primary_result = self._try_answer_with_data(question, profile, "profile_data", profile_dummy_data)
 
             # If we have good confidence and answer from profile data, use it
             if (primary_result["confidence"] >= 20 and  # Lowered threshold to prioritize real data
@@ -1123,7 +1123,8 @@ class StepAnalyzer:
                 print(
                     f"DEBUG: Trying external dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
                 print(f"DEBUG: Profile dummy data keys: {list(profile_dummy_data.keys())}")
-                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
+                print(f"DEBUG: Profile dummy data full content: {json.dumps(profile_dummy_data, indent=2)}")
+                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data", profile)
                 print(
                     f"DEBUG: Dummy data result - answer: '{dummy_result['answer']}', confidence: {dummy_result['confidence']}, needs_intervention: {dummy_result['needs_intervention']}")
 
@@ -1352,8 +1353,9 @@ class StepAnalyzer:
             "dummy_data_source": "ai_generated"  # This will be set by the caller
         }
 
-    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str) -> Dict[str, Any]:
-        """Try to answer a question using a specific data source"""
+    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str,
+                              secondary_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Try to answer a question using a specific data source, with optional secondary data for context"""
         try:
             # Create prompt for AI
             prompt = f"""
@@ -1372,47 +1374,69 @@ class StepAnalyzer:
             Required: {question['required']}
             Question: {question['question']}
             
-            # User Data ({source_name}):
+            # Primary Data Source ({source_name}):
             {json.dumps(data_source, indent=2)}
             
-            # CRITICAL INSTRUCTIONS - PRIORITIZE REAL DATA USAGE:
-            1. **ALWAYS PREFER REAL DATA**: If you find ANY matching data in the user data, use it with high confidence (70+)
-            2. **AGGRESSIVE MATCHING**: Be more flexible in matching field names to data keys
-            3. **SEARCH NESTED STRUCTURES**: Thoroughly search through ALL nested objects and arrays - DO NOT SKIP ANY LEVELS
-            4. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping for these EXACT patterns:
-               - Field "telephoneNumber" → Check contactInformation.telephoneNumber, phone, mobile, telephone
-               - Field "telephoneNumberType" → Check contactInformation.telephoneType, phoneType (Mobile→mobile, Home→home, Business→business)  
-               - Field "telephoneNumberPurpose" → Check usage patterns, or infer from contactInformation.currentAddress.isInUK (false→outsideUK, true→useInUK)
-               - Field "givenName" → Check personalDetails.givenName, firstName, name
-               - Field "familyName" → Check personalDetails.familyName, lastName, surname
-               - Field "email" → Check contactInformation.primaryEmail, email, emailAddress
-               - Field "address" → Check contactInformation.currentAddress fields
-               - Field "dateOfBirth" → Check personalDetails.dateOfBirth, birthDate, dob
-            5. **NESTED OBJECT TRAVERSAL**: 
-               - contactInformation.telephoneNumber contains "+1234567890" 
-               - contactInformation.telephoneType contains "Mobile"
-               - contactInformation.currentAddress.isInUK contains boolean
-               - personalDetails.givenName contains first name
-               - Search ALL these paths systematically
-            6. **CONFIDENCE SCORING - FAVOR REAL DATA**: 
-               - 90-100: Exact nested path match (e.g., contactInformation.telephoneNumber for telephoneNumber field)
-               - 70-89: Semantic match with real data from nested structure (BE GENEROUS HERE)
-               - 50-69: Reasonable inference from nested data
-               - 30-49: Weak match, might need verification
-               - 0-29: No suitable data found
-            7. **VALIDATION**: Ensure the data type matches the field requirements
-            8. **MUTUAL EXCLUSIVITY**: For purpose/type/category checkboxes, select only ONE value
-            9. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
+            # Secondary Data Source (for context and cross-reference):
+            {json.dumps(secondary_data, indent=2) if secondary_data else "None available"}
+            
+            MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
+            Before attempting to answer, you MUST:
+            1. List ALL top-level fields in BOTH the Primary and Secondary data sources above
+            2. List ALL nested fields (go deep into objects and arrays) in BOTH data sources
+            3. Identify any fields that could semantically relate to the question in EITHER data source
+            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*) in BOTH sources
+            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*) in BOTH sources
+            6. Cross-reference between Primary and Secondary data sources for comprehensive analysis
+            
+            # CRITICAL INSTRUCTIONS - DEEP JSON ANALYSIS AND SEMANTIC UNDERSTANDING:
+             1. **COMPREHENSIVE JSON ANALYSIS**: FIRST, carefully read and analyze the ENTIRE JSON structure. List all available fields and their values before attempting to answer
+             2. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
+             3. **INTELLIGENT FIELD DISCOVERY**: Look for fields that semantically match the question, even if field names don't exactly match:
+                - For "another email" questions: Look for "hasOtherEmail*", "additionalEmail*", "secondaryEmail*", "otherEmail*"
+                - For "contact by phone" questions: Look for "canContact*", "allowContact*", "phoneContact*"
+                - For any boolean question: Look for "has*", "is*", "can*", "allow*", "enable*" fields
+             4. **SEARCH ALL DATA**: Thoroughly search through ALL nested objects and arrays - DO NOT SKIP ANY LEVELS
+             5. **SMART FIELD MAPPING EXAMPLES**:
+               - Field about "another email" + Data "hasOtherEmailAddresses: false" → Answer: "false/no" (HIGH confidence 85+)
+               - Field about "telephone contact" + Data "contactInformation.telephoneNumber" → Use the phone number
+               - Field about "telephone type" + Data "contactInformation.telephoneType: 'Mobile'" → Answer: "mobile"
+               - Field about "name" + Data "personalDetails.givenName: 'John'" → Answer: "John"
+               - Field about "email" + Data "contactInformation.primaryEmail" → Use the email address
+               - Field about "birth date" + Data "personalDetails.dateOfBirth" → Use the date
+            5. **BOOLEAN FIELD INTELLIGENCE**: 
+               - For yes/no questions, understand boolean values: true="yes", false="no"
+               - Field asking "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
+               - Field asking "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
+            6. **SEMANTIC MATCHING PATTERNS**:
+               - "another/additional/other email" matches "hasOtherEmailAddresses", "additionalEmail", "secondaryEmail"
+               - "telephone/phone number" matches "telephoneNumber", "phoneNumber", "contactNumber"
+               - "first/given name" matches "givenName", "firstName", "name"
+               - Use SEMANTIC UNDERSTANDING, not just string matching
+            7. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+               - 90-100: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question)
+               - 80-89: Strong semantic match with clear meaning
+               - 70-79: Good semantic inference from data structure
+               - 50-69: Reasonable inference from context
+               - 30-49: Weak match, uncertain
+               - 0-29: No suitable semantic match found
+            8. **VALIDATION**: Ensure the data type and format matches the field requirements
+            9. **MUTUAL EXCLUSIVITY**: For radio/checkbox fields, select only ONE appropriate value
+            10. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
             
             # Special Instructions for Telephone Fields:
             - For "telephoneNumber": Extract the actual phone number from contactInformation.telephoneNumber
             - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", "Business" -> "business")
             - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
             
-            # EXAMPLES - USE THESE AS REFERENCE:
-            - Field "telephoneNumber" + Data "contactInformation.telephoneNumber: '+1234567890'" = Answer: "+1234567890", Confidence: 95
-            - Field "telephoneNumberType[2]" + Data "contactInformation.telephoneType: 'Mobile'" = Answer: "mobile", Confidence: 90
-            - Field "givenName" + Data "personalDetails.givenName: 'John'" = Answer: "John", Confidence: 95
+            # SEMANTIC MATCHING EXAMPLES (CRITICAL - STUDY THESE PATTERNS):
+            - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" = Answer: "false" (confidence 90+)
+            - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: true" = Answer: "true" (confidence 90+)
+            - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
+            - Field "telephoneNumber" + Data "contactInformation.telephoneNumber: '+1234567890'" = Answer: "+1234567890" (confidence 95)
+            - Field "telephoneNumberType" + Data "contactInformation.telephoneType: 'Mobile'" = Answer: "mobile" (confidence 90)
+            - Field "givenName" + Data "personalDetails.givenName: 'John'" = Answer: "John" (confidence 95)
+            - Question about "contact by phone" + Data "canContactByPhone: false" = Answer: "false" (confidence 90+)
             
             # Response Format (JSON only):
             {{
@@ -1713,11 +1737,28 @@ class StepAnalyzer:
             if has_ai_answer:  # AI provided an answer (real or dummy)
                 # AI已回答：找到匹配的选项并使用选项文本
                 matched_option = None
+
+                # Enhanced matching logic for boolean/yes-no questions
+                ai_value_lower = ai_answer_value.lower().strip()
+                
                 for option in options:
-                    if (option.get("value", "").lower() == ai_answer_value.lower() or
-                            option.get("text", "").lower() == ai_answer_value.lower()):
+                    option_value = option.get("value", "").lower()
+                    option_text = option.get("text", "").lower()
+
+                    # Direct string matching
+                    if (option_value == ai_value_lower or option_text == ai_value_lower):
                         matched_option = option
                         break
+
+                    # Boolean value mapping for yes/no questions
+                    if ai_value_lower in ["false", "no", "0"]:
+                        if option_value in ["false", "no", "0"] or option_text in ["no", "false", "否", "不是"]:
+                            matched_option = option
+                            break
+                    elif ai_value_lower in ["true", "yes", "1"]:
+                        if option_value in ["true", "yes", "1"] or option_text in ["yes", "true", "是", "是的"]:
+                            matched_option = option
+                            break
 
                 if matched_option:
                     # 使用匹配选项的文本作为答案显示
@@ -3444,23 +3485,35 @@ class LangGraphFormProcessor:
             # User Data ({source_name}):
             {json.dumps(data_source, indent=2)}
             
-            # Instructions
-            1. **PRIORITIZE REAL DATA**: If you find matching data in the user data, use it with high confidence (70-95)
-            2. **EXACT NESTED MATCHES**: Look for exact field name matches in nested structures first
-            3. **SEMANTIC MATCHES**: Look for semantically similar fields (e.g., "phone" matches "telephoneNumber")
-            4. **NESTED DATA SEARCH**: Check nested objects and arrays for relevant data - BE THOROUGH
-            5. **SPECIFIC FIELD MAPPINGS**:
-               - Field "telephoneNumber" → contactInformation.telephoneNumber
-               - Field "telephoneNumberType" → contactInformation.telephoneType (Mobile→mobile, etc.)
-               - Field "telephoneNumberPurpose" → infer from contactInformation.currentAddress.isInUK
-               - Field "givenName" → personalDetails.givenName
-               - Field "email" → contactInformation.primaryEmail
-            6. **CONFIDENCE SCORING**: 
-               - 90-95: Perfect nested path match (contactInformation.telephoneNumber)
-               - 70-89: Good semantic match in nested structure
-               - 50-69: Reasonable inference from nested data
-               - 30-49: Uncertain match
-               - 0-29: No good match found
+            MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
+            Before attempting to answer, you MUST:
+            1. List ALL top-level fields in the JSON above
+            2. List ALL nested fields (go deep into objects and arrays)
+            3. Identify any fields that could semantically relate to the question
+            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
+            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
+            
+            # Instructions - SEMANTIC UNDERSTANDING AND INTELLIGENT MATCHING
+            1. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
+            2. **INTELLIGENT MAPPING**: Use AI reasoning to connect data semantics to form questions
+            3. **BOOLEAN FIELD INTELLIGENCE**: 
+               - For yes/no questions, understand boolean values: true="yes", false="no"
+               - Field asking "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
+               - Field asking "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
+            4. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+               - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
+               - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
+               - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
+               - Field about "telephone" + Data "contactInformation.telephoneNumber" → Use the phone number
+               - Field about "name" + Data "personalDetails.givenName" → Use the name
+            5. **NESTED DATA SEARCH**: Check nested objects and arrays for relevant data - BE THOROUGH
+            6. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+               - 90-95: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question)
+               - 80-89: Strong semantic match with clear meaning
+               - 70-79: Good semantic inference from data structure
+               - 50-69: Reasonable inference from context
+               - 30-49: Weak match, uncertain
+               - 0-29: No suitable semantic match found
             
             # Response Format (JSON only):
             {{
@@ -3499,6 +3552,16 @@ class LangGraphFormProcessor:
                 result["field_selector"] = question["field_selector"]
                 result["field_name"] = question["field_name"]
                 result["source_name"] = source_name
+
+                # Enhanced debugging for boolean fields
+                field_name = question.get("field_name", "")
+                if field_name and any(
+                        keyword in field_name.lower() for keyword in ["email", "other", "another", "has"]):
+                    print(f"DEBUG: BOOLEAN FIELD PROCESSING - Field: {field_name}")
+                    print(f"DEBUG: BOOLEAN FIELD PROCESSING - AI Answer: '{result.get('answer', '')}'")
+                    print(f"DEBUG: BOOLEAN FIELD PROCESSING - Confidence: {result.get('confidence', 0)}")
+                    print(
+                        f"DEBUG: BOOLEAN FIELD PROCESSING - Needs Intervention: {result.get('needs_intervention', True)}")
 
                 return result
 
@@ -4293,22 +4356,37 @@ class LangGraphFormProcessor:
             # Profile Dummy Data (backup data):
             {json.dumps(profile_dummy_data, indent=2, ensure_ascii=False) if profile_dummy_data else "None"}
             
-            # Instructions
-            1. **DATA PRIORITY**: 
-               - FIRST: Try to match with User Data (fill_data) 
-               - SECOND: If no match in fill_data, try Profile Dummy Data
-               - Use Profile Dummy Data with confidence 70+ if it matches field patterns
-            2. **FIELD MAPPING INTELLIGENCE**: Use intelligent field mapping:
-               - Field "telephoneNumber" → Check contactInformation.telephoneNumber in dummy data
-               - Field "telephoneNumberType" → Check contactInformation.telephoneType (Mobile→mobile, etc.)
-               - Field "telephoneNumberPurpose" → Infer from contactInformation.currentAddress.isInUK
-               - Search nested structures thoroughly
-            3. **CONFIDENCE SCORING**: 
-               - 90-95: Perfect exact match in fill_data
-               - 70-89: Good match in dummy data nested structure
-               - 50-69: Reasonable inference from any data
-               - 30-49: Uncertain match
-               - 0-29: No good match found
+            MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
+            Before attempting to answer any field, you MUST:
+            1. List ALL top-level fields in the User Data and Profile Dummy Data above
+            2. List ALL nested fields (go deep into objects and arrays)
+            3. Identify any fields that could semantically relate to ANY of the form questions
+            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
+            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
+            
+            # Instructions - SEMANTIC UNDERSTANDING AND INTELLIGENT MATCHING
+            1. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
+            2. **DATA PRIORITY**: 
+               - FIRST: Try to match with User Data (fill_data) using semantic understanding
+               - SECOND: If no match in fill_data, try Profile Dummy Data using semantic understanding
+               - Use Profile Dummy Data with confidence 80+ if it semantically matches field meaning
+            3. **BOOLEAN FIELD INTELLIGENCE**: 
+               - For yes/no questions, understand boolean values: true="yes", false="no"
+               - Question "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
+               - Question "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
+            4. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+               - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
+               - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
+               - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
+               - Field about "telephone" + Data "contactInformation.telephoneNumber" → Use the phone number
+               - Field about "name" + Data "personalDetails.givenName" → Use the name
+            5. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+               - 90-95: Perfect semantic match in any data source
+               - 80-89: Strong semantic match with clear meaning
+               - 70-79: Good semantic inference from data structure
+               - 50-69: Reasonable inference from context
+               - 30-49: Weak match, uncertain
+               - 0-29: No good semantic match found
             
             # Response Format (JSON array with one object per field):
             [
