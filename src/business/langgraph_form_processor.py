@@ -944,19 +944,84 @@ class StepAnalyzer:
     def _find_general_question_for_radio_checkbox(self, field: Dict[str, Any]) -> str:
         """Find the general question (fieldset legend) for radio/checkbox fields"""
         field_name = field.get("name", "")
+        field_selector = field.get("selector", "")
 
         try:
             import re
+            from bs4 import BeautifulSoup
 
-            # Generate a reasonable question from field name
+            # Try to extract the question from the HTML context if available
+            if hasattr(self, '_page_context') and self._page_context:
+                form_html = getattr(self, '_current_form_html', None)
+                if form_html:
+                    soup = BeautifulSoup(form_html, 'html.parser')
+
+                    # Strategy 1: Look for fieldset legend that contains this field
+                    fieldsets = soup.find_all('fieldset')
+                    for fieldset in fieldsets:
+                        # Check if this fieldset contains our field
+                        field_inputs = fieldset.find_all('input', {'name': field_name})
+                        if field_inputs:
+                            legend = fieldset.find('legend')
+                            if legend:
+                                legend_text = legend.get_text(strip=True)
+                                if legend_text and len(legend_text) > 3:
+                                    print(f"DEBUG: Found fieldset legend for {field_name}: '{legend_text}'")
+                                    return legend_text
+
+                    # Strategy 2: Look for heading or label before the field group
+                    if field_name:
+                        first_field = soup.find('input', {'name': field_name})
+                        if first_field:
+                            # Look for preceding h1-h6 or strong text
+                            current = first_field
+                            for _ in range(5):  # Look up to 5 levels up
+                                parent = current.find_parent() if current else None
+                                if not parent:
+                                    break
+
+                                # Look for headings in this container
+                                for tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b']:
+                                    heading = parent.find(tag)
+                                    if heading:
+                                        heading_text = heading.get_text(strip=True)
+                                        # Check if this heading is related to email/contact
+                                        if (heading_text and len(heading_text) > 5 and
+                                                any(keyword in heading_text.lower() for keyword in
+                                                    ['email', 'contact', 'address', 'phone', 'telephone', 'another'])):
+                                            print(f"DEBUG: Found related heading for {field_name}: '{heading_text}'")
+                                            return heading_text
+
+                                current = parent
+
+                    # Strategy 3: Look for descriptive text near the field
+                    if field_name:
+                        first_field = soup.find('input', {'name': field_name})
+                        if first_field:
+                            # Look for preceding p, div, span with descriptive text
+                            for sibling in first_field.find_all_previous(['p', 'div', 'span', 'label']):
+                                text = sibling.get_text(strip=True)
+                                if (text and 20 < len(text) < 150 and  # Reasonable question length
+                                        any(keyword in text.lower() for keyword in
+                                            ['email', 'contact', 'address', 'phone', 'telephone', 'another', 'do you',
+                                             'have you'])):
+                                    print(f"DEBUG: Found descriptive text for {field_name}: '{text}'")
+                                    return text
+
+            # Generate a reasonable question from field name if HTML parsing failed
             if field_name:
                 # Convert field name to readable question
                 question = field_name.replace("_", " ").replace("-", " ").replace(".", " ")
                 question = re.sub(r'([a-z])([A-Z])', r'\1 \2', question)  # Handle camelCase
                 question = " ".join(word.capitalize() for word in question.split())
 
-                # Add question format for common patterns
-                if any(keyword in question.lower() for keyword in ['contact', 'phone', 'telephone']):
+                # Enhanced question format for common patterns
+                if any(keyword in question.lower() for keyword in ['email', 'address']):
+                    if 'another' in question.lower() or 'additional' in question.lower():
+                        return f"Do you have another email address?"
+                    else:
+                        return f"Please provide your email address"
+                elif any(keyword in question.lower() for keyword in ['contact', 'phone', 'telephone']):
                     return f"Are you able to be contacted by telephone?"
                 elif any(keyword in question.lower() for keyword in ['prefer', 'choice', 'select']):
                     return f"What is your {question.lower()}?"
@@ -989,7 +1054,7 @@ class StepAnalyzer:
             question_text = self._find_general_question_for_radio_checkbox(field)
 
             # If we couldn't find a general question, fallback to field name
-            if not question_text:
+            if not question_text or question_text == "Please make a selection":
                 if field_name:
                     question_text = field_name.replace("_", " ").replace("-", " ").title()
                 else:
@@ -2145,6 +2210,9 @@ class LangGraphFormProcessor:
                 "action": form.get("action", "") if hasattr(form, 'get') else "",
                 "method": form.get("method", "post") if hasattr(form, 'get') else "post"
             }
+
+            # Store HTML content for question generation access
+            self.step_analyzer._current_form_html = state["form_html"]
 
             print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Completed successfully")
             
