@@ -2843,14 +2843,36 @@ class LangGraphFormProcessor:
                 llm_result = robust_json_parse(response.content)
                 
                 if "actions" in llm_result:
+                    actions = llm_result["actions"]
+
+                    # Check if submit button action exists
+                    has_submit = any(
+                        "submit" in action.get("selector", "").lower() or
+                        action.get("type") == "submit" or
+                        ("button" in action.get("selector", "").lower() and "submit" in action.get("selector",
+                                                                                                   "").lower())
+                        for action in actions
+                    )
+
+                    # If no submit action found, automatically add one by finding submit button in HTML
+                    if not has_submit:
+                        print(
+                            "DEBUG: LLM Action Generator - No submit action found, searching for submit button in HTML")
+                        submit_action = self._find_and_create_submit_action(state["form_html"])
+                        if submit_action:
+                            actions.append(submit_action)
+                            print(f"DEBUG: LLM Action Generator - Added submit action: {submit_action}")
+                        else:
+                            print("DEBUG: LLM Action Generator - No submit button found in HTML")
+                    
                     # Store the LLM-generated actions in the dedicated field
-                    state["llm_generated_actions"] = llm_result["actions"]
-                    print(f"DEBUG: LLM Action Generator - Successfully parsed {len(llm_result['actions'])} actions")
+                    state["llm_generated_actions"] = actions
+                    print(f"DEBUG: LLM Action Generator - Successfully parsed {len(actions)} actions")
                     
                     # Log the types of actions generated for debugging
                     action_types = {}
                     action_values = []
-                    for action in llm_result["actions"]:
+                    for action in actions:
                         action_type = action.get("type", "unknown")
                         action_types[action_type] = action_types.get(action_type, 0) + 1
                         if action.get("value"):
@@ -2860,7 +2882,7 @@ class LangGraphFormProcessor:
                     
                     state["messages"].append({
                         "type": "system",
-                        "content": f"LLM generated {len(llm_result['actions'])} actions successfully using dummy data context. Types: {action_types}"
+                        "content": f"LLM generated {len(actions)} actions successfully using dummy data context. Types: {action_types}"
                     })
                 else:
                     print("DEBUG: LLM Action Generator - No 'actions' key in response")
@@ -2877,6 +2899,83 @@ class LangGraphFormProcessor:
             state["llm_generated_actions"] = []
 
         return state
+
+    def _find_and_create_submit_action(self, form_html: str) -> Optional[Dict[str, str]]:
+        """Find submit button in HTML and create click action for it"""
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(form_html, 'html.parser')
+
+            # Search for submit buttons in order of priority
+            submit_selectors = [
+                # Input submit buttons
+                soup.find("input", {"type": "submit"}),
+                # Button with type submit
+                soup.find("button", {"type": "submit"}),
+                # Button with submit-related text
+                soup.find("button", string=lambda text: text and any(
+                    keyword in text.lower() for keyword in ["submit", "continue", "next", "save", "proceed"]
+                )),
+                # Input button with submit-related value
+                soup.find("input", {"type": "button", "value": lambda value: value and any(
+                    keyword in value.lower() for keyword in ["submit", "continue", "next", "save", "proceed"]
+                )}),
+                # Any button with submit-related class
+                soup.find(["button", "input"], {"class": lambda classes: classes and any(
+                    keyword in " ".join(classes).lower() for keyword in
+                    ["submit", "continue", "next", "save", "proceed"]
+                )}),
+            ]
+
+            # Find the first available submit button
+            submit_element = None
+            for element in submit_selectors:
+                if element:
+                    submit_element = element
+                    break
+
+            if submit_element:
+                # Create selector for the submit button
+                tag_name = submit_element.name
+                selector_parts = [tag_name]
+
+                # Add ID if available
+                if submit_element.get("id"):
+                    selector_parts = [f"{tag_name}[id='{submit_element.get('id')}']"]
+
+                # Add type if it's an input
+                if tag_name == "input" and submit_element.get("type"):
+                    if submit_element.get("id"):
+                        selector_parts = [
+                            f"input[id='{submit_element.get('id')}'][type='{submit_element.get('type')}']"]
+                    else:
+                        selector_parts = [f"input[type='{submit_element.get('type')}']"]
+
+                # Add name if available and no ID
+                if not submit_element.get("id") and submit_element.get("name"):
+                    if tag_name == "input" and submit_element.get("type"):
+                        selector_parts = [
+                            f"input[type='{submit_element.get('type')}'][name='{submit_element.get('name')}']"]
+                    else:
+                        selector_parts = [f"{tag_name}[name='{submit_element.get('name')}']"]
+
+                selector = " ".join(selector_parts)
+
+                action = {
+                    "selector": selector,
+                    "type": "click"
+                }
+
+                print(f"DEBUG: Found submit button with selector: {selector}")
+                return action
+
+            print("DEBUG: No submit button found in HTML")
+            return None
+
+        except Exception as e:
+            print(f"DEBUG: Error finding submit button: {e}")
+            return None
 
     def _process_non_form_page(self, state: FormAnalysisState) -> FormAnalysisState:
         """Process non-form pages like task lists, navigation pages"""
@@ -3957,6 +4056,25 @@ class LangGraphFormProcessor:
                     else:
                         print(f"DEBUG: LLM Action Generator Async - Invalid action format: {action}")
 
+                # Check if submit button action exists
+                has_submit = any(
+                    "submit" in action.get("selector", "").lower() or
+                    action.get("type") == "submit" or
+                    ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
+                    for action in validated_actions
+                )
+
+                # If no submit action found, automatically add one by finding submit button in HTML
+                if not has_submit:
+                    print(
+                        "DEBUG: LLM Action Generator Async - No submit action found, searching for submit button in HTML")
+                    submit_action = self._find_and_create_submit_action(state["form_html"])
+                    if submit_action:
+                        validated_actions.append(submit_action)
+                        print(f"DEBUG: LLM Action Generator Async - Added submit action: {submit_action}")
+                    else:
+                        print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
+                
                 state["llm_generated_actions"] = validated_actions
                 print(f"DEBUG: LLM Action Generator Async - Generated {len(validated_actions)} actions")
 
