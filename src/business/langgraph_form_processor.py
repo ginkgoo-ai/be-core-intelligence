@@ -2863,6 +2863,21 @@ class LangGraphFormProcessor:
                 # CRITICAL: Always generate action with selector and type, even if no answer
                 print(
                     f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
+
+                # For checkbox fields, we need to generate actions for each checked item
+                if metadata.get("field_type") == "checkbox":
+                    data_array = answer_data.get("data", [])
+                    for data_item in data_array:
+                        if data_item.get("check") == 1:
+                            # Generate action for this specific checked item
+                            action = {
+                                "selector": data_item.get("selector", metadata.get("field_selector", "")),
+                                "type": "click",
+                                "value": data_item.get("value", "")
+                            }
+                            actions.append(action)
+                            print(f"DEBUG: Action Generator - Generated checkbox action: {action}")
+                    continue  # Skip the traditional action generation for checkboxes
                 
                 # Create a compatible data structure for the existing action generator
                 compatible_item = {
@@ -2885,13 +2900,13 @@ class LangGraphFormProcessor:
                                 print(
                                     f"DEBUG: Action Generator - Generated action for {metadata.get('field_name', 'unknown')}: {action['type']} = '{action.get('value', 'N/A')}'")
                             actions.extend(action_result)
-                            break  # Successfully generated actions
+                            # Continue to process next field - don't break here
                         else:
                             # Handle single action (legacy format)
                             print(
                                 f"DEBUG: Action Generator - Generated action for {metadata.get('field_name', 'unknown')}: {action_result['type']} = '{action_result.get('value', 'N/A')}'")
                             actions.append(action_result)
-                            break  # Successfully generated action
+                            # Continue to process next field - don't break here
                 except Exception as action_error:
                     print(
                         f"DEBUG: Action Generator - Failed to generate action for {metadata.get('field_name', 'unknown')}: {str(action_error)}")
@@ -4022,7 +4037,12 @@ class LangGraphFormProcessor:
                 if initial_state.get("error_details"):
                     raise Exception(initial_state["error_details"])
 
-                # LLM Action Generator node (async)
+                # Action Generator node (traditional, for precise checkbox handling)
+                initial_state = self._action_generator_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # LLM Action Generator node (async, for additional actions and submit)
                 initial_state = await self._llm_action_generator_node_async(initial_state)
                 if initial_state.get("error_details"):
                     raise Exception(initial_state["error_details"])
@@ -4319,106 +4339,50 @@ class LangGraphFormProcessor:
             }
 
     async def _llm_action_generator_node_async(self, state: FormAnalysisState) -> FormAnalysisState:
-        """Node: Generate form actions using LLM (async version)"""
+        """Node: Combine traditional actions with LLM-generated actions and add submit button"""
         try:
             print("DEBUG: LLM Action Generator Async - Starting")
 
+            # Get traditional actions from previous step
+            traditional_actions = state.get("form_actions", [])
             merged_qa_data = state.get("merged_qa_data", [])
+
+            print(f"DEBUG: LLM Action Generator Async - Found {len(traditional_actions)} traditional actions")
+
             if not merged_qa_data:
                 print("DEBUG: LLM Action Generator Async - No merged Q&A data available, checking for non-form page")
                 # This might be a task list page or other non-form page
-                # Let LLM directly analyze the HTML for clickable elements
                 return await self._process_non_form_page_async(state)
 
-            # Create prompt for LLM action generation
-            prompt = f"""
-            # Role
-            You are a form automation expert. Generate precise form actions based on Q&A analysis.
+            # Start with traditional actions (these are more precise for checkboxes)
+            final_actions = traditional_actions.copy()
 
-            # Task
-            Generate form actions for each field based on the analysis results:
+            # Check if submit button action exists in traditional actions
+            has_submit = any(
+                "submit" in action.get("selector", "").lower() or
+                action.get("type") == "submit" or
+                ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
+                for action in final_actions
+            )
 
-            # Q&A Analysis Data:
-            {json.dumps(merged_qa_data, indent=2, ensure_ascii=False)}
+            # If no submit action found, automatically add one by finding submit button in HTML
+            if not has_submit:
+                print("DEBUG: LLM Action Generator Async - No submit action found, searching for submit button in HTML")
+                submit_action = self._find_and_create_submit_action(state["form_html"])
+                if submit_action:
+                    final_actions.append(submit_action)
+                    print(f"DEBUG: LLM Action Generator Async - Added submit action: {submit_action}")
+                else:
+                    print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
 
-            # Instructions
-            1. For each field with a valid answer, generate appropriate form actions
-            2. Skip fields where needs_intervention=true or answer is empty
-            3. Handle different field types appropriately:
-               - text/email/tel/number/textarea/select: use "input" action with value
-               - checkbox: use "click" action (browser plugin clicks to select)
-               - radio: use "click" action (browser plugin clicks to select)
-            4. Use exact CSS selectors from the analysis
-            5. Ensure values match the expected format for each field type
+            # Store the combined actions
+            state["llm_generated_actions"] = final_actions
+            print(f"DEBUG: LLM Action Generator Async - Generated {len(final_actions)} total actions")
 
-            # Response Format (JSON array):
-            [
-                {{
-                    "selector": "CSS_SELECTOR",
-                    "type": "input|click",
-                    "value": "VALUE_TO_USE",
-                    "field_name": "FIELD_NAME",
-                    "confidence": CONFIDENCE_SCORE
-                }},
-                ...
-            ]
-
-            **IMPORTANT**: Return ONLY the JSON array, no other text.
-            """
-
-            # Use async LLM call
-            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
-
-            try:
-                # Parse the response
-                actions = robust_json_parse(response.content)
-
-                # Validate that it's a list
-                if not isinstance(actions, list):
-                    if isinstance(actions, dict) and "actions" in actions:
-                        actions = actions["actions"]
-                    else:
-                        print(f"DEBUG: LLM Action Generator Async - Response is not a list: {type(actions)}")
-                        actions = []
-
-                # Validate each action
-                validated_actions = []
-                for action in actions:
-                    if isinstance(action, dict) and all(key in action for key in ["selector", "type"]):
-                        # Ensure required fields exist
-                        action.setdefault("value", "")
-                        action.setdefault("field_name", "")
-                        action.setdefault("confidence", 50)
-                        validated_actions.append(action)
-                    else:
-                        print(f"DEBUG: LLM Action Generator Async - Invalid action format: {action}")
-
-                # Check if submit button action exists
-                has_submit = any(
-                    "submit" in action.get("selector", "").lower() or
-                    action.get("type") == "submit" or
-                    ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
-                    for action in validated_actions
-                )
-
-                # If no submit action found, automatically add one by finding submit button in HTML
-                if not has_submit:
-                    print(
-                        "DEBUG: LLM Action Generator Async - No submit action found, searching for submit button in HTML")
-                    submit_action = self._find_and_create_submit_action(state["form_html"])
-                    if submit_action:
-                        validated_actions.append(submit_action)
-                        print(f"DEBUG: LLM Action Generator Async - Added submit action: {submit_action}")
-                    else:
-                        print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
-                
-                state["llm_generated_actions"] = validated_actions
-                print(f"DEBUG: LLM Action Generator Async - Generated {len(validated_actions)} actions")
-
-            except Exception as parse_error:
-                print(f"DEBUG: LLM Action Generator Async - JSON parsing error: {str(parse_error)}")
-                print(f"DEBUG: Raw response: {response.content}")
-                state["llm_generated_actions"] = []
+            # Debug: Print all actions
+            for i, action in enumerate(final_actions, 1):
+                print(
+                    f"DEBUG: Final Action {i}: {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
 
         except Exception as e:
             print(f"DEBUG: LLM Action Generator Async - Error: {str(e)}")
