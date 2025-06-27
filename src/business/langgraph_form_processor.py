@@ -1883,24 +1883,55 @@ class StepAnalyzer:
                             break
 
                 if matched_option:
+                    # 为radio/checkbox字段生成正确的选择器
+                    if field_type in ["radio", "checkbox"]:
+                        # 生成指向特定选项值的选择器
+                        field_name = question.get("field_name", "")
+                        option_value = matched_option.get("value", "")
+
+                        # 尝试使用ID选择器（如果选项值匹配ID模式）
+                        if option_value in ["true", "false"]:
+                            correct_selector = f"#value_{option_value}"
+                        else:
+                            # 使用属性选择器
+                            correct_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                    else:
+                        correct_selector = question["field_selector"]
+
+                    print(
+                        f"DEBUG: _create_answer_data - Generated correct selector: '{correct_selector}' for option '{matched_option.get('text', '')}'")
+                    
                     # 使用匹配选项的文本作为答案显示
                     return [{
                         "name": matched_option.get("text", matched_option.get("value", "")),
                         "value": matched_option.get("value", ""),
                         "check": 1,  # Mark as selected because AI provided an answer
-                        "selector": question["field_selector"]
+                        "selector": correct_selector
                     }]
                 else:
                     # 没找到匹配选项，选择第一个可用选项作为默认值（而不是使用AI原始答案）
                     if options:
                         default_option = options[0]
+
+                        # 为默认选项生成正确的选择器
+                        if field_type in ["radio", "checkbox"]:
+                            field_name = question.get("field_name", "")
+                            option_value = default_option.get("value", "")
+
+                            if option_value in ["true", "false"]:
+                                default_selector = f"#value_{option_value}"
+                            else:
+                                default_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                        else:
+                            default_selector = question["field_selector"]
+                        
                         print(
-                            f"DEBUG: _create_answer_data - No matching option found for AI answer '{ai_answer_value}', using first option: '{default_option.get('text', '')}'")
+                            f"DEBUG: _create_answer_data - No matching option found for AI answer '{ai_answer_value}', using first option: '{default_option.get('text', '')}' with selector '{default_selector}'")
                         return [{
                             "name": default_option.get("text", default_option.get("value", "")),
                             "value": default_option.get("value", ""),
                             "check": 1,  # Mark as selected because AI provided an answer
-                            "selector": question["field_selector"]
+                            "selector": default_selector
                         }]
                     else:
                         # 没有选项，使用AI原始答案作为fallback
@@ -1919,7 +1950,16 @@ class StepAnalyzer:
                     if field_type == "select":
                         selector = question["field_selector"]
                     else:
-                        selector = f"input[name='{question['field_name']}'][value='{option.get('value', '')}']"
+                        # 为radio/checkbox生成正确的选择器
+                        field_name = question.get("field_name", "")
+                        option_value = option.get("value", "")
+
+                        # 尝试使用ID选择器（如果选项值匹配ID模式）
+                        if option_value in ["true", "false"]:
+                            selector = f"#value_{option_value}"
+                        else:
+                            # 使用属性选择器
+                            selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
                     
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
@@ -2640,6 +2680,14 @@ class LangGraphFormProcessor:
                 
                 # Combine all reasoning
                 combined_reasoning = "; ".join(filter(None, all_reasonings))
+
+                # Extract the correct selector from the first valid field data
+                correct_selector = primary_question.get("field_selector", "")
+                if all_field_data:
+                    # Use the selector from the first field data if available (this will be the corrected one)
+                    first_field_selector = all_field_data[0].get("selector", "")
+                    if first_field_selector:
+                        correct_selector = first_field_selector
                 
                 # Create merged data structure
                 merged_item = {
@@ -2649,7 +2697,7 @@ class LangGraphFormProcessor:
                         },
                         "answer": {
                             "type": answer_type,
-                            "selector": primary_question.get("field_selector", ""),  # Use get with default
+                            "selector": correct_selector,  # Use the corrected selector
                             "data": all_field_data  # Combined data from all related fields
                         }
                     },
