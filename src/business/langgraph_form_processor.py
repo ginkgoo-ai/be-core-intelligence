@@ -2867,6 +2867,7 @@ class LangGraphFormProcessor:
                 # For checkbox fields, we need to generate actions for each checked item
                 if metadata.get("field_type") == "checkbox":
                     data_array = answer_data.get("data", [])
+                    checkbox_actions_generated = False
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # Generate action for this specific checked item
@@ -2876,8 +2877,29 @@ class LangGraphFormProcessor:
                                 "value": data_item.get("value", "")
                             }
                             actions.append(action)
+                            checkbox_actions_generated = True
                             print(f"DEBUG: Action Generator - Generated checkbox action: {action}")
-                    continue  # Skip the traditional action generation for checkboxes
+
+                    if checkbox_actions_generated:
+                        continue  # Skip the traditional action generation only if we generated checkbox actions
+
+                # For non-checkbox fields or checkboxes without checked items, use traditional generation
+                # Generate action for input fields and other field types
+                if metadata.get("field_type") in ["text", "email", "password", "number", "tel", "url", "date", "time",
+                                                  "datetime-local", "textarea", "select"]:
+                    data_array = answer_data.get("data", [])
+                    for data_item in data_array:
+                        if data_item.get("check") == 1:
+                            # Generate input action for this field
+                            action = {
+                                "selector": data_item.get("selector", metadata.get("field_selector", "")),
+                                "type": "input",
+                                "value": data_item.get("value", "")
+                            }
+                            actions.append(action)
+                            print(f"DEBUG: Action Generator - Generated input action: {action}")
+                            break  # Only need one input action per field
+                    continue  # Skip traditional generation for input fields
                 
                 # Create a compatible data structure for the existing action generator
                 compatible_item = {
