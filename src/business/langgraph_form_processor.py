@@ -467,7 +467,7 @@ class StepAnalyzer:
         return f"{element_type.capitalize()} Field"
     
     def _extract_field_options(self, element) -> List[Dict[str, str]]:
-        """提取字段的选项"""
+        """提取字段的选项 - 对于select字段优先使用option text"""
         options = []
         
         if element.name == "select":
@@ -475,10 +475,16 @@ class StepAnalyzer:
                 option_value = option.get("value", "")
                 option_text = option.get_text(strip=True)
                 if option_value or option_text:
+                    # 🚀 NEW: For select fields, prioritize option text over value
+                    # This ensures readable text (like "Turkey") is preferred over codes (like "TUR")
+                    preferred_value = option_text or option_value
                     options.append({
-                        "value": option_value or option_text,
-                        "text": option_text or option_value
+                        "value": preferred_value,  # Use text as the preferred value
+                        "text": option_text or option_value,
+                        "original_value": option_value  # Keep original value for reference
                     })
+                    print(
+                        f"DEBUG: _extract_field_options - SELECT option: text='{option_text}', value='{option_value}', preferred='{preferred_value}'")
         elif element.get("type") in ["radio", "checkbox"]:
             # 对于单选和复选框，查找相关的选项
             name = element.get("name", "")
@@ -727,17 +733,10 @@ class StepAnalyzer:
 
             # Handle different field types and their options
             if field_type == "select":
-                options = []
-                for option in element.find_all("option"):
-                    option_value = option.get("value", "")
-                    option_text = option.get_text(strip=True)
-                    if option_value or option_text:  # Include options even without explicit value
-                        options.append({
-                            "value": option_value or option_text,
-                            "text": option_text or option_value
-                        })
+                # 🚀 Use the improved _extract_field_options method that prioritizes text over value
+                options = self._extract_field_options(element)
                 field_info["options"] = options
-                print(f"DEBUG: _extract_field_info - Select options: {options}")
+                print(f"DEBUG: _extract_field_info - Select options (using text priority): {options}")
 
             elif field_type == "radio":
                 # For radio buttons, find all related radio buttons with same name
@@ -1488,11 +1487,16 @@ class StepAnalyzer:
             - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", "Business" -> "business")
             - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
             
-            # Special Instructions for Country/Location Fields:
-            - For country selection fields (like "countryCode", "country", "location"): ALWAYS prefer the readable country name (option text) over country codes (option value)
+            # Special Instructions for SELECT Fields (Dropdown Lists):
+            - For ALL select/dropdown fields: ALWAYS prefer the readable option text over option values/codes
+            - This applies to country fields, category fields, type fields, status fields, etc.
             - Example: For Turkey selection, prefer "Turkey" over "TUR", prefer "United Kingdom" over "GBR", prefer "United States" over "USA"
+            - Example: For product categories, prefer "Electronics" over "ELEC", prefer "Home & Garden" over "HG"
+            - Example: For status fields, prefer "Active" over "1", prefer "Inactive" over "0"
             - When user data shows "Turkey" or "Turkish", answer should be "Turkey" (the readable text), not "TUR" (the code)
+            - When user data shows "Electronics" or similar, answer should be "Electronics" (the readable text), not "ELEC" (the code)
             - For birth country, current country, nationality: Use the full country name from the option text, not the ISO code
+            - The goal is to make the form more user-friendly by using human-readable values instead of technical codes
             
             # SEMANTIC MATCHING EXAMPLES (CRITICAL - STUDY THESE PATTERNS):
             
@@ -1885,8 +1889,8 @@ class StepAnalyzer:
         print(f"DEBUG: _create_answer_data - Available options: {[opt.get('text', '') for opt in options]}")
         print(
             f"DEBUG: _create_answer_data - AI reasoning: {ai_answer.get('reasoning', 'No reasoning') if ai_answer else 'No AI answer'}")
-        
-        if field_type in ["radio", "checkbox", "select"] and options:
+
+        if field_type in ["radio", "checkbox", "select", "autocomplete"] and options:
             if has_ai_answer:  # AI provided an answer (real or dummy)
                 # AI已回答：找到匹配的选项并使用选项文本
                 matched_option = None
@@ -1963,11 +1967,21 @@ class StepAnalyzer:
 
                     print(
                         f"DEBUG: _create_answer_data - Generated correct selector: '{correct_selector}' for option '{matched_option.get('text', '')}'")
+
+                    # 🚀 NEW: For select and autocomplete fields, use text as value to prioritize readable text over codes
+                    if field_type in ["select", "autocomplete"]:
+                        # For select/autocomplete fields, use the readable text as the value
+                        select_value = matched_option.get("text", matched_option.get("value", ""))
+                        print(
+                            f"DEBUG: _create_answer_data - {field_type.upper()} field: using text '{select_value}' instead of value '{matched_option.get('value', '')}'")
+                    else:
+                        # For radio/checkbox, keep using the original value
+                        select_value = matched_option.get("value", "")
                     
                     # 使用匹配选项的文本作为答案显示
                     return [{
                         "name": matched_option.get("text", matched_option.get("value", "")),
-                        "value": matched_option.get("value", ""),
+                        "value": select_value,  # Use text for select, value for radio/checkbox
                         "check": 1,  # Mark as selected because AI provided an answer
                         "selector": correct_selector
                     }]
@@ -1987,12 +2001,20 @@ class StepAnalyzer:
                                 default_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
                         else:
                             default_selector = question["field_selector"]
+
+                        # 🚀 NEW: For select and autocomplete fields, use text as value even for default options
+                        if field_type in ["select", "autocomplete"]:
+                            default_value = default_option.get("text", default_option.get("value", ""))
+                            print(
+                                f"DEBUG: _create_answer_data - {field_type.upper()} field default: using text '{default_value}' instead of value '{default_option.get('value', '')}'")
+                        else:
+                            default_value = default_option.get("value", "")
                         
                         print(
                             f"DEBUG: _create_answer_data - No matching option found for AI answer '{ai_answer_value}', using first option: '{default_option.get('text', '')}' with selector '{default_selector}'")
                         return [{
                             "name": default_option.get("text", default_option.get("value", "")),
-                            "value": default_option.get("value", ""),
+                            "value": default_value,  # Use text for select, value for radio/checkbox
                             "check": 1,  # Mark as selected because AI provided an answer
                             "selector": default_selector
                         }]
@@ -2010,12 +2032,15 @@ class StepAnalyzer:
                 
                 for option in options:
                     # 构建选择器
-                    if field_type == "select":
+                    if field_type in ["select", "autocomplete"]:
                         selector = question["field_selector"]
+                        # 🚀 NEW: For select and autocomplete fields, use text as value in option list too
+                        option_value_to_use = option.get("text", option.get("value", ""))
                     else:
                         # 为radio/checkbox生成正确的选择器
                         field_name = question.get("field_name", "")
                         option_value = option.get("value", "")
+                        option_value_to_use = option_value  # Keep original value for radio/checkbox
 
                         # 使用字段名+值的ID格式（最常见的模式）
                         if option_value in ["true", "false"]:
@@ -2026,7 +2051,7 @@ class StepAnalyzer:
                     
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
-                        "value": option.get("value", ""),
+                        "value": option_value_to_use,  # Use text for select, value for radio/checkbox
                         "check": 0,  # Not selected - waiting for user input
                         "selector": selector
                     })
@@ -2517,12 +2542,75 @@ class LangGraphFormProcessor:
             detected_fields = []
             processed_field_groups = set()  # Track processed radio/checkbox groups
             field_groups = {}  # Track field groups for optimization
+
+            # 🚀 NEW: First pass - detect autocomplete pairs
+            autocomplete_pairs = {}
+            processed_autocomplete = set()
             
-            # Find all form input elements
             if hasattr(form_elements, 'find_all'):
-                for element in form_elements.find_all(["input", "select", "textarea"]):
-                    element_type = element.get("type", "text").lower() if element.name == "input" else element.name.lower()
+                all_elements = form_elements.find_all(["input", "select", "textarea"])
+
+                # Detect autocomplete UI patterns
+                for element in all_elements:
+                    element_id = element.get("id", "")
                     element_name = element.get("name", "")
+
+                    # Look for autocomplete pattern: input with _ui suffix + corresponding select
+                    if (element.name == "input" and
+                            element_id.endswith("_ui") and
+                            element.get("class") and "ui-autocomplete-input" in str(element.get("class"))):
+
+                        # This is an autocomplete UI input
+                        base_id = element_id[:-3]  # Remove "_ui" suffix
+                        base_name = element_name.replace("_ui", "") if element_name.endswith("_ui") else ""
+
+                        # Look for corresponding hidden select
+                        hidden_select = None
+                        for other_elem in all_elements:
+                            if (other_elem.name == "select" and
+                                    (other_elem.get("id") == base_id or
+                                     (base_name and other_elem.get("name") == base_name))):
+                                hidden_select = other_elem
+                                break
+
+                        if hidden_select:
+                            print(
+                                f"DEBUG: Field Detector - Found autocomplete pair: UI input '{element_id}' + hidden select '{hidden_select.get('id', '')}'")
+                            autocomplete_pairs[base_id] = {
+                                "ui_input": element,
+                                "hidden_select": hidden_select,
+                                "base_name": base_name or base_id
+                            }
+
+                # Second pass - process all fields with autocomplete awareness
+                for element in all_elements:
+                    element_id = element.get("id", "")
+                    element_name = element.get("name", "")
+                    element_type = element.get("type", "text").lower() if element.name == "input" else element.name.lower()
+
+                    # Skip if this element is part of an autocomplete pair that we've already processed
+                    if element_id in processed_autocomplete:
+                        continue
+
+                    # Check if this element is part of an autocomplete pair
+                    autocomplete_info = None
+                    for base_id, pair_info in autocomplete_pairs.items():
+                        if (element == pair_info["ui_input"] or
+                                element == pair_info["hidden_select"]):
+                            autocomplete_info = pair_info
+                            # Mark both elements as processed
+                            processed_autocomplete.add(pair_info["ui_input"].get("id", ""))
+                            processed_autocomplete.add(pair_info["hidden_select"].get("id", ""))
+                            break
+
+                    if autocomplete_info:
+                        # Process autocomplete pair as a single field
+                        field_info = self._extract_autocomplete_field_info(autocomplete_info)
+                        if field_info:
+                            detected_fields.append(field_info)
+                            print(
+                                f"DEBUG: Field Detector - Found autocomplete field: {field_info['name']} ({field_info['type']})")
+                        continue
                     
                     # For radio and checkbox fields, only process each group once
                     if element_type in ["radio", "checkbox"] and element_name:
@@ -2537,7 +2625,8 @@ class LangGraphFormProcessor:
                         base_name = re.sub(r'\[\d+\]$', '', element_name)
                         if base_name not in field_groups:
                             field_groups[base_name] = []
-                    
+
+                    # Process regular field
                     field_info = self.step_analyzer._extract_field_info(element)
                     if field_info:
                         detected_fields.append(field_info)
@@ -2574,6 +2663,45 @@ class LangGraphFormProcessor:
             state["error_details"] = f"Field detection failed: {str(e)}"
         
         return state
+
+    def _extract_autocomplete_field_info(self, autocomplete_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract field information from autocomplete UI pair (input + hidden select)"""
+        try:
+            ui_input = autocomplete_info["ui_input"]
+            hidden_select = autocomplete_info["hidden_select"]
+            base_name = autocomplete_info["base_name"]
+
+            print(f"DEBUG: _extract_autocomplete_field_info - Processing autocomplete pair for {base_name}")
+
+            # Use the hidden select for the core field info but UI input for interaction
+            field_info = {
+                "id": hidden_select.get("id", "") or hidden_select.get("name", ""),
+                "name": hidden_select.get("name", ""),
+                "type": "autocomplete",  # Special type for autocomplete fields
+                "selector": f"#{ui_input.get('id', '')}",  # Use UI input selector for interaction
+                "hidden_selector": f"#{hidden_select.get('id', '')}",  # Store hidden select selector
+                "required": hidden_select.get("required") is not None or ui_input.get("aria-required") == "true",
+                "label": self.step_analyzer._find_field_label(ui_input) or self.step_analyzer._find_field_label(
+                    hidden_select),
+                "placeholder": ui_input.get("placeholder", ""),
+                "value": hidden_select.get("value", ""),
+                "options": []
+            }
+
+            # Extract options from hidden select using our improved method
+            options = self.step_analyzer._extract_field_options(hidden_select)
+            field_info["options"] = options
+
+            print(
+                f"DEBUG: _extract_autocomplete_field_info - Autocomplete field: {field_info['name']} with {len(options)} options")
+            print(
+                f"DEBUG: _extract_autocomplete_field_info - UI selector: {field_info['selector']}, Hidden selector: {field_info['hidden_selector']}")
+
+            return field_info
+
+        except Exception as e:
+            print(f"DEBUG: _extract_autocomplete_field_info - Error: {str(e)}")
+            return None
 
     def _question_generator_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Generate questions for form fields with grouping optimization and HTML position ordering"""
