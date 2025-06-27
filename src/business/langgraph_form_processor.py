@@ -708,7 +708,11 @@ class StepAnalyzer:
                     print(f"DEBUG: _extract_field_info - Ignoring hidden system field: {field_name}")
                     return None
 
+            # Generate unique ID for field tracking
+            field_id = element.get("id", "") or element.get("name", "") or self._generate_selector(element)
+            
             field_info = {
+                "id": field_id,  # Add unique ID for tracking
                 "name": element.get("name", ""),
                 "type": field_type,
                 "selector": self._generate_selector(element),
@@ -2543,6 +2547,19 @@ class LangGraphFormProcessor:
                             base_name = re.sub(r'\[\d+\]$', '', element_name)
                             if base_name in field_groups:
                                 field_groups[base_name].append(field_info)
+
+                        # 🚀 ENHANCEMENT: Group related fields by semantic similarity
+                        # Check if this field is semantically related to existing groups
+                        if element_name and element_type not in ["radio", "checkbox"]:
+                            for group_name in field_groups.keys():
+                                # Check if field name is semantically related to group
+                                if (element_name.startswith(group_name) and
+                                        element_name != group_name and
+                                        len(element_name) > len(group_name)):
+                                    # This is a related field (e.g., telephoneNumber relates to telephoneNumberPurpose)
+                                    print(
+                                        f"DEBUG: Field Detector - Found related field {element_name} for group {group_name}")
+                                    # Don't add to group, but mark the relationship for later processing
                         
                         print(f"DEBUG: Field Detector - Found field: {field_info['name']} ({field_info['type']})")
             
@@ -2559,9 +2576,9 @@ class LangGraphFormProcessor:
         return state
 
     def _question_generator_node(self, state: FormAnalysisState) -> FormAnalysisState:
-        """Node: Generate questions for form fields with grouping optimization"""
+        """Node: Generate questions for form fields with grouping optimization and HTML position ordering"""
         try:
-            print("DEBUG: Question Generator - Starting with optimizations")
+            print("DEBUG: Question Generator - Starting with optimizations and position ordering")
             
             # Extract page context for better question generation
             page_context = self.step_analyzer._extract_page_context(state["parsed_form"])
@@ -2574,31 +2591,121 @@ class LangGraphFormProcessor:
             questions = []
             processed_fields = set()
 
-            # Process grouped fields first
+            # 🔧 NEW: Create a helper function to get element position in HTML
+            def get_question_position_in_html(question):
+                """Get the position of a question's field element in the HTML document"""
+                try:
+                    from bs4 import BeautifulSoup
+                    html_content = state["form_html"]
+                    soup = BeautifulSoup(html_content, 'html.parser')
+
+                    # Try to find the element by selector
+                    field_selector = question.get("field_selector", "")
+                    if field_selector:
+                        # Handle different selector formats
+                        if field_selector.startswith("#"):
+                            # ID selector
+                            element_id = field_selector[1:]
+                            element = soup.find(attrs={"id": element_id})
+                        elif field_selector.startswith("[name="):
+                            # Name attribute selector
+                            name_match = re.search(r'\[name=["\']([^"\']+)["\']', field_selector)
+                            if name_match:
+                                element_name = name_match.group(1)
+                                element = soup.find(attrs={"name": element_name})
+                            else:
+                                element = None
+                        else:
+                            # Try CSS selector
+                            try:
+                                elements = soup.select(field_selector)
+                                element = elements[0] if elements else None
+                            except:
+                                element = None
+
+                        if element:
+                            # Get all form elements to find position
+                            all_elements = soup.find_all(["input", "select", "textarea"])
+                            for i, elem in enumerate(all_elements):
+                                if elem == element:
+                                    return i
+                    return 999  # Default high value for elements that can't be found
+                except Exception as e:
+                    print(f"DEBUG: Question Generator - Error getting position for question: {str(e)}")
+                    return 999
+
+            # Process grouped fields first (but collect them for later sorting)
+            grouped_questions = []
             for base_name, group_fields in field_groups_info.items():
                 if len(group_fields) > 1:
                     # Generate grouped question for radio/checkbox groups
                     grouped_question = self._generate_grouped_question(group_fields, base_name)
-                    questions.append(grouped_question)
+                    grouped_questions.append(grouped_question)
 
                     # Mark fields as processed
                     for field in group_fields:
-                        processed_fields.add(field.get("id", ""))
+                        field_id = field.get("id", "")
+                        # Ensure field_id is not empty (fallback to name or selector)
+                        if not field_id:
+                            field_id = field.get("name", "") or field.get("selector", "")
+
+                        if field_id:
+                            processed_fields.add(field_id)
+                            print(f"DEBUG: Question Generator - Marked field {field_id} as processed (grouped)")
 
                     print(
                         f"DEBUG: Question Generator - Generated grouped question for {base_name}: {grouped_question['question']}")
+                else:
+                    # Single field in group - treat as individual field
+                    print(f"DEBUG: Question Generator - Single field in group {base_name}, will process individually")
 
             # Process remaining individual fields
+            individual_questions = []
             for field in detected_fields:
-                if field.get("id", "") not in processed_fields:
+                field_id = field.get("id", "")
+                field_name = field.get("name", "")
+
+                # Ensure field_id is not empty (fallback to name or selector)
+                if not field_id:
+                    field_id = field_name or field.get("selector", "")
+
+                if field_id not in processed_fields:
                     question = self.step_analyzer._generate_field_question(field)
-                    questions.append(question)
+                    if question:  # Only add valid questions
+                        individual_questions.append(question)
+                        print(
+                            f"DEBUG: Question Generator - Generated individual question for {field_name} (ID: {field_id}): {question['question']}")
+                    else:
+                        print(
+                            f"DEBUG: Question Generator - Failed to generate question for {field_name} (ID: {field_id})")
+                else:
                     print(
-                        f"DEBUG: Question Generator - Generated individual question for {field['name']}: {question['question']}")
+                        f"DEBUG: Question Generator - Skipping field {field_name} (ID: {field_id}) - already processed in group")
+
+            # 🚀 NEW: Combine and sort all questions by HTML position
+            all_questions = grouped_questions + individual_questions
+
+            # Sort questions by their HTML element position
+            try:
+                sorted_questions = sorted(all_questions, key=get_question_position_in_html)
+                print(f"DEBUG: Question Generator - Sorted {len(all_questions)} questions by HTML position")
+
+                # Debug: Show the sorting order
+                for i, question in enumerate(sorted_questions):
+                    position = get_question_position_in_html(question)
+                    field_name = question.get('field_name', 'unknown')
+                    print(
+                        f"DEBUG: Question Generator - Position {position}: {field_name} - {question.get('question', '')[:50]}...")
+
+                questions = sorted_questions
+            except Exception as e:
+                print(f"DEBUG: Question Generator - Error sorting questions by position: {str(e)}")
+                # Fallback to unsorted order
+                questions = all_questions
             
             state["field_questions"] = questions
             print(
-                f"DEBUG: Question Generator - Generated {len(questions)} questions ({len(field_groups_info)} grouped)")
+                f"DEBUG: Question Generator - Generated {len(questions)} questions ({len(field_groups_info)} grouped), sorted by HTML position")
             
         except Exception as e:
             print(f"DEBUG: Question Generator - Error: {str(e)}")
@@ -3321,16 +3428,68 @@ class LangGraphFormProcessor:
                 else:
                     print("DEBUG: Action Generator - No submit button found in HTML")
 
-            # Sort actions by order (not needed for new format, but keep for compatibility)
-            # actions.sort(key=lambda x: x.get("order", 0))
+            # 🚀 CRITICAL FIX: Sort actions by HTML element position order
+            def get_element_position_in_html(action):
+                """Get the position of element in HTML to maintain visual order"""
+                try:
+                    from bs4 import BeautifulSoup
+
+                    # Parse HTML to find element positions
+                    soup = BeautifulSoup(state["form_html"], 'html.parser')
+                    selector = action.get("selector", "")
+
+                    # Handle different selector formats
+                    if selector.startswith("#"):
+                        # ID selector
+                        element_id = selector[1:]
+                        element = soup.find(id=element_id)
+                    elif "submit" in selector and "[" in selector:
+                        # Attribute selector like input[id='submit'][type='submit']
+                        element = soup.find("input", {"type": "submit"})
+                        if not element:
+                            element = soup.find("button", {"type": "submit"})
+                    else:
+                        # Try to find by selector (simplified)
+                        element = soup.select_one(selector)
+
+                    if element:
+                        # Get all form elements to determine position
+                        all_elements = soup.find_all(["input", "select", "textarea", "button"])
+                        try:
+                            position = all_elements.index(element)
+                            print(f"DEBUG: Element {selector} found at position {position}")
+                            return position
+                        except ValueError:
+                            print(f"DEBUG: Element {selector} not found in all_elements list")
+                            return 9999  # Put at end if not found
+                    else:
+                        print(f"DEBUG: Element {selector} not found in HTML")
+                        return 9999  # Put at end if not found
+
+                except Exception as e:
+                    print(f"DEBUG: Error getting element position for {selector}: {str(e)}")
+                    return 9999  # Put at end if error
+
+            # Sort actions by HTML position, but keep submit buttons at the end
+            def get_action_sort_key(action):
+                selector = action.get("selector", "").lower()
+                if "submit" in selector:
+                    return 99999  # Always put submit buttons at the very end
+                else:
+                    return get_element_position_in_html(action)
+
+            # Sort actions by HTML element position
+            actions.sort(key=get_action_sort_key)
             
             state["form_actions"] = actions
             print(f"DEBUG: Action Generator - Generated {len(actions)} actions total (including submit)")
+            print("DEBUG: Action Generator - Actions sorted by HTML element position order")
 
-            # Debug: Print all generated actions
+            # Debug: Print all generated actions in order
             for i, action in enumerate(actions, 1):
+                position = get_action_sort_key(action)
                 print(
-                    f"DEBUG: Action {i}: {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
+                    f"DEBUG: Action {i} (HTML Position {position}): {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
             
         except Exception as e:
             print(f"DEBUG: Action Generator - Error: {str(e)}")
