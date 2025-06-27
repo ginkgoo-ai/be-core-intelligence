@@ -5,7 +5,7 @@ import re
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Literal, TypedDict
+from typing import Dict, List, Any, Optional, Literal, TypedDict, Tuple
 
 from bs4 import BeautifulSoup
 from langchain_core.messages import HumanMessage
@@ -1889,12 +1889,25 @@ class StepAnalyzer:
                         field_name = question.get("field_name", "")
                         option_value = matched_option.get("value", "")
 
-                        # 尝试使用ID选择器（如果选项值匹配ID模式）
+                        # 🚀 OPTIMIZATION: 智能选择器生成
+                        # 首先尝试使用字段名+值的ID格式（最常见的模式）
                         if option_value in ["true", "false"]:
-                            correct_selector = f"#value_{option_value}"
+                            # 尝试常见的ID模式
+                            possible_selectors = [
+                                f"#{field_name}_{option_value}",  # addAnother_false
+                                f"#value_{option_value}",  # value_false
+                                f"#{field_name}_{option_value.title()}",  # addAnother_False
+                                f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"  # fallback
+                            ]
                         else:
-                            # 使用属性选择器
-                            correct_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                            # 对于非布尔值，使用属性选择器
+                            possible_selectors = [
+                                f"#{field_name}_{option_value}",
+                                f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                            ]
+
+                        # 选择第一个可能的选择器作为主选择器
+                        correct_selector = possible_selectors[0]
                     else:
                         correct_selector = question["field_selector"]
 
@@ -1919,7 +1932,7 @@ class StepAnalyzer:
                             option_value = default_option.get("value", "")
 
                             if option_value in ["true", "false"]:
-                                default_selector = f"#value_{option_value}"
+                                default_selector = f"#{field_name}_{option_value}"  # 使用字段名+值的格式
                             else:
                                 default_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
                         else:
@@ -1954,9 +1967,9 @@ class StepAnalyzer:
                         field_name = question.get("field_name", "")
                         option_value = option.get("value", "")
 
-                        # 尝试使用ID选择器（如果选项值匹配ID模式）
+                        # 使用字段名+值的ID格式（最常见的模式）
                         if option_value in ["true", "false"]:
-                            selector = f"#value_{option_value}"
+                            selector = f"#{field_name}_{option_value}"  # addAnother_false
                         else:
                             # 使用属性选择器
                             selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
@@ -2427,10 +2440,10 @@ class LangGraphFormProcessor:
         return state
 
     def _field_detector_node(self, state: FormAnalysisState) -> FormAnalysisState:
-        """Node: Detect form fields"""
+        """Node: Detect form fields with optimization"""
         try:
             workflow_id = state.get("workflow_id", "unknown")
-            print(f"[workflow_id:{workflow_id}] DEBUG: Field Detector - Starting")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Field Detector - Starting with optimizations")
             
             if not state["parsed_form"]:
                 state["error_details"] = "No parsed form available"
@@ -2442,6 +2455,7 @@ class LangGraphFormProcessor:
             
             detected_fields = []
             processed_field_groups = set()  # Track processed radio/checkbox groups
+            field_groups = {}  # Track field groups for optimization
             
             # Find all form input elements
             if hasattr(form_elements, 'find_all'):
@@ -2457,14 +2471,29 @@ class LangGraphFormProcessor:
                             continue
                         processed_field_groups.add(group_key)
                         print(f"DEBUG: Field Detector - Processing {element_type} group: {element_name}")
+
+                        # 🚀 OPTIMIZATION: Group related radio/checkbox fields
+                        base_name = re.sub(r'\[\d+\]$', '', element_name)
+                        if base_name not in field_groups:
+                            field_groups[base_name] = []
                     
                     field_info = self.step_analyzer._extract_field_info(element)
                     if field_info:
                         detected_fields.append(field_info)
+
+                        # Add to field group if it's a radio/checkbox
+                        if element_type in ["radio", "checkbox"] and element_name:
+                            base_name = re.sub(r'\[\d+\]$', '', element_name)
+                            if base_name in field_groups:
+                                field_groups[base_name].append(field_info)
+                        
                         print(f"DEBUG: Field Detector - Found field: {field_info['name']} ({field_info['type']})")
             
             state["detected_fields"] = detected_fields
+            state["field_groups_info"] = field_groups  # Store grouping info
+            
             print(f"DEBUG: Field Detector - Found {len(detected_fields)} fields (after deduplication)")
+            print(f"DEBUG: Field Detector - Created {len(field_groups)} field groups")
             
         except Exception as e:
             print(f"DEBUG: Field Detector - Error: {str(e)}")
@@ -2473,22 +2502,46 @@ class LangGraphFormProcessor:
         return state
 
     def _question_generator_node(self, state: FormAnalysisState) -> FormAnalysisState:
-        """Node: Generate questions for form fields"""
+        """Node: Generate questions for form fields with grouping optimization"""
         try:
-            print("DEBUG: Question Generator - Starting")
+            print("DEBUG: Question Generator - Starting with optimizations")
             
             # Extract page context for better question generation
             page_context = self.step_analyzer._extract_page_context(state["parsed_form"])
             self.step_analyzer._page_context = page_context
+
+            # 🚀 OPTIMIZATION: Use field groups to generate better questions
+            field_groups_info = state.get("field_groups_info", {})
+            detected_fields = state["detected_fields"]
             
             questions = []
-            for field in state["detected_fields"]:
-                question = self.step_analyzer._generate_field_question(field)
-                questions.append(question)
-                print(f"DEBUG: Question Generator - Generated question for {field['name']}: {question['question']}")
+            processed_fields = set()
+
+            # Process grouped fields first
+            for base_name, group_fields in field_groups_info.items():
+                if len(group_fields) > 1:
+                    # Generate grouped question for radio/checkbox groups
+                    grouped_question = self._generate_grouped_question(group_fields, base_name)
+                    questions.append(grouped_question)
+
+                    # Mark fields as processed
+                    for field in group_fields:
+                        processed_fields.add(field.get("id", ""))
+
+                    print(
+                        f"DEBUG: Question Generator - Generated grouped question for {base_name}: {grouped_question['question']}")
+
+            # Process remaining individual fields
+            for field in detected_fields:
+                if field.get("id", "") not in processed_fields:
+                    question = self.step_analyzer._generate_field_question(field)
+                    questions.append(question)
+                    print(
+                        f"DEBUG: Question Generator - Generated individual question for {field['name']}: {question['question']}")
             
             state["field_questions"] = questions
-            print(f"DEBUG: Question Generator - Generated {len(questions)} questions")
+            print(
+                f"DEBUG: Question Generator - Generated {len(questions)} questions ({len(field_groups_info)} grouped)")
             
         except Exception as e:
             print(f"DEBUG: Question Generator - Error: {str(e)}")
@@ -2730,6 +2783,28 @@ class LangGraphFormProcessor:
                     f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(valid_questions)}, status={interrupt_status}")
             
             state["merged_qa_data"] = merged_data
+
+            # 🚀 OPTIMIZATION: Consistency checking
+            consistency_issues = self._check_answer_consistency(merged_data)
+            state["consistency_issues"] = consistency_issues
+
+            if consistency_issues:
+                print(f"DEBUG: Q&A Merger - Found {len(consistency_issues)} consistency issues")
+                for issue in consistency_issues:
+                    print(f"DEBUG: Consistency Issue - {issue['type']}: {issue['message']}")
+
+                # Mark critical issues for intervention
+                critical_issues = [i for i in consistency_issues if
+                                   i['type'] in ['radio_selection_error', 'conflicting_values']]
+                if critical_issues:
+                    print("DEBUG: Critical consistency issues found, marking for intervention")
+                    for item in merged_data:
+                        for issue in critical_issues:
+                            if issue.get('field_name') == item.get('_metadata', {}).get('field_name'):
+                                item['question']['type'] = 'interrupt'
+            else:
+                print("DEBUG: Q&A Merger - No consistency issues found")
+            
             print(f"DEBUG: Q&A Merger - Created {len(merged_data)} merged question groups from {len(questions)} original questions")
             
         except Exception as e:
@@ -2831,6 +2906,215 @@ class LangGraphFormProcessor:
         
         return answer_type
 
+    def _generate_grouped_question(self, group_fields: List[Dict[str, Any]], base_name: str) -> Dict[str, Any]:
+        """🚀 OPTIMIZATION: Generate comprehensive question for field group"""
+        try:
+            if not group_fields:
+                return {}
+
+            # Find primary field (usually first or most representative)
+            primary_field = group_fields[0]
+            for field in group_fields:
+                if field.get("type") in ["input", "text"]:
+                    primary_field = field
+                    break
+
+            # Collect all options from the group
+            all_options = []
+            for field in group_fields:
+                for option in field.get("options", []):
+                    if option not in all_options:
+                        all_options.append(option)
+
+            # Generate comprehensive question based on field type
+            field_type = primary_field.get("type", "")
+
+            if "telephone" in base_name.lower() or "phone" in base_name.lower():
+                question_text = "What are your telephone number preferences and details?"
+            elif "email" in base_name.lower():
+                question_text = "Do you have another email address?"
+            elif field_type in ["radio", "checkbox"]:
+                # Create question that shows all available options
+                option_texts = [opt.get("text", opt.get("value", "")) for opt in all_options]
+                if len(option_texts) <= 3:
+                    options_str = ", ".join(option_texts)
+                    question_text = f"Please select from the following options: {options_str}"
+                else:
+                    question_text = f"Please make your selection from the available options"
+            else:
+                field_label = primary_field.get("label", base_name)
+                question_text = f"Please provide information for: {field_label}"
+
+            # Create grouped question structure
+            grouped_question = {
+                "id": f"group_{base_name}_{uuid.uuid4().hex[:8]}",
+                "field_selector": primary_field.get("selector", ""),
+                "field_name": base_name,
+                "field_type": field_type,
+                "field_label": primary_field.get("label", base_name),
+                "question": question_text,
+                "required": any(f.get("required", False) for f in group_fields),
+                "options": all_options,
+                "grouped_fields": group_fields,  # Keep reference to all fields in group
+                "is_grouped": True,
+                "group_size": len(group_fields)
+            }
+
+            print(
+                f"DEBUG: Generated grouped question for {base_name} with {len(group_fields)} fields and {len(all_options)} options")
+
+            return grouped_question
+
+        except Exception as e:
+            print(f"DEBUG: Error generating grouped question for {base_name}: {str(e)}")
+            # Fallback to first field's question
+            if group_fields:
+                return self.step_analyzer._generate_field_question(group_fields[0])
+            return {}
+
+    def _check_answer_consistency(self, merged_qa_data: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """🚀 OPTIMIZATION: Check for logical inconsistencies in answers"""
+        consistency_issues = []
+
+        try:
+            for answer_data in merged_qa_data:
+                metadata = answer_data.get("_metadata", {})
+                field_type = metadata.get("field_type", "")
+                field_name = metadata.get("field_name", "")
+
+                # Check radio/checkbox group consistency
+                if field_type in ["radio", "checkbox"]:
+                    issues = self._check_radio_checkbox_consistency(answer_data)
+                    consistency_issues.extend(issues)
+
+                # Check input group consistency
+                elif field_type in ["text", "email", "tel", "number"]:
+                    issues = self._check_input_group_consistency(answer_data)
+                    consistency_issues.extend(issues)
+
+                # Check for empty required fields
+                if metadata.get("required", False):
+                    question_data = answer_data.get("question", {})
+                    answer_info = question_data.get("answer", {})
+                    data_array = answer_info.get("data", [])
+
+                    has_answer = any(item.get("check") == 1 for item in data_array)
+                    if not has_answer:
+                        consistency_issues.append({
+                            "type": "required_field_empty",
+                            "message": f"Required field '{field_name}' has no answer",
+                            "field_name": field_name
+                        })
+
+        except Exception as e:
+            print(f"DEBUG: Consistency check error: {str(e)}")
+            consistency_issues.append({
+                "type": "consistency_check_error",
+                "message": f"Error during consistency check: {str(e)}",
+                "field_name": "unknown"
+            })
+
+        return consistency_issues
+
+    def _check_radio_checkbox_consistency(self, answer_data: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Check consistency for radio/checkbox groups"""
+        issues = []
+
+        try:
+            question_data = answer_data.get("question", {})
+            answer_info = question_data.get("answer", {})
+            data_array = answer_info.get("data", [])
+            metadata = answer_data.get("_metadata", {})
+            field_type = metadata.get("field_type", "")
+            field_name = metadata.get("field_name", "")
+
+            # Count selected items
+            selected_count = sum(1 for item in data_array if item.get("check") == 1)
+            selected_values = [item.get("value", "") for item in data_array if item.get("check") == 1]
+
+            # Radio buttons should have exactly one selection
+            if field_type == "radio" and selected_count > 1:
+                issues.append({
+                    "type": "radio_selection_error",
+                    "message": f"Radio group should have exactly 1 selection, found {selected_count}",
+                    "field_name": field_name
+                })
+
+            # Check for conflicting boolean values
+            if "true" in selected_values and "false" in selected_values:
+                issues.append({
+                    "type": "conflicting_values",
+                    "message": "Cannot select both 'true' and 'false' values",
+                    "field_name": field_name
+                })
+
+            # Check for conflicting yes/no values
+            yes_values = ["yes", "true", "1"]
+            no_values = ["no", "false", "0"]
+
+            has_yes = any(val.lower() in yes_values for val in selected_values)
+            has_no = any(val.lower() in no_values for val in selected_values)
+
+            if has_yes and has_no:
+                issues.append({
+                    "type": "conflicting_yes_no",
+                    "message": "Cannot select both yes and no values",
+                    "field_name": field_name
+                })
+
+        except Exception as e:
+            issues.append({
+                "type": "radio_checkbox_check_error",
+                "message": f"Error checking radio/checkbox consistency: {str(e)}",
+                "field_name": answer_data.get("_metadata", {}).get("field_name", "unknown")
+            })
+
+        return issues
+
+    def _check_input_group_consistency(self, answer_data: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Check consistency for input field groups"""
+        issues = []
+
+        try:
+            question_data = answer_data.get("question", {})
+            answer_info = question_data.get("answer", {})
+            data_array = answer_info.get("data", [])
+            metadata = answer_data.get("_metadata", {})
+            field_name = metadata.get("field_name", "")
+
+            # Get filled values
+            filled_values = [item.get("value", "") for item in data_array if
+                             item.get("check") == 1 and item.get("value")]
+
+            # Check email format consistency
+            if "email" in field_name.lower():
+                for value in filled_values:
+                    if value and "@" not in value:
+                        issues.append({
+                            "type": "invalid_email_format",
+                            "message": f"Invalid email format: {value}",
+                            "field_name": field_name
+                        })
+
+            # Check phone number format consistency
+            if "telephone" in field_name.lower() or "phone" in field_name.lower():
+                for value in filled_values:
+                    if value and not re.match(r'^[\d\s\-\+\(\)]+$', value):
+                        issues.append({
+                            "type": "invalid_phone_format",
+                            "message": f"Invalid phone format: {value}",
+                            "field_name": field_name
+                        })
+
+        except Exception as e:
+            issues.append({
+                "type": "input_group_check_error",
+                "message": f"Error checking input group consistency: {str(e)}",
+                "field_name": answer_data.get("_metadata", {}).get("field_name", "unknown")
+            })
+
+        return issues
+
     def _action_generator_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Generate form actions from merged Q&A data"""
         try:
@@ -2914,7 +3198,7 @@ class LangGraphFormProcessor:
 
                 # Try to generate action using traditional method
                 try:
-                    action_result = self._generate_form_action(compatible_item)
+                    action_result = self.step_analyzer._generate_form_action(compatible_item)
                     if action_result:
                         if isinstance(action_result, list):
                             # Handle multiple actions (e.g., multiple checkboxes)
@@ -4436,14 +4720,38 @@ class LangGraphFormProcessor:
                 else:
                     print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
 
-            # Store the actions
-            state["llm_generated_actions"] = final_actions
-            print(f"DEBUG: LLM Action Generator Async - Generated {len(final_actions)} total actions")
+            # 🚀 OPTIMIZATION: Validate actions before storing
+            validated_actions = []
+            validation_errors = []
+            form_html = state["form_html"]  # Get HTML from state
 
-            # Debug: Print all actions
-            for i, action in enumerate(final_actions, 1):
+            for action in final_actions:
+                is_valid, error_msg = self._validate_action_selector(action, form_html)
+                if is_valid:
+                    validated_actions.append(action)
+                else:
+                    validation_errors.append(f"Action validation failed: {error_msg}")
+                    # Try to recover the action
+                    recovered_action = self._recover_failed_action(action, form_html)
+                    if recovered_action:
+                        validated_actions.append(recovered_action)
+                        print(f"DEBUG: Recovered action: {recovered_action}")
+                    else:
+                        print(f"DEBUG: Could not recover action: {action}")
+
+            # Store the validated actions
+            state["llm_generated_actions"] = validated_actions
+            state["action_validation_errors"] = validation_errors
+
+            print(
+                f"DEBUG: LLM Action Generator Async - Validated {len(validated_actions)}/{len(final_actions)} actions")
+            if validation_errors:
+                print(f"DEBUG: LLM Action Generator Async - {len(validation_errors)} validation errors")
+
+            # Debug: Print all validated actions
+            for i, action in enumerate(validated_actions, 1):
                 print(
-                    f"DEBUG: Final Action {i}: {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
+                    f"DEBUG: Final Validated Action {i}: {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
 
         except Exception as e:
             print(f"DEBUG: LLM Action Generator Async - Error: {str(e)}")
@@ -4451,6 +4759,121 @@ class LangGraphFormProcessor:
             state["llm_generated_actions"] = []
 
         return state
+
+    def _validate_action_selector(self, action: Dict[str, Any], html_content: str) -> Tuple[bool, str]:
+        """🚀 OPTIMIZATION: Validate that action selector exists in HTML"""
+        try:
+            selector = action.get("selector", "")
+            if not selector:
+                return False, "Empty selector"
+
+            soup = BeautifulSoup(html_content, 'html.parser')
+            elements = soup.select(selector)
+
+            if elements:
+                return True, "Valid selector"
+            else:
+                return False, f"Selector not found: {selector}"
+
+        except Exception as e:
+            return False, f"Selector validation error: {str(e)}"
+
+    def _recover_failed_action(self, action: Dict[str, Any], html_content: str) -> Optional[Dict[str, Any]]:
+        """🚀 OPTIMIZATION: Try to recover failed action with fallback selectors"""
+        try:
+            original_selector = action.get("selector", "")
+            action_type = action.get("type", "")
+            value = action.get("value", "")
+
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Strategy 1: Try common selector variations
+            fallback_selectors = []
+
+            if "#value_" in original_selector:
+                # For radio/checkbox with value patterns
+                if "true" in original_selector:
+                    fallback_selectors.extend([
+                        "input[value='true']",
+                        "input[value='yes']",
+                        "input[value='Yes']",
+                        "input[type='radio'][value='true']",
+                        "input[type='checkbox'][value='true']"
+                    ])
+                elif "false" in original_selector:
+                    fallback_selectors.extend([
+                        "input[value='false']",
+                        "input[value='no']",
+                        "input[value='No']",
+                        "input[type='radio'][value='false']",
+                        "input[type='checkbox'][value='false']"
+                    ])
+
+            # Strategy 2: Try value-based selectors
+            if value:
+                fallback_selectors.extend([
+                    f"input[value='{value}']",
+                    f"*[data-value='{value}']",
+                    f"input[name*='{value.lower()}']"
+                ])
+
+            # Strategy 3: Try type-based selectors
+            if action_type == "click":
+                fallback_selectors.extend([
+                    "input[type='radio']",
+                    "input[type='checkbox']",
+                    "button[type='submit']"
+                ])
+            elif action_type == "input":
+                fallback_selectors.extend([
+                    "input[type='text']",
+                    "input[type='email']",
+                    "input[type='tel']",
+                    "textarea"
+                ])
+
+            # Test fallback selectors
+            for fallback_selector in fallback_selectors:
+                try:
+                    elements = soup.select(fallback_selector)
+                    if elements:
+                        recovered_action = action.copy()
+                        recovered_action["selector"] = fallback_selector
+                        recovered_action["recovery_method"] = "fallback_selector"
+                        recovered_action["original_selector"] = original_selector
+                        print(f"DEBUG: Recovered action using fallback selector: {fallback_selector}")
+                        return recovered_action
+                except:
+                    continue
+
+            # Strategy 4: Position-based recovery (last resort)
+            if action_type == "click":
+                radio_elements = soup.find_all("input", type="radio")
+                checkbox_elements = soup.find_all("input", type="checkbox")
+                clickable_elements = radio_elements + checkbox_elements
+
+                if clickable_elements:
+                    # Use first available clickable element
+                    element = clickable_elements[0]
+                    if element.get("id"):
+                        fallback_selector = f"#{element['id']}"
+                    elif element.get("name"):
+                        fallback_selector = f"input[name='{element['name']}']"
+                    else:
+                        fallback_selector = f"input[type='{element.get('type', 'radio')}']"
+
+                    recovered_action = action.copy()
+                    recovered_action["selector"] = fallback_selector
+                    recovered_action["recovery_method"] = "position_based"
+                    recovered_action["original_selector"] = original_selector
+                    print(f"DEBUG: Recovered action using position-based selector: {fallback_selector}")
+                    return recovered_action
+
+            return None
+
+        except Exception as e:
+            print(f"DEBUG: Action recovery error: {str(e)}")
+            return None
 
     async def _process_non_form_page_async(self, state: FormAnalysisState) -> FormAnalysisState:
         """Process non-form pages like task lists, navigation pages (async version)"""
