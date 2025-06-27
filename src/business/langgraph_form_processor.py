@@ -1484,6 +1484,12 @@ class StepAnalyzer:
             - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", "Business" -> "business")
             - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
             
+            # Special Instructions for Country/Location Fields:
+            - For country selection fields (like "countryCode", "country", "location"): ALWAYS prefer the readable country name (option text) over country codes (option value)
+            - Example: For Turkey selection, prefer "Turkey" over "TUR", prefer "United Kingdom" over "GBR", prefer "United States" over "USA"
+            - When user data shows "Turkey" or "Turkish", answer should be "Turkey" (the readable text), not "TUR" (the code)
+            - For birth country, current country, nationality: Use the full country name from the option text, not the ISO code
+            
             # SEMANTIC MATCHING EXAMPLES (CRITICAL - STUDY THESE PATTERNS):
             
             ## BOOLEAN/YES-NO EXAMPLES:
@@ -3199,10 +3205,10 @@ class LangGraphFormProcessor:
                 print(
                     f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
 
-                # For checkbox fields, we need to generate actions for each checked item
-                if metadata.get("field_type") == "checkbox":
+                # For checkbox and radio fields, we need to generate actions for each checked item
+                if metadata.get("field_type") in ["checkbox", "radio"]:
                     data_array = answer_data.get("data", [])
-                    checkbox_actions_generated = False
+                    precise_actions_generated = False
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # Generate action for this specific checked item
@@ -3212,11 +3218,11 @@ class LangGraphFormProcessor:
                                 "value": data_item.get("value", "")
                             }
                             actions.append(action)
-                            checkbox_actions_generated = True
-                            print(f"DEBUG: Action Generator - Generated checkbox action: {action}")
+                            precise_actions_generated = True
+                            print(f"DEBUG: Action Generator - Generated {metadata.get('field_type')} action: {action}")
 
-                    if checkbox_actions_generated:
-                        continue  # Skip the traditional action generation only if we generated checkbox actions
+                    if precise_actions_generated:
+                        continue  # Skip the traditional action generation only if we generated precise actions
 
                 # For non-checkbox fields or checkboxes without checked items, use traditional generation
                 # Generate action for input fields and other field types
@@ -3225,14 +3231,43 @@ class LangGraphFormProcessor:
                     data_array = answer_data.get("data", [])
                     for data_item in data_array:
                         if data_item.get("check") == 1:
+                            # 🚀 OPTIMIZATION: For country/location fields, prefer readable text over codes
+                            field_name = metadata.get("field_name", "").lower()
+                            field_selector = metadata.get("field_selector", "").lower()
+                            field_label = metadata.get("field_label", "").lower()
+                            action_value = data_item.get("value", "")
+
+                            # For country selection fields, prefer "Turkey" over "TUR", "United Kingdom" over "GBR", etc.
+                            # Check field_name, field_selector, and field_label for country-related keywords
+                            country_keywords = ["country", "location", "nationality", "birth"]
+                            is_country_field = (
+                                    any(keyword in field_name for keyword in country_keywords) or
+                                    any(keyword in field_selector for keyword in country_keywords) or
+                                    any(keyword in field_label for keyword in country_keywords)
+                            )
+
+                            if is_country_field:
+                                # Check if we have a more readable alternative
+                                item_name = data_item.get("name", "")
+                                item_value = data_item.get("value", "")
+
+                                # If name is more readable than value (e.g., "Turkey" vs "TUR"), use name
+                                if (len(item_name) > len(item_value) and
+                                        item_name.isalpha() and
+                                        item_value.isupper() and
+                                        len(item_value) <= 3):
+                                    action_value = item_name
+                                    print(
+                                        f"DEBUG: Action Generator - Using readable country name '{item_name}' instead of code '{item_value}'")
+                            
                             # Generate input action for this field
                             action = {
                                 "selector": data_item.get("selector", metadata.get("field_selector", "")),
-                                "type": "input",
-                                "value": data_item.get("value", "")
+                                "type": "input" if metadata.get("field_type") != "select" else "select",
+                                "value": action_value
                             }
                             actions.append(action)
-                            print(f"DEBUG: Action Generator - Generated input action: {action}")
+                            print(f"DEBUG: Action Generator - Generated {action['type']} action: {action}")
                             break  # Only need one input action per field
                     continue  # Skip traditional generation for input fields
                 
@@ -3313,7 +3348,21 @@ class LangGraphFormProcessor:
         checked_items = []
         for item in data_array:
             if item.get("check") == 1:
-                value = item.get("value", item.get("name", ""))
+                # 🚀 OPTIMIZATION: For country/location fields, prefer readable text over codes
+                item_name = item.get("name", "")
+                item_value = item.get("value", "")
+
+                # Determine which value to use
+                value = item_value or item_name
+
+                # For country-like fields, prefer readable names over ISO codes
+                if (item_name and item_value and
+                        len(item_name) > len(item_value) and
+                        item_name.isalpha() and
+                        item_value.isupper() and
+                        len(item_value) <= 3):
+                    value = item_name  # Use "Turkey" instead of "TUR"
+                
                 # Ensure value is a string
                 if isinstance(value, list):
                     # If value is a list, join it or take first element
