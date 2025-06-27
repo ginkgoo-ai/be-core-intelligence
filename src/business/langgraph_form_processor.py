@@ -956,7 +956,21 @@ class StepAnalyzer:
                 if form_html:
                     soup = BeautifulSoup(form_html, 'html.parser')
 
-                    # Strategy 1: Look for fieldset legend that contains this field
+                    # Strategy 1: Look for details/summary structure that contains this field
+                    details_elements = soup.find_all('details')
+                    for details in details_elements:
+                        # Check if this details section contains our field
+                        field_inputs = details.find_all('input', {'name': field_name})
+                        if field_inputs:
+                            summary = details.find('summary')
+                            if summary:
+                                # Extract text from summary, removing aria-controls and other attributes
+                                summary_text = summary.get_text(strip=True)
+                                if summary_text and len(summary_text) > 3:
+                                    print(f"DEBUG: Found details/summary for {field_name}: '{summary_text}'")
+                                    return summary_text
+
+                    # Strategy 2: Look for fieldset legend that contains this field
                     fieldsets = soup.find_all('fieldset')
                     for fieldset in fieldsets:
                         # Check if this fieldset contains our field
@@ -969,7 +983,7 @@ class StepAnalyzer:
                                     print(f"DEBUG: Found fieldset legend for {field_name}: '{legend_text}'")
                                     return legend_text
 
-                    # Strategy 2: Look for heading or label before the field group
+                    # Strategy 3: Look for heading or label before the field group
                     if field_name:
                         first_field = soup.find('input', {'name': field_name})
                         if first_field:
@@ -985,16 +999,17 @@ class StepAnalyzer:
                                     heading = parent.find(tag)
                                     if heading:
                                         heading_text = heading.get_text(strip=True)
-                                        # Check if this heading is related to email/contact
+                                        # Check if this heading is related to the field context
                                         if (heading_text and len(heading_text) > 5 and
                                                 any(keyword in heading_text.lower() for keyword in
-                                                    ['email', 'contact', 'address', 'phone', 'telephone', 'another'])):
+                                                    ['email', 'contact', 'address', 'phone', 'telephone', 'another',
+                                                     'parent', 'family', 'details'])):
                                             print(f"DEBUG: Found related heading for {field_name}: '{heading_text}'")
                                             return heading_text
 
                                 current = parent
 
-                    # Strategy 3: Look for descriptive text near the field
+                    # Strategy 4: Look for descriptive text near the field
                     if field_name:
                         first_field = soup.find('input', {'name': field_name})
                         if first_field:
@@ -1004,7 +1019,7 @@ class StepAnalyzer:
                                 if (text and 20 < len(text) < 150 and  # Reasonable question length
                                         any(keyword in text.lower() for keyword in
                                             ['email', 'contact', 'address', 'phone', 'telephone', 'another', 'do you',
-                                             'have you'])):
+                                             'have you', 'parent', 'family', 'details'])):
                                     print(f"DEBUG: Found descriptive text for {field_name}: '{text}'")
                                     return text
 
@@ -1023,6 +1038,11 @@ class StepAnalyzer:
                         return f"Please provide your email address"
                 elif any(keyword in question.lower() for keyword in ['contact', 'phone', 'telephone']):
                     return f"Are you able to be contacted by telephone?"
+                elif any(keyword in question.lower() for keyword in ['parent', 'family']):
+                    if 'unknown' in question.lower():
+                        return f"What if I do not have my parents' details?"
+                    else:
+                        return f"Please provide your {question.lower()}"
                 elif any(keyword in question.lower() for keyword in ['prefer', 'choice', 'select']):
                     return f"What is your {question.lower()}?"
                 elif 'reason' in question.lower():
@@ -1418,10 +1438,15 @@ class StepAnalyzer:
                - Field about "email" + Data "contactInformation.primaryEmail" → Use the email address
                - Field about "birth date" + Data "personalDetails.dateOfBirth" → Use the date
                - Field about "visa length" + Data "applicationDetails.visaLength: '5 years'" → Answer: "5 years" or match to appropriate option
-            5. **BOOLEAN FIELD INTELLIGENCE**: 
+            5. **BOOLEAN FIELD INTELLIGENCE WITH REVERSE SEMANTICS**: 
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Field asking "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Field asking "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
+               - **CRITICAL - REVERSE SEMANTICS**: For negative statements, flip the logic:
+                 * Field "I do not have X" + Data "hasX: false" → Answer: "true" (because user doesn't have X, so "I do not have X" is TRUE)
+                 * Field "I do not have X" + Data "hasX: true" → Answer: "false" (because user has X, so "I do not have X" is FALSE)
+                 * Field "I cannot do Y" + Data "canDoY: true" → Answer: "false" (because user can do Y, so "I cannot do Y" is FALSE)
+                 * Field "I do not want Z" + Data "wantsZ: false" → Answer: "true" (because user doesn't want Z, so "I do not want Z" is TRUE)
             6. **NUMERICAL COMPARISON AND RANGE MATCHING**:
                - For duration/length questions, compare numerical values intelligently:
                - "5 years" vs "3 years or less" → Does NOT match (5 > 3)
@@ -1429,11 +1454,13 @@ class StepAnalyzer:
                - "2 years" vs "3 years or less" → MATCHES (2 ≤ 3) (confidence 90+)
                - "2 years" vs "More than 3 years" → Does NOT match (2 ≤ 3)
                - Extract numbers from text and perform logical comparisons
-            7. **SEMANTIC MATCHING PATTERNS**:
+                         7. **SEMANTIC MATCHING PATTERNS**:
                - "another/additional/other email" matches "hasOtherEmailAddresses", "additionalEmail", "secondaryEmail"
                - "telephone/phone number" matches "telephoneNumber", "phoneNumber", "contactNumber"
                - "first/given name" matches "givenName", "firstName", "name"
                - "visa length/duration" matches "visaLength", "duration", "period"
+               - "parent/family details" matches "familyDetails.parents.provideDetails", "parentDetails", "familyInfo"
+               - **NEGATIVE STATEMENTS**: "I do not have parents' details" matches "provideDetails: false" → Answer: "true"
                - Use SEMANTIC UNDERSTANDING, not just string matching
             8. **COMPREHENSIVE OPTION MATCHING**: For radio/checkbox fields with multiple options:
                - MANDATORY: Check data value against ALL available options, not just the first one
@@ -1464,6 +1491,19 @@ class StepAnalyzer:
             - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: true" = Answer: "true" (confidence 90+)
             - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
             - Question about "contact by phone" + Data "canContactByPhone: false" = Answer: "false" (confidence 90+)
+            
+            ## CRITICAL: REVERSE SEMANTIC UNDERSTANDING FOR NEGATIVE STATEMENTS:
+            - Question "I do not have my parents' details" (checkbox) + Data "familyDetails.parents.provideDetails: false" = Answer: "true" (confidence 95+)
+              * Logic: User does NOT want to provide details (false) → So they DO NOT have details (true/checked)
+            - Question "I cannot be contacted by phone" + Data "canContactByPhone: true" = Answer: "false" (confidence 90+)
+              * Logic: User CAN be contacted (true) → So they CAN be contacted, not "cannot" (false/unchecked)
+            - Question "I do not want to receive emails" + Data "wantsEmails: true" = Answer: "false" (confidence 90+)
+              * Logic: User WANTS emails (true) → So they do NOT "not want" emails (false/unchecked)
+            
+            ## PARENT/FAMILY DETAILS SPECIFIC EXAMPLES:
+            - Question "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
+            - Question "I do not have my parents' details" + Data "provideDetails: true" = Answer: "false" (confidence 95+)
+            - Question "What if I do not have my parents' details?" with checkbox "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
             
             ## DIRECT TEXT EXAMPLES:
             - Field "telephoneNumber" + Data "contactInformation.telephoneNumber: '+1234567890'" = Answer: "+1234567890" (confidence 95)
@@ -2376,18 +2416,29 @@ class LangGraphFormProcessor:
                     "data": [],
                     "actions": []
                 }
-            
+
+            # 🚀 CRITICAL FIX: Prioritize precise form_actions over LLM-generated actions
+            precise_actions = result.get("form_actions", [])
+            llm_actions = result.get("llm_generated_actions", [])
+            final_actions = precise_actions if precise_actions else llm_actions
+
+            print(
+                f"DEBUG: process_form - Using {'precise' if precise_actions else 'LLM'} actions: {len(final_actions)} total")
+
             # Return successful result with merged Q&A data
             return {
                 "success": True,
                 "data": result.get("merged_qa_data", []),  # 返回合并的问答数据
-                "actions": result.get("llm_generated_actions", []),  # 返回LLM生成的动作
+                "actions": final_actions,  # 🚀 优先使用精确动作
                 "messages": result.get("messages", []),
                 "processing_metadata": {
                     "fields_detected": len(result.get("detected_fields", [])),
                     "questions_generated": len(result.get("field_questions", [])),
                     "answers_generated": len(result.get("ai_answers", [])),
-                    "actions_generated": len(result.get("llm_generated_actions", [])),
+                    "actions_generated": len(final_actions),
+                    "action_source": "precise" if precise_actions else "llm",
+                    "precise_actions_count": len(precise_actions),
+                    "llm_actions_count": len(llm_actions),
                     "workflow_id": workflow_id,
                     "step_key": step_key
                 }
@@ -3218,11 +3269,28 @@ class LangGraphFormProcessor:
                         f"DEBUG: Action Generator - Failed to generate action for {metadata.get('field_name', 'unknown')}: {str(action_error)}")
                     continue
 
+            # 🚀 CRITICAL FIX: Always add submit button action at the end
+            has_submit = any(
+                "submit" in action.get("selector", "").lower() or
+                action.get("type") == "submit" or
+                ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
+                for action in actions
+            )
+
+            if not has_submit:
+                print("DEBUG: Action Generator - No submit action found, searching for submit button")
+                submit_action = self._find_and_create_submit_action(state["form_html"])
+                if submit_action:
+                    actions.append(submit_action)
+                    print(f"DEBUG: Action Generator - Added submit action: {submit_action}")
+                else:
+                    print("DEBUG: Action Generator - No submit button found in HTML")
+
             # Sort actions by order (not needed for new format, but keep for compatibility)
             # actions.sort(key=lambda x: x.get("order", 0))
             
             state["form_actions"] = actions
-            print(f"DEBUG: Action Generator - Generated {len(actions)} actions total")
+            print(f"DEBUG: Action Generator - Generated {len(actions)} actions total (including submit)")
 
             # Debug: Print all generated actions
             for i, action in enumerate(actions, 1):
@@ -3445,6 +3513,15 @@ class LangGraphFormProcessor:
                 if "actions" in llm_result:
                     actions = llm_result["actions"]
 
+                    # 🚀 CRITICAL FIX: Validate and improve action selectors
+                    validated_actions = []
+                    for action in actions:
+                        validated_action = self._validate_and_improve_action_selector(action, state["form_html"],
+                                                                                      dummy_data_context)
+                        validated_actions.append(validated_action)
+
+                    actions = validated_actions
+
                     # Check if submit button action exists
                     has_submit = any(
                         "submit" in action.get("selector", "").lower() or
@@ -3500,7 +3577,7 @@ class LangGraphFormProcessor:
 
         return state
 
-    def _find_and_create_submit_action(self, form_html: str) -> Optional[Dict[str, str]]:
+    def _find_and_create_submit_action(self, form_html: str) -> Optional[Dict[str, Any]]:
         """Find submit button in HTML and create click action for it"""
         try:
             from bs4 import BeautifulSoup
@@ -3508,63 +3585,85 @@ class LangGraphFormProcessor:
             soup = BeautifulSoup(form_html, 'html.parser')
 
             # Search for submit buttons in order of priority
-            submit_selectors = [
+            submit_candidates = [
                 # Input submit buttons
                 soup.find("input", {"type": "submit"}),
                 # Button with type submit
                 soup.find("button", {"type": "submit"}),
-                # Button with submit-related text
-                soup.find("button", string=lambda text: text and any(
-                    keyword in text.lower() for keyword in ["submit", "continue", "next", "save", "proceed"]
-                )),
                 # Input button with submit-related value
-                soup.find("input", {"type": "button", "value": lambda value: value and any(
-                    keyword in value.lower() for keyword in ["submit", "continue", "next", "save", "proceed"]
-                )}),
-                # Any button with submit-related class
-                soup.find(["button", "input"], {"class": lambda classes: classes and any(
-                    keyword in " ".join(classes).lower() for keyword in
-                    ["submit", "continue", "next", "save", "proceed"]
-                )}),
+                soup.find("input", {"type": "button"}),
+                # Button with submit-related text
+                soup.find("button"),
             ]
 
             # Find the first available submit button
             submit_element = None
-            for element in submit_selectors:
+            for element in submit_candidates:
                 if element:
-                    submit_element = element
-                    break
+                    # Check if this is likely a submit button
+                    if element.name == "input" and element.get("type") == "submit":
+                        submit_element = element
+                        break
+                    elif element.name == "button" and element.get("type") == "submit":
+                        submit_element = element
+                        break
+                    elif element.name == "input" and element.get("type") == "button":
+                        value = element.get("value", "").lower()
+                        if any(keyword in value for keyword in ["submit", "continue", "next", "save", "proceed"]):
+                            submit_element = element
+                            break
+                    elif element.name == "button":
+                        text = element.get_text(strip=True).lower()
+                        if any(keyword in text for keyword in ["submit", "continue", "next", "save", "proceed"]):
+                            submit_element = element
+                            break
 
             if submit_element:
-                # Create selector for the submit button
+                # 🚀 CRITICAL FIX: Create precise selector with proper attribute format
                 tag_name = submit_element.name
-                selector_parts = [tag_name]
+                element_id = submit_element.get("id")
+                element_type = submit_element.get("type")
+                element_name = submit_element.get("name")
 
-                # Add ID if available
-                if submit_element.get("id"):
-                    selector_parts = [f"{tag_name}[id='{submit_element.get('id')}']"]
+                if tag_name == "input":
+                    # For input elements, use the full attribute format
+                    selector_parts = ["input"]
 
-                # Add type if it's an input
-                if tag_name == "input" and submit_element.get("type"):
-                    if submit_element.get("id"):
-                        selector_parts = [
-                            f"input[id='{submit_element.get('id')}'][type='{submit_element.get('type')}']"]
-                    else:
-                        selector_parts = [f"input[type='{submit_element.get('type')}']"]
+                    # Add ID attribute if available
+                    if element_id:
+                        selector_parts.append(f"[id='{element_id}']")
 
-                # Add name if available and no ID
-                if not submit_element.get("id") and submit_element.get("name"):
-                    if tag_name == "input" and submit_element.get("type"):
-                        selector_parts = [
-                            f"input[type='{submit_element.get('type')}'][name='{submit_element.get('name')}']"]
-                    else:
-                        selector_parts = [f"{tag_name}[name='{submit_element.get('name')}']"]
+                    # Add type attribute
+                    if element_type:
+                        selector_parts.append(f"[type='{element_type}']")
 
-                selector = " ".join(selector_parts)
+                    # Add name attribute if available and no ID
+                    if element_name and not element_id:
+                        selector_parts.append(f"[name='{element_name}']")
+
+                    selector = "".join(selector_parts)
+
+                else:  # button element
+                    selector_parts = ["button"]
+
+                    # Add ID attribute if available
+                    if element_id:
+                        selector_parts.append(f"[id='{element_id}']")
+
+                    # Add type attribute if available
+                    if element_type:
+                        selector_parts.append(f"[type='{element_type}']")
+
+                    # Add name attribute if available and no ID
+                    if element_name and not element_id:
+                        selector_parts.append(f"[name='{element_name}']")
+
+                    selector = "".join(selector_parts)
 
                 action = {
                     "selector": selector,
-                    "type": "click"
+                    "type": "click",
+                    "value": None
                 }
 
                 print(f"DEBUG: Found submit button with selector: {selector}")
@@ -3999,10 +4098,15 @@ class LangGraphFormProcessor:
             # Instructions - SEMANTIC UNDERSTANDING AND INTELLIGENT MATCHING
             1. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
             2. **INTELLIGENT MAPPING**: Use AI reasoning to connect data semantics to form questions
-            3. **BOOLEAN FIELD INTELLIGENCE**: 
+            3. **BOOLEAN FIELD INTELLIGENCE WITH REVERSE SEMANTICS**: 
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Field asking "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Field asking "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
+               - **CRITICAL - REVERSE SEMANTICS**: For negative statements, flip the logic:
+                 * Field "I do not have X" + Data "hasX: false" → Answer: "true" (because user doesn't have X, so "I do not have X" is TRUE)
+                 * Field "I do not have X" + Data "hasX: true" → Answer: "false" (because user has X, so "I do not have X" is FALSE)
+                 * Field "I cannot do Y" + Data "canDoY: true" → Answer: "false" (because user can do Y, so "I cannot do Y" is FALSE)
+                 * Field "I do not want Z" + Data "wantsZ: false" → Answer: "true" (because user doesn't want Z, so "I do not want Z" is TRUE)
             4. **NUMERICAL COMPARISON AND RANGE MATCHING**:
                - For duration/length questions, compare numerical values intelligently:
                - "5 years" vs "3 years or less" → Does NOT match (5 > 3)
@@ -4023,14 +4127,18 @@ class LangGraphFormProcessor:
                - Question "What is the length of the visa?" with options ["3 years or less", "More than 3 years"] + Data "visaLength: '5 years'" = Answer: "More than 3 years" (confidence 95)
                - Question "What is the length of the visa?" with options ["3 years or less", "More than 3 years"] + Data "visaLength: '2 years'" = Answer: "3 years or less" (confidence 95)
                - Question about duration/period with numerical options + ANY data containing time periods → Compare numerically and match appropriate range
+               - **REVERSE SEMANTICS EXAMPLES**:
+                 * Question "I do not have my parents' details" + Data "familyDetails.parents.provideDetails: false" → Answer: "true" (confidence 95+)
+                 * Question "I do not have my parents' details" + Data "familyDetails.parents.provideDetails: true" → Answer: "false" (confidence 95+)
+                 * Question "What if I do not have my parents' details?" with checkbox "I do not have my parents' details" + Data "provideDetails: false" → Answer: "true" (confidence 95+)
             7. **NESTED DATA SEARCH**: Check nested objects and arrays for relevant data - BE THOROUGH
             8. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
-               - 90-95: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question, or "5 years" for "More than 3 years")
+               - 90-95: Perfect semantic match in any data source (including numerical range matching)
                - 80-89: Strong semantic match with clear meaning
                - 70-79: Good semantic inference from data structure
                - 50-69: Reasonable inference from context
                - 30-49: Weak match, uncertain
-               - 0-29: No suitable semantic match found
+               - 0-29: No good semantic match found
             
             ## KEY PRINCIPLE: 
             When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
@@ -4381,17 +4489,28 @@ class LangGraphFormProcessor:
                     "actions": []
                 }
 
+            # 🚀 CRITICAL FIX: Prioritize precise form_actions over LLM-generated actions
+            precise_actions = result.get("form_actions", [])
+            llm_actions = result.get("llm_generated_actions", [])
+            final_actions = precise_actions if precise_actions else llm_actions
+
+            print(
+                f"DEBUG: process_form_async - Using {'precise' if precise_actions else 'LLM'} actions: {len(final_actions)} total")
+
             # Return successful result with merged Q&A data
             return {
                 "success": True,
                 "data": result.get("merged_qa_data", []),  # 返回合并的问答数据
-                "actions": result.get("llm_generated_actions", []),  # 返回LLM生成的动作
+                "actions": final_actions,  # 🚀 优先使用精确动作
                 "messages": result.get("messages", []),
                 "processing_metadata": {
                     "fields_detected": len(result.get("detected_fields", [])),
                     "questions_generated": len(result.get("field_questions", [])),
                     "answers_generated": len(result.get("ai_answers", [])),
-                    "actions_generated": len(result.get("llm_generated_actions", [])),
+                    "actions_generated": len(final_actions),
+                    "action_source": "precise" if precise_actions else "llm",
+                    "precise_actions_count": len(precise_actions),
+                    "llm_actions_count": len(llm_actions),
                     "workflow_id": workflow_id,
                     "step_key": step_key
                 }
@@ -5027,10 +5146,15 @@ class LangGraphFormProcessor:
                - FIRST: Try to match with User Data (fill_data) using semantic understanding
                - SECOND: If no match in fill_data, try Profile Dummy Data using semantic understanding
                - Use Profile Dummy Data with confidence 80+ if it semantically matches field meaning
-            3. **BOOLEAN FIELD INTELLIGENCE**: 
+            3. **BOOLEAN FIELD INTELLIGENCE WITH REVERSE SEMANTICS**: 
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Question "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Question "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
+               - **CRITICAL - REVERSE SEMANTICS**: For negative statements, flip the logic:
+                 * Field "I do not have X" + Data "hasX: false" → Answer: "true" (because user doesn't have X, so "I do not have X" is TRUE)
+                 * Field "I do not have X" + Data "hasX: true" → Answer: "false" (because user has X, so "I do not have X" is FALSE)
+                 * Field "I cannot do Y" + Data "canDoY: true" → Answer: "false" (because user can do Y, so "I cannot do Y" is FALSE)
+                 * Field "I do not want Z" + Data "wantsZ: false" → Answer: "true" (because user doesn't want Z, so "I do not want Z" is TRUE)
             4. **NUMERICAL COMPARISON AND RANGE MATCHING**:
                - For duration/length questions, compare numerical values intelligently:
                - "5 years" vs "3 years or less" → Does NOT match (5 > 3)
@@ -5048,6 +5172,17 @@ class LangGraphFormProcessor:
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
+               
+               ## CRITICAL: REVERSE SEMANTIC UNDERSTANDING FOR NEGATIVE STATEMENTS:
+               - Question "I do not have my parents' details" (checkbox) + Data "familyDetails.parents.provideDetails: false" = Answer: "true" (confidence 95+)
+                 * Logic: User does NOT want to provide details (false) → So they DO NOT have details (true/checked)
+               - Question "I cannot be contacted by phone" + Data "canContactByPhone: true" = Answer: "false" (confidence 90+)
+                 * Logic: User CAN be contacted (true) → So they CAN be contacted, not "cannot" (false/unchecked)
+               
+               ## PARENT/FAMILY DETAILS SPECIFIC EXAMPLES:
+               - Question "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
+               - Question "I do not have my parents' details" + Data "provideDetails: true" = Answer: "false" (confidence 95+)
+               - Question "What if I do not have my parents' details?" with checkbox "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
                
                ## DIRECT TEXT EXAMPLES:
                - Field about "telephone" + Data "contactInformation.telephoneNumber" → Use the phone number
