@@ -1106,8 +1106,8 @@ class StepAnalyzer:
     def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate AI answer for a field question - Modified to only use external dummy data"""
         try:
-            # First attempt: try to answer with profile_data (fill_data)
-            primary_result = self._try_answer_with_data(question, profile, "profile_data")
+            # First attempt: try to answer with profile_data (fill_data), with dummy data as secondary context
+            primary_result = self._try_answer_with_data(question, profile, "profile_data", profile_dummy_data)
 
             # If we have good confidence and answer from profile data, use it
             if (primary_result["confidence"] >= 20 and  # Lowered threshold to prioritize real data
@@ -1124,7 +1124,7 @@ class StepAnalyzer:
                     f"DEBUG: Trying external dummy data for field {question['field_name']} - primary confidence: {primary_result['confidence']}")
                 print(f"DEBUG: Profile dummy data keys: {list(profile_dummy_data.keys())}")
                 print(f"DEBUG: Profile dummy data full content: {json.dumps(profile_dummy_data, indent=2)}")
-                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data")
+                dummy_result = self._try_answer_with_data(question, profile_dummy_data, "profile_dummy_data", profile)
                 print(
                     f"DEBUG: Dummy data result - answer: '{dummy_result['answer']}', confidence: {dummy_result['confidence']}, needs_intervention: {dummy_result['needs_intervention']}")
 
@@ -1353,9 +1353,9 @@ class StepAnalyzer:
             "dummy_data_source": "ai_generated"  # This will be set by the caller
         }
 
-    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str) -> Dict[
-        str, Any]:
-        """Try to answer a question using a specific data source"""
+    def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str,
+                              secondary_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Try to answer a question using a specific data source, with optional secondary data for context"""
         try:
             # Create prompt for AI
             prompt = f"""
@@ -1373,17 +1373,33 @@ class StepAnalyzer:
             Field Selector: {question['field_selector']}
             Required: {question['required']}
             Question: {question['question']}
+            Available Options: {json.dumps(question.get('options', []), indent=2) if question.get('options') else "No specific options provided"}
             
-            # User Data ({source_name}):
+            ⚠️⚠️⚠️ CRITICAL REMINDER ⚠️⚠️⚠️: If Available Options shows multiple options above, you MUST analyze ALL of them!
+            
+            # Primary Data Source ({source_name}):
             {json.dumps(data_source, indent=2)}
             
-            MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
-            Before attempting to answer, you MUST:
-            1. List ALL top-level fields in the JSON above
-            2. List ALL nested fields (go deep into objects and arrays)
-            3. Identify any fields that could semantically relate to the question
-            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
-            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
+            # Secondary Data Source (for context and cross-reference):
+            {json.dumps(secondary_data, indent=2) if secondary_data else "None available"}
+            
+            MANDATORY FIRST STEP: COMPREHENSIVE ANALYSIS
+            Before attempting to answer, you MUST complete these steps IN ORDER:
+            
+            STEP 1 - JSON DATA ANALYSIS:
+            1. List ALL top-level fields in BOTH the Primary and Secondary data sources above
+            2. List ALL nested fields (go deep into objects and arrays) in BOTH data sources
+            3. Identify any fields that could semantically relate to the question in EITHER data source
+            4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*) in BOTH sources
+            5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*) in BOTH sources
+            6. Cross-reference between Primary and Secondary data sources for comprehensive analysis
+            
+            STEP 2 - OPTION ANALYSIS (if Available Options are provided):
+            1. List ALL available options (both text and value)
+            2. For each option, analyze what type of data it expects (boolean, numerical range, text, etc.)
+            3. For numerical options (like "3 years or less", "More than 3 years"), identify the threshold values
+            4. Determine which option(s) could match the data you found in Step 1
+            5. CRITICAL: Your final answer must be the option text or value, NOT the original data value
             
             # CRITICAL INSTRUCTIONS - DEEP JSON ANALYSIS AND SEMANTIC UNDERSTANDING:
              1. **COMPREHENSIVE JSON ANALYSIS**: FIRST, carefully read and analyze the ENTIRE JSON structure. List all available fields and their values before attempting to answer
@@ -1392,6 +1408,7 @@ class StepAnalyzer:
                 - For "another email" questions: Look for "hasOtherEmail*", "additionalEmail*", "secondaryEmail*", "otherEmail*"
                 - For "contact by phone" questions: Look for "canContact*", "allowContact*", "phoneContact*"
                 - For any boolean question: Look for "has*", "is*", "can*", "allow*", "enable*" fields
+                - For "visa length" questions: Look for "visaLength", "applicationDetails", "duration", "period"
              4. **SEARCH ALL DATA**: Thoroughly search through ALL nested objects and arrays - DO NOT SKIP ANY LEVELS
              5. **SMART FIELD MAPPING EXAMPLES**:
                - Field about "another email" + Data "hasOtherEmailAddresses: false" → Answer: "false/no" (HIGH confidence 85+)
@@ -1400,25 +1417,40 @@ class StepAnalyzer:
                - Field about "name" + Data "personalDetails.givenName: 'John'" → Answer: "John"
                - Field about "email" + Data "contactInformation.primaryEmail" → Use the email address
                - Field about "birth date" + Data "personalDetails.dateOfBirth" → Use the date
+               - Field about "visa length" + Data "applicationDetails.visaLength: '5 years'" → Answer: "5 years" or match to appropriate option
             5. **BOOLEAN FIELD INTELLIGENCE**: 
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Field asking "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Field asking "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
-            6. **SEMANTIC MATCHING PATTERNS**:
+            6. **NUMERICAL COMPARISON AND RANGE MATCHING**:
+               - For duration/length questions, compare numerical values intelligently:
+               - "5 years" vs "3 years or less" → Does NOT match (5 > 3)
+               - "5 years" vs "More than 3 years" → MATCHES (5 > 3) (confidence 90+)
+               - "2 years" vs "3 years or less" → MATCHES (2 ≤ 3) (confidence 90+)
+               - "2 years" vs "More than 3 years" → Does NOT match (2 ≤ 3)
+               - Extract numbers from text and perform logical comparisons
+            7. **SEMANTIC MATCHING PATTERNS**:
                - "another/additional/other email" matches "hasOtherEmailAddresses", "additionalEmail", "secondaryEmail"
                - "telephone/phone number" matches "telephoneNumber", "phoneNumber", "contactNumber"
                - "first/given name" matches "givenName", "firstName", "name"
+               - "visa length/duration" matches "visaLength", "duration", "period"
                - Use SEMANTIC UNDERSTANDING, not just string matching
-            7. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
-               - 90-100: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question)
+            8. **COMPREHENSIVE OPTION MATCHING**: For radio/checkbox fields with multiple options:
+               - MANDATORY: Check data value against ALL available options, not just the first one
+               - Use logical comparison (numerical, boolean, string matching)
+               - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
+               - CRITICAL: Your answer must be one of the available option values or option text, not the original data value
+               - For numerical ranges: "5 years" + options ["3 years or less", "More than 3 years"] → Answer: "More than 3 years" (NOT "5 years")
+            9. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+               - 90-100: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question, or "5 years" for "More than 3 years")
                - 80-89: Strong semantic match with clear meaning
                - 70-79: Good semantic inference from data structure
                - 50-69: Reasonable inference from context
                - 30-49: Weak match, uncertain
                - 0-29: No suitable semantic match found
-            8. **VALIDATION**: Ensure the data type and format matches the field requirements
-            9. **MUTUAL EXCLUSIVITY**: For radio/checkbox fields, select only ONE appropriate value
-            10. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
+            10. **VALIDATION**: Ensure the data type and format matches the field requirements
+            11. **MUTUAL EXCLUSIVITY**: For radio/checkbox fields, select only ONE appropriate value
+            12. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
             
             # Special Instructions for Telephone Fields:
             - For "telephoneNumber": Extract the actual phone number from contactInformation.telephoneNumber
@@ -1426,13 +1458,38 @@ class StepAnalyzer:
             - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
             
             # SEMANTIC MATCHING EXAMPLES (CRITICAL - STUDY THESE PATTERNS):
+            
+            ## BOOLEAN/YES-NO EXAMPLES:
             - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" = Answer: "false" (confidence 90+)
             - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: true" = Answer: "true" (confidence 90+)
             - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
+            - Question about "contact by phone" + Data "canContactByPhone: false" = Answer: "false" (confidence 90+)
+            
+            ## DIRECT TEXT EXAMPLES:
             - Field "telephoneNumber" + Data "contactInformation.telephoneNumber: '+1234567890'" = Answer: "+1234567890" (confidence 95)
             - Field "telephoneNumberType" + Data "contactInformation.telephoneType: 'Mobile'" = Answer: "mobile" (confidence 90)
             - Field "givenName" + Data "personalDetails.givenName: 'John'" = Answer: "John" (confidence 95)
-            - Question about "contact by phone" + Data "canContactByPhone: false" = Answer: "false" (confidence 90+)
+            
+            ## NUMERICAL RANGE EXAMPLES (MOST IMPORTANT FOR YOUR CASE):
+            - Question "What is the length of the visa?" + Data "visaLength: '5 years'" + Options ["3 years or less", "More than 3 years"]:
+              * Step 1: Found data "5 years"
+              * Step 2: Check against "3 years or less" → 5 > 3, so NO MATCH
+              * Step 3: Check against "More than 3 years" → 5 > 3, so MATCH!
+              * Final Answer: "More than 3 years" (confidence 95)
+            - Question "What is the length of the visa?" + Data "visaLength: '2 years'" + Options ["3 years or less", "More than 3 years"]:
+              * Step 1: Found data "2 years"  
+              * Step 2: Check against "3 years or less" → 2 ≤ 3, so MATCH!
+              * Final Answer: "3 years or less" (confidence 95)
+            
+            ## KEY PRINCIPLE: 
+            When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
+            
+            ## CRITICAL FINAL STEP - ANSWER VALIDATION:
+            Before providing your final JSON response, you MUST:
+            1. Re-check that your "answer" field contains EXACTLY one of the available option values or texts
+            2. If you found data like "5 years" and determined it matches "More than 3 years", your answer MUST be "More than 3 years" or "moreThanThreeYears"
+            3. NEVER put the original data value (like "5 years") in the answer field when options are provided
+            4. Double-check your logic: if your reasoning says option X matches, your answer MUST be option X
             
             # Response Format (JSON only):
             {{
@@ -1707,6 +1764,53 @@ class StepAnalyzer:
         
         return None
 
+    def _is_duration_comparison_match(self, ai_value: str, option_text: str) -> bool:
+        """Check if AI value matches option text through numerical comparison for duration fields"""
+        try:
+            import re
+
+            # Extract numbers from AI value (e.g., "5 years" -> 5)
+            ai_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:year|month|day)', ai_value.lower())
+            if not ai_match:
+                return False
+
+            ai_number = float(ai_match.group(1))
+
+            # Check different option patterns
+            option_lower = option_text.lower()
+
+            # Pattern: "3 years or less" / "X years or less"
+            less_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:year|month|day)s?\s*or\s*less', option_lower)
+            if less_match:
+                threshold = float(less_match.group(1))
+                return ai_number <= threshold
+
+            # Pattern: "more than 3 years" / "more than X years"
+            more_match = re.search(r'more\s*than\s*(\d+(?:\.\d+)?)\s*(?:year|month|day)', option_lower)
+            if more_match:
+                threshold = float(more_match.group(1))
+                return ai_number > threshold
+
+            # Pattern: "less than 3 years" / "less than X years"
+            less_than_match = re.search(r'less\s*than\s*(\d+(?:\.\d+)?)\s*(?:year|month|day)', option_lower)
+            if less_than_match:
+                threshold = float(less_than_match.group(1))
+                return ai_number < threshold
+
+            # Pattern: "between X and Y years"
+            between_match = re.search(r'between\s*(\d+(?:\.\d+)?)\s*and\s*(\d+(?:\.\d+)?)\s*(?:year|month|day)',
+                                      option_lower)
+            if between_match:
+                min_val = float(between_match.group(1))
+                max_val = float(between_match.group(2))
+                return min_val <= ai_number <= max_val
+
+            return False
+
+        except (ValueError, AttributeError) as e:
+            print(f"DEBUG: _is_duration_comparison_match - Error parsing values: {e}")
+            return False
+
     def _create_answer_data(self, question: Dict[str, Any], ai_answer: Optional[Dict[str, Any]], needs_intervention: bool) -> List[Dict[str, Any]]:
         """Create answer data array based on field type and AI answer
         
@@ -1728,32 +1832,54 @@ class StepAnalyzer:
         print(f"DEBUG: _create_answer_data - Has AI answer: {has_ai_answer}")
         print(f"DEBUG: _create_answer_data - Is dummy data: {is_dummy_data}")
         print(f"DEBUG: _create_answer_data - Needs intervention: {needs_intervention}")
+        print(f"DEBUG: _create_answer_data - Available options: {[opt.get('text', '') for opt in options]}")
+        print(
+            f"DEBUG: _create_answer_data - AI reasoning: {ai_answer.get('reasoning', 'No reasoning') if ai_answer else 'No AI answer'}")
         
         if field_type in ["radio", "checkbox", "select"] and options:
             if has_ai_answer:  # AI provided an answer (real or dummy)
                 # AI已回答：找到匹配的选项并使用选项文本
                 matched_option = None
 
-                # Enhanced matching logic for boolean/yes-no questions
+                # Enhanced matching logic for boolean/yes-no questions and numerical comparisons
                 ai_value_lower = ai_answer_value.lower().strip()
                 
                 for option in options:
                     option_value = option.get("value", "").lower()
                     option_text = option.get("text", "").lower()
 
-                    # Direct string matching
+                    print(
+                        f"DEBUG: _create_answer_data - Checking option: '{option.get('text', '')}' (value: '{option.get('value', '')}')")
+
+                    # Direct string matching (exact match)
                     if (option_value == ai_value_lower or option_text == ai_value_lower):
                         matched_option = option
+                        print(
+                            f"DEBUG: _create_answer_data - Direct string match found: '{ai_answer_value}' matches '{option.get('text', '')}'")
                         break
 
                     # Boolean value mapping for yes/no questions
                     if ai_value_lower in ["false", "no", "0"]:
                         if option_value in ["false", "no", "0"] or option_text in ["no", "false", "否", "不是"]:
                             matched_option = option
+                            print(
+                                f"DEBUG: _create_answer_data - Boolean match found: '{ai_answer_value}' matches '{option.get('text', '')}'")
                             break
                     elif ai_value_lower in ["true", "yes", "1"]:
                         if option_value in ["true", "yes", "1"] or option_text in ["yes", "true", "是", "是的"]:
                             matched_option = option
+                            print(
+                                f"DEBUG: _create_answer_data - Boolean match found: '{ai_answer_value}' matches '{option.get('text', '')}'")
+                            break
+
+                # If no direct match found, try numerical comparison for duration/period questions
+                if not matched_option:
+                    for option in options:
+                        option_text = option.get("text", "")
+                        if self._is_duration_comparison_match(ai_answer_value, option_text):
+                            matched_option = option
+                            print(
+                                f"DEBUG: _create_answer_data - Numerical match found: '{ai_answer_value}' matches '{option_text}'")
                             break
 
                 if matched_option:
@@ -3477,17 +3603,29 @@ class LangGraphFormProcessor:
             Field Selector: {question['field_selector']}
             Required: {question['required']}
             Question: {question['question']}
+            Available Options: {json.dumps(question.get('options', []), indent=2) if question.get('options') else "No specific options provided"}
+            
+            ⚠️⚠️⚠️ CRITICAL REMINDER ⚠️⚠️⚠️: If Available Options shows multiple options above, you MUST analyze ALL of them!
             
             # User Data ({source_name}):
             {json.dumps(data_source, indent=2)}
             
-            MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
-            Before attempting to answer, you MUST:
+            MANDATORY FIRST STEP: COMPREHENSIVE ANALYSIS
+            Before attempting to answer, you MUST complete these steps IN ORDER:
+            
+            STEP 1 - JSON DATA ANALYSIS:
             1. List ALL top-level fields in the JSON above
             2. List ALL nested fields (go deep into objects and arrays)
             3. Identify any fields that could semantically relate to the question
             4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
             5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
+            
+            STEP 2 - OPTION ANALYSIS (if Available Options are provided):
+            1. List ALL available options (both text and value)
+            2. For each option, analyze what type of data it expects (boolean, numerical range, text, etc.)
+            3. For numerical options (like "3 years or less", "More than 3 years"), identify the threshold values
+            4. Determine which option(s) could match the data you found in Step 1
+            5. CRITICAL: Your final answer must be the option text or value, NOT the original data value
             
             # Instructions - SEMANTIC UNDERSTANDING AND INTELLIGENT MATCHING
             1. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
@@ -3496,20 +3634,44 @@ class LangGraphFormProcessor:
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Field asking "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Field asking "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
-            4. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+            4. **NUMERICAL COMPARISON AND RANGE MATCHING**:
+               - For duration/length questions, compare numerical values intelligently:
+               - "5 years" vs "3 years or less" → Does NOT match (5 > 3)
+               - "5 years" vs "More than 3 years" → MATCHES (5 > 3) (confidence 90+)
+               - "2 years" vs "3 years or less" → MATCHES (2 ≤ 3) (confidence 90+)
+               - "2 years" vs "More than 3 years" → Does NOT match (2 ≤ 3)
+               - Extract numbers from text and perform logical comparisons
+            5. **COMPREHENSIVE OPTION MATCHING**: For radio/checkbox fields with multiple options:
+               - Check data value against ALL available options, not just the first one
+               - Use logical comparison (numerical, boolean, string matching)
+               - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
+            6. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
                - Field about "telephone" + Data "contactInformation.telephoneNumber" → Use the phone number
                - Field about "name" + Data "personalDetails.givenName" → Use the name
-            5. **NESTED DATA SEARCH**: Check nested objects and arrays for relevant data - BE THOROUGH
-            6. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
-               - 90-95: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question)
+               - Question "What is the length of the visa?" with options ["3 years or less", "More than 3 years"] + Data "visaLength: '5 years'" = Answer: "More than 3 years" (confidence 95)
+               - Question "What is the length of the visa?" with options ["3 years or less", "More than 3 years"] + Data "visaLength: '2 years'" = Answer: "3 years or less" (confidence 95)
+               - Question about duration/period with numerical options + ANY data containing time periods → Compare numerically and match appropriate range
+            7. **NESTED DATA SEARCH**: Check nested objects and arrays for relevant data - BE THOROUGH
+            8. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+               - 90-95: Perfect semantic match (hasOtherEmailAddresses:false for "Do you have another email" question, or "5 years" for "More than 3 years")
                - 80-89: Strong semantic match with clear meaning
                - 70-79: Good semantic inference from data structure
                - 50-69: Reasonable inference from context
                - 30-49: Weak match, uncertain
                - 0-29: No suitable semantic match found
+            
+            ## KEY PRINCIPLE: 
+            When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
+            
+            ## CRITICAL FINAL STEP - ANSWER VALIDATION:
+            Before providing your final JSON response, you MUST:
+            1. Re-check that your "answer" field contains EXACTLY one of the available option values or texts
+            2. If you found data like "5 years" and determined it matches "More than 3 years", your answer MUST be "More than 3 years" or "moreThanThreeYears"
+            3. NEVER put the original data value (like "5 years") in the answer field when options are provided
+            4. Double-check your logic: if your reasoning says option X matches, your answer MUST be option X
             
             # Response Format (JSON only):
             {{
@@ -4333,7 +4495,8 @@ class LangGraphFormProcessor:
                     "field_label": question['field_label'],
                     "question": question['question'],
                     "required": question['required'],
-                    "selector": question['field_selector']
+                    "selector": question['field_selector'],
+                    "options": question.get('options', [])  # Include options for radio/checkbox fields
                 })
 
             prompt = f"""
@@ -4345,6 +4508,8 @@ class LangGraphFormProcessor:
             
             # Form Fields to Analyze:
             {json.dumps(fields_data, indent=2, ensure_ascii=False)}
+            
+            ⚠️⚠️⚠️ CRITICAL REMINDER ⚠️⚠️⚠️: For each field above that has "options" array, you MUST check your answer against ALL options in that array!
             
             # User Data (fill_data):
             {json.dumps(profile_data, indent=2, ensure_ascii=False)}
@@ -4370,14 +4535,50 @@ class LangGraphFormProcessor:
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Question "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Question "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
-            4. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+            4. **NUMERICAL COMPARISON AND RANGE MATCHING**:
+               - For duration/length questions, compare numerical values intelligently:
+               - "5 years" vs "3 years or less" → Does NOT match (5 > 3)
+               - "5 years" vs "More than 3 years" → MATCHES (5 > 3) (confidence 90+)
+               - "2 years" vs "3 years or less" → MATCHES (2 ≤ 3) (confidence 90+)
+               - "2 years" vs "More than 3 years" → Does NOT match (2 ≤ 3)
+               - Extract numbers from text and perform logical comparisons
+            5. **COMPREHENSIVE OPTION MATCHING**: For radio/checkbox fields with multiple options:
+               - Check data value against ALL available options, not just the first one
+               - Use logical comparison (numerical, boolean, string matching)
+               - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
+            6. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+               
+               ## BOOLEAN/YES-NO EXAMPLES:
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
+               
+               ## DIRECT TEXT EXAMPLES:
                - Field about "telephone" + Data "contactInformation.telephoneNumber" → Use the phone number
                - Field about "name" + Data "personalDetails.givenName" → Use the name
-            5. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
-               - 90-95: Perfect semantic match in any data source
+               
+               ## NUMERICAL RANGE EXAMPLES (MOST IMPORTANT):
+               - Question "What is the length of the visa?" + Data "visaLength: '5 years'" + Options ["3 years or less", "More than 3 years"]:
+                 * Step 1: Found data "5 years"
+                 * Step 2: Check against "3 years or less" → 5 > 3, so NO MATCH
+                 * Step 3: Check against "More than 3 years" → 5 > 3, so MATCH!
+                 * Final Answer: "More than 3 years" (confidence 95)
+               - Question "What is the length of the visa?" + Data "visaLength: '2 years'" + Options ["3 years or less", "More than 3 years"]:
+                 * Step 1: Found data "2 years"  
+                 * Step 2: Check against "3 years or less" → 2 ≤ 3, so MATCH!
+                 * Final Answer: "3 years or less" (confidence 95)
+               
+               ## KEY PRINCIPLE: 
+               When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
+               
+               ## CRITICAL FINAL STEP - ANSWER VALIDATION:
+               Before providing your final JSON response, you MUST:
+               1. For each field with options, re-check that your "answer" field contains EXACTLY one of the available option values or texts
+               2. If you found data like "5 years" and determined it matches "More than 3 years", your answer MUST be "More than 3 years" or "moreThanThreeYears"
+               3. NEVER put the original data value (like "5 years") in the answer field when options are provided
+               4. Double-check your logic: if your reasoning says option X matches, your answer MUST be option X
+            7. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+               - 90-95: Perfect semantic match in any data source (including numerical range matching)
                - 80-89: Strong semantic match with clear meaning
                - 70-79: Good semantic inference from data structure
                - 50-69: Reasonable inference from context
