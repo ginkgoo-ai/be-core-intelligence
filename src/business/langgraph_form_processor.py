@@ -4361,7 +4361,7 @@ class LangGraphFormProcessor:
             }
 
     async def _llm_action_generator_node_async(self, state: FormAnalysisState) -> FormAnalysisState:
-        """Node: Combine traditional actions with LLM-generated actions and add submit button"""
+        """Node: Generate actions directly from answer.data for maximum accuracy"""
         try:
             print("DEBUG: LLM Action Generator Async - Starting")
 
@@ -4376,10 +4376,50 @@ class LangGraphFormProcessor:
                 # This might be a task list page or other non-form page
                 return await self._process_non_form_page_async(state)
 
-            # Start with traditional actions (these are more precise for checkboxes)
-            final_actions = traditional_actions.copy()
+            # Generate actions directly from answer.data (most accurate approach)
+            final_actions = []
 
-            # Check if submit button action exists in traditional actions
+            for item in merged_qa_data:
+                question_data = item.get("question", {})
+                answer_data = question_data.get("answer", {})
+                metadata = item.get("_metadata", {})
+
+                field_type = metadata.get("field_type", "")
+                field_name = metadata.get("field_name", "")
+
+                print(f"DEBUG: Processing field '{field_name}' (type: {field_type})")
+
+                # Get data array from answer
+                data_array = answer_data.get("data", [])
+
+                for data_item in data_array:
+                    if data_item.get("check") == 1:  # Only process checked/selected items
+                        selector = data_item.get("selector", "")
+                        value = data_item.get("value", "")
+
+                        if not selector:
+                            print(f"DEBUG: Skipping item without selector: {data_item}")
+                            continue
+
+                        # Determine action type based on field type
+                        if field_type in ["radio", "checkbox"]:
+                            action_type = "click"
+                        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time",
+                                            "datetime-local", "textarea", "select"]:
+                            action_type = "input"
+                        else:
+                            action_type = "input"  # Default fallback
+
+                        action = {
+                            "selector": selector,
+                            "type": action_type,
+                            "value": value if action_type == "input" else None
+                        }
+
+                        final_actions.append(action)
+                        print(f"DEBUG: Generated action from data: {action}")
+
+            # Add submit button action
             has_submit = any(
                 "submit" in action.get("selector", "").lower() or
                 action.get("type") == "submit" or
@@ -4387,7 +4427,6 @@ class LangGraphFormProcessor:
                 for action in final_actions
             )
 
-            # If no submit action found, automatically add one by finding submit button in HTML
             if not has_submit:
                 print("DEBUG: LLM Action Generator Async - No submit action found, searching for submit button in HTML")
                 submit_action = self._find_and_create_submit_action(state["form_html"])
@@ -4397,7 +4436,7 @@ class LangGraphFormProcessor:
                 else:
                     print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
 
-            # Store the combined actions
+            # Store the actions
             state["llm_generated_actions"] = final_actions
             print(f"DEBUG: LLM Action Generator Async - Generated {len(final_actions)} total actions")
 
