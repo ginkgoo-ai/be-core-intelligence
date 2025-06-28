@@ -467,7 +467,7 @@ class StepAnalyzer:
         return f"{element_type.capitalize()} Field"
     
     def _extract_field_options(self, element) -> List[Dict[str, str]]:
-        """提取字段的选项 - 对于select字段优先使用option text"""
+        """提取字段的选项 - 保持原始的value和text结构"""
         options = []
         
         if element.name == "select":
@@ -475,16 +475,15 @@ class StepAnalyzer:
                 option_value = option.get("value", "")
                 option_text = option.get_text(strip=True)
                 if option_value or option_text:
-                    # 🚀 NEW: For select fields, prioritize option text over value
-                    # This ensures readable text (like "Turkey") is preferred over codes (like "TUR")
-                    preferred_value = option_text or option_value
+                    # 🚀 FIXED: For regular select fields, keep original value and text structure
+                    # This allows different handling for regular select vs autocomplete fields
                     options.append({
-                        "value": preferred_value,  # Use text as the preferred value
-                        "text": option_text or option_value,
+                        "value": option_value or option_text,  # Keep original value
+                        "text": option_text or option_value,  # Keep original text
                         "original_value": option_value  # Keep original value for reference
                     })
                     print(
-                        f"DEBUG: _extract_field_options - SELECT option: text='{option_text}', value='{option_value}', preferred='{preferred_value}'")
+                        f"DEBUG: _extract_field_options - SELECT option: text='{option_text}', value='{option_value}'")
         elif element.get("type") in ["radio", "checkbox"]:
             # 对于单选和复选框，查找相关的选项
             name = element.get("name", "")
@@ -1968,12 +1967,17 @@ class StepAnalyzer:
                     print(
                         f"DEBUG: _create_answer_data - Generated correct selector: '{correct_selector}' for option '{matched_option.get('text', '')}'")
 
-                    # 🚀 NEW: For select and autocomplete fields, use text as value to prioritize readable text over codes
-                    if field_type in ["select", "autocomplete"]:
-                        # For select/autocomplete fields, use the readable text as the value
+                    # 🚀 FIXED: Different handling for select vs autocomplete fields
+                    if field_type == "autocomplete":
+                        # For autocomplete fields, use the readable text as the value
                         select_value = matched_option.get("text", matched_option.get("value", ""))
                         print(
-                            f"DEBUG: _create_answer_data - {field_type.upper()} field: using text '{select_value}' instead of value '{matched_option.get('value', '')}'")
+                            f"DEBUG: _create_answer_data - AUTOCOMPLETE field: using text '{select_value}' instead of value '{matched_option.get('value', '')}'")
+                    elif field_type == "select":
+                        # For regular select fields, use the original value
+                        select_value = matched_option.get("value", "")
+                        print(
+                            f"DEBUG: _create_answer_data - SELECT field: using value '{select_value}' instead of text '{matched_option.get('text', '')}'")
                     else:
                         # For radio/checkbox, keep using the original value
                         select_value = matched_option.get("value", "")
@@ -2002,11 +2006,15 @@ class StepAnalyzer:
                         else:
                             default_selector = question["field_selector"]
 
-                        # 🚀 NEW: For select and autocomplete fields, use text as value even for default options
-                        if field_type in ["select", "autocomplete"]:
+                        # 🚀 FIXED: Different handling for select vs autocomplete fields (default options)
+                        if field_type == "autocomplete":
                             default_value = default_option.get("text", default_option.get("value", ""))
                             print(
-                                f"DEBUG: _create_answer_data - {field_type.upper()} field default: using text '{default_value}' instead of value '{default_option.get('value', '')}'")
+                                f"DEBUG: _create_answer_data - AUTOCOMPLETE field default: using text '{default_value}' instead of value '{default_option.get('value', '')}'")
+                        elif field_type == "select":
+                            default_value = default_option.get("value", "")
+                            print(
+                                f"DEBUG: _create_answer_data - SELECT field default: using value '{default_value}' instead of text '{default_option.get('text', '')}'")
                         else:
                             default_value = default_option.get("value", "")
                         
@@ -2032,10 +2040,14 @@ class StepAnalyzer:
                 
                 for option in options:
                     # 构建选择器
-                    if field_type in ["select", "autocomplete"]:
+                    if field_type == "autocomplete":
                         selector = question["field_selector"]
-                        # 🚀 NEW: For select and autocomplete fields, use text as value in option list too
+                        # For autocomplete fields, use text as value in option list
                         option_value_to_use = option.get("text", option.get("value", ""))
+                    elif field_type == "select":
+                        selector = question["field_selector"]
+                        # For regular select fields, use value in option list
+                        option_value_to_use = option.get("value", "")
                     else:
                         # 为radio/checkbox生成正确的选择器
                         field_name = question.get("field_name", "")
@@ -2688,9 +2700,18 @@ class LangGraphFormProcessor:
                 "options": []
             }
 
-            # Extract options from hidden select using our improved method
-            options = self.step_analyzer._extract_field_options(hidden_select)
-            field_info["options"] = options
+            # Extract options from hidden select - for autocomplete, prioritize text over value
+            raw_options = self.step_analyzer._extract_field_options(hidden_select)
+            # 🚀 FIXED: For autocomplete fields, modify options to use text as value
+            autocomplete_options = []
+            for option in raw_options:
+                # For autocomplete, use text as the value (readable text like "Turkey")
+                autocomplete_options.append({
+                    "value": option.get("text", option.get("value", "")),  # Use text as value for autocomplete
+                    "text": option.get("text", option.get("value", "")),
+                    "original_value": option.get("original_value", option.get("value", ""))
+                })
+            field_info["options"] = autocomplete_options
 
             print(
                 f"DEBUG: _extract_autocomplete_field_info - Autocomplete field: {field_info['name']} with {len(options)} options")
@@ -3496,9 +3517,21 @@ class LangGraphFormProcessor:
                                         f"DEBUG: Action Generator - Using readable country name '{item_name}' instead of code '{item_value}'")
                             
                             # Generate input action for this field
+                            # 🚀 NEW: Determine action type based on field type
+                            field_type = metadata.get("field_type", "")
+                            if field_type == "autocomplete":
+                                # For autocomplete fields, use input action (user types in the UI input)
+                                action_type = "input"
+                            elif field_type == "select":
+                                # For regular select fields, use input action (select from dropdown)
+                                action_type = "input"
+                            else:
+                                # For other field types (text, email, etc.), use input action
+                                action_type = "input"
+                            
                             action = {
                                 "selector": data_item.get("selector", metadata.get("field_selector", "")),
-                                "type": "input" if metadata.get("field_type") != "select" else "select",
+                                "type": action_type,
                                 "value": action_value
                             }
                             actions.append(action)
