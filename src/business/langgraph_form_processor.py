@@ -2727,7 +2727,7 @@ class LangGraphFormProcessor:
             field_info["options"] = autocomplete_options
 
             print(
-                f"DEBUG: _extract_autocomplete_field_info - Autocomplete field: {field_info['name']} with {len(options)} options")
+                f"DEBUG: _extract_autocomplete_field_info - Autocomplete field: {field_info['name']} with {len(autocomplete_options)} options")
             print(
                 f"DEBUG: _extract_autocomplete_field_info - UI selector: {field_info['selector']}, Hidden selector: {field_info['hidden_selector']}")
 
