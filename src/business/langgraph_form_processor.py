@@ -1221,6 +1221,13 @@ class StepAnalyzer:
             )
             
             prompt = f"""
+            # Important Context - UK Visa Website
+            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
+            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
+            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
+            - When generating dummy addresses, consider UK postcodes and address formats
+            - For international addresses, clearly mark them as foreign/international
+
             Generate appropriate dummy data for this form field:
             
             {context}
@@ -1385,6 +1392,12 @@ class StepAnalyzer:
             You are a backend of a Google plugin, analyzing the html web pages sent from the front end, 
             analyzing the form items that need to be filled in them, retrieving the customer data that has been provided, 
             filling in the form content, and returning it to the front end in a fixed json format.
+
+            # Important Context - UK Visa Website
+            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
+            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
+            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
+            - When determining address types or answering location-related questions, apply UK-centric logic
 
             # Task
             Based on the user data from {source_name}, determine the appropriate value for this form field:
@@ -4431,6 +4444,12 @@ class LangGraphFormProcessor:
             analyzing the form items that need to be filled in them, retrieving the customer data that has been provided, 
             filling in the form content, and returning it to the front end in a fixed json format.
 
+            # Important Context - UK Visa Website
+            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
+            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
+            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
+            - When determining address types or answering location-related questions, apply UK-centric logic
+
             # Task
             Based on the user data from {source_name}, determine the appropriate value for this form field:
             
@@ -4604,6 +4623,13 @@ class LangGraphFormProcessor:
             prompt = f"""
             # Role
             You are an intelligent form data generator. Generate realistic, contextually appropriate dummy data for form fields.
+
+            # Important Context - UK Visa Website
+            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
+            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
+            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
+            - When generating dummy addresses, consider UK postcodes and address formats
+            - For international addresses, clearly mark them as foreign/international
 
             # Task
             Generate appropriate dummy data for this form field:
@@ -5486,6 +5512,12 @@ class LangGraphFormProcessor:
             prompt = f"""
             # Role 
             You are a form data analysis expert. Analyze multiple form fields simultaneously and provide answers based on user data.
+
+            # Important Context - UK Visa Website
+            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
+            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
+            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
+            - When determining address types or answering location-related questions, apply UK-centric logic
 
             # Task
             Analyze ALL the following form fields and provide answers based on the user data:
