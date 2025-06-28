@@ -164,7 +164,7 @@ class FormAction(BaseModel):
 
 class StepAnalyzer:
     """步骤分析器，用于分析当前页面属于哪个步骤"""
-    
+
     def __init__(self, db_session: Session):
         """Initialize analyzer with database session"""
         self.db = db_session
@@ -189,11 +189,11 @@ class StepAnalyzer:
         if used_workflow_id:
             print(f"[workflow_id:{used_workflow_id}] DEBUG: Invoking LLM")
         return self.llm.invoke(messages)
-    
+
     def analyze_step(self, html_content: str, workflow_id: str, current_step_key: str) -> Dict[str, Any]:
         """
         分析当前页面属于当前步骤还是下一步骤
-        
+
         改进逻辑：
         - 同时获取当前步骤和下一步骤的上下文信息
         - 使用 LLM 比较页面内容更符合哪个步骤
@@ -202,16 +202,16 @@ class StepAnalyzer:
         try:
             # 提取页面问题
             page_analysis = self._extract_page_questions(html_content)
-            
+
             # 获取当前步骤上下文
             current_step_context = self._get_step_context(workflow_id, current_step_key)
-            
+
             # 获取下一步骤上下文
             next_step_key = self._find_next_step(workflow_id, current_step_key)
             next_step_context = None
             if next_step_key:
                 next_step_context = self._get_step_context(workflow_id, next_step_key)
-            
+
             # 使用 LLM 进行比较分析
             analysis_result = self._analyze_with_llm(
                 page_analysis=page_analysis,
@@ -220,12 +220,12 @@ class StepAnalyzer:
                 current_step_key=current_step_key,
                 next_step_key=next_step_key
             )
-            
+
             # 如果页面属于下一步骤，执行步骤转换
             if analysis_result.get("belongs_to_next_step", False) and next_step_key:
                 print(
                     f"[workflow_id:{workflow_id}] DEBUG: Page belongs to next step {next_step_key}, executing step transition")
-                
+
                 # 获取当前步骤实例
                 current_step = self.step_repo.get_step_by_key(workflow_id, current_step_key)
                 if current_step:
@@ -233,24 +233,24 @@ class StepAnalyzer:
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
                     current_step.completed_at = datetime.utcnow()
                     print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
-                    
+
                     # 2. 激活下一个步骤
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
                         next_step.started_at = datetime.utcnow()
                         print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
-                        
+
                         # 3. 更新工作流实例的当前步骤
                         from src.database.workflow_repositories import WorkflowInstanceRepository
                         instance_repo = WorkflowInstanceRepository(self.db)
                         instance_repo.update_instance_status(
-                            workflow_id, 
+                            workflow_id,
                             None,  # 保持当前工作流状态
                             next_step_key  # 更新当前步骤键
                         )
                         print(f"[workflow_id:{workflow_id}] DEBUG: Updated workflow current step to {next_step_key}")
-                        
+
                         # 4. 更新分析结果，指示应该使用下一步骤执行
                         analysis_result.update({
                             "should_use_next_step": True,
@@ -258,7 +258,7 @@ class StepAnalyzer:
                             "next_step_instance_id": next_step.step_instance_id,
                             "step_transition_completed": True
                         })
-                
+
                 # 提交数据库更改
                 self.db.commit()
                 print(f"[workflow_id:{workflow_id}] DEBUG: Step transition completed and committed")
@@ -268,9 +268,9 @@ class StepAnalyzer:
                     "should_use_next_step": False,
                     "step_transition_completed": False
                 })
-            
+
             return analysis_result
-            
+
         except Exception as e:
             print(f"Error analyzing step: {str(e)}")
             # 发生错误时回滚数据库更改
@@ -284,11 +284,11 @@ class StepAnalyzer:
                 "next_step_key": None,
                 "reasoning": f"Error analyzing step: {str(e)}"
             }
-    
+
     def _extract_page_questions(self, html_content: str) -> Dict[str, Any]:
         """提取页面问题和上下文信息"""
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         analysis = {
             "page_title": "",
             "form_title": "",
@@ -296,31 +296,31 @@ class StepAnalyzer:
             "questions": [],  # 页面上的所有问题
             "form_elements": []
         }
-        
+
         # 提取页面标题
         title_tag = soup.find("title")
         if title_tag:
             analysis["page_title"] = title_tag.get_text(strip=True)
-        
+
         # 提取主标题
         for tag in ["h1", "h2", "h3"]:
             heading = soup.find(tag)
             if heading:
                 analysis["main_heading"] = heading.get_text(strip=True)
                 break
-        
+
         # 提取表单标题
         form = soup.find("form")
         if form:
             legend = form.find("legend")
             if legend:
                 analysis["form_title"] = legend.get_text(strip=True)
-            
+
             # 提取表单元素和对应的问题
             for element in form.find_all(["input", "select", "textarea"]):
                 # 获取字段标签
                 label = self._find_field_label(element)
-                
+
                 # 构建问题
                 question = {
                     "field_name": element.get("name", ""),
@@ -329,9 +329,9 @@ class StepAnalyzer:
                     "required": element.get("required") is not None,
                     "options": self._extract_field_options(element)
                 }
-                
+
                 analysis["questions"].append(question)
-                
+
                 # 保存表单元素信息
                 element_info = {
                     "type": element.name,
@@ -341,9 +341,9 @@ class StepAnalyzer:
                     "required": element.get("required") is not None
                 }
                 analysis["form_elements"].append(element_info)
-        
+
         return analysis
-    
+
     def _find_field_label(self, element) -> str:
         """Find label text for form field using multiple strategies"""
         # Strategy 1: Try aria-label first (most explicit)
@@ -465,11 +465,11 @@ class StepAnalyzer:
         # Last resort: return element type
         element_type = element.get("type", element.name) if element.name == "input" else element.name
         return f"{element_type.capitalize()} Field"
-    
+
     def _extract_field_options(self, element) -> List[Dict[str, str]]:
         """提取字段的选项 - 保持原始的value和text结构"""
         options = []
-        
+
         if element.name == "select":
             for option in element.find_all("option"):
                 option_value = option.get("value", "")
@@ -491,7 +491,7 @@ class StepAnalyzer:
                 parent = element.find_parent()
                 if parent:
                     related_elements = parent.find_all(
-                        "input", 
+                        "input",
                         {"type": element.get("type"), "name": name}
                     )
                     for related in related_elements:
@@ -502,9 +502,9 @@ class StepAnalyzer:
                                 "value": value or label,
                                 "text": label or value
                             })
-        
+
         return options
-    
+
     def _get_step_context(self, workflow_id: str, step_key: str) -> Dict[str, Any]:
         """获取步骤上下文信息"""
         try:
@@ -527,40 +527,40 @@ class StepAnalyzer:
             all_steps = self.step_repo.get_workflow_steps(workflow_id)
             if not all_steps:
                 return None
-            
+
             # 找到当前步骤
             current_step = None
             for step in all_steps:
                 if step.step_key == current_step_key:
                     current_step = step
                     break
-            
+
             if not current_step:
                 return None
-            
+
             # 按顺序排序所有步骤
             sorted_steps = sorted(all_steps, key=lambda s: s.order or 0)
-            
+
             # 找到下一个步骤
             current_order = current_step.order or 0
             for step in sorted_steps:
                 if (step.order or 0) > current_order:
                     return step.step_key
-            
+
             # 没有找到下一个步骤
             return None
-            
+
         except Exception as e:
             print(f"Error finding next step: {str(e)}")
             return None
-    
-    def _analyze_with_llm(self, page_analysis: Dict[str, Any], 
-                         current_step_context: Dict[str, Any],
-                         next_step_context: Optional[Dict[str, Any]],
-                         current_step_key: str,
-                         next_step_key: Optional[str]) -> Dict[str, Any]:
+
+    def _analyze_with_llm(self, page_analysis: Dict[str, Any],
+                          current_step_context: Dict[str, Any],
+                          next_step_context: Optional[Dict[str, Any]],
+                          current_step_key: str,
+                          next_step_key: Optional[str]) -> Dict[str, Any]:
         """使用 LLM 比较分析页面内容属于当前步骤还是下一步骤"""
-        
+
         # 构建比较分析的提示词
         if next_step_context:
             prompt = f"""
@@ -648,19 +648,19 @@ class StepAnalyzer:
         response = self._invoke_llm([HumanMessage(content=prompt)])
         try:
             result = json.loads(response.content)
-            
+
             # 验证和标准化结果
             if not isinstance(result.get("belongs_to_current_step"), bool):
                 result["belongs_to_current_step"] = True
             if not isinstance(result.get("belongs_to_next_step"), bool):
                 result["belongs_to_next_step"] = False
-                
+
             # 确保逻辑一致性：如果属于下一步，就不属于当前步
             if result.get("belongs_to_next_step", False):
                 result["belongs_to_current_step"] = False
-                
+
             return result
-            
+
         except json.JSONDecodeError:
             return {
                 "belongs_to_current_step": True,
@@ -671,7 +671,7 @@ class StepAnalyzer:
                 "reasoning": "Failed to parse LLM response, assuming current step continues",
                 "recommended_action": "continue_current_step"
             }
-    
+
     def _extract_field_info(self, element) -> Optional[Dict[str, Any]]:
         """Extract information from HTML form element"""
         try:
@@ -682,40 +682,41 @@ class StepAnalyzer:
                 field_type = element.get("type", "text").lower()
 
             print(f"DEBUG: _extract_field_info - Processing {element.name} element, type: {field_type}")
-            print(f"DEBUG: _extract_field_info - Element attributes: name={element.get('name', '')}, id={element.get('id', '')}, class={element.get('class', '')}")
+            print(
+                f"DEBUG: _extract_field_info - Element attributes: name={element.get('name', '')}, id={element.get('id', '')}, class={element.get('class', '')}")
 
             # Skip CSRF token fields and other system fields
             field_name = element.get("name", "").lower()
             field_id = element.get("id", "").lower()
-            
+
             # List of field names/patterns to ignore
             ignore_patterns = [
                 "csrf", "csrftoken", "_token", "authenticity_token",
                 "_method", "__viewstate", "__eventvalidation",
                 "submit", "reset", "button"
             ]
-            
+
             # Check if field should be ignored
             for pattern in ignore_patterns:
-                if (pattern in field_name or 
-                    pattern in field_id or 
-                    field_type == pattern):
+                if (pattern in field_name or
+                        pattern in field_id or
+                        field_type == pattern):
                     print(f"DEBUG: _extract_field_info - Ignoring system field: {field_name} (pattern: {pattern})")
                     return None
-            
+
             # Also ignore hidden fields that look like system fields
             if field_type == "hidden":
                 # Allow some hidden fields that might be user data
                 allowed_hidden_patterns = ["user", "profile", "data", "info"]
                 is_allowed = any(pattern in field_name for pattern in allowed_hidden_patterns)
-                
+
                 if not is_allowed:
                     print(f"DEBUG: _extract_field_info - Ignoring hidden system field: {field_name}")
                     return None
 
             # Generate unique ID for field tracking
             field_id = element.get("id", "") or element.get("name", "") or self._generate_selector(element)
-            
+
             field_info = {
                 "id": field_id,  # Add unique ID for tracking
                 "name": element.get("name", ""),
@@ -727,7 +728,7 @@ class StepAnalyzer:
                 "value": element.get("value", ""),
                 "options": []
             }
-            
+
             print(f"DEBUG: _extract_field_info - Basic field info: {field_info}")
 
             # Handle different field types and their options
@@ -745,9 +746,10 @@ class StepAnalyzer:
                     # Search in a wider scope to find all radio buttons with same name
                     container = element.find_parent()
                     search_scope = container
-                    
+
                     # If container is too small, search in document root
-                    while search_scope and len(search_scope.find_all('input', {'type': 'radio', 'name': radio_name})) < 2:
+                    while search_scope and len(
+                            search_scope.find_all('input', {'type': 'radio', 'name': radio_name})) < 2:
                         search_scope = search_scope.find_parent()
                         if not search_scope:
                             # Search in the entire document
@@ -755,8 +757,9 @@ class StepAnalyzer:
                             while search_scope.parent:
                                 search_scope = search_scope.parent
                             break
-                    
-                    related_radios = search_scope.find_all('input', {'type': 'radio', 'name': radio_name}) if search_scope else []
+
+                    related_radios = search_scope.find_all('input', {'type': 'radio',
+                                                                     'name': radio_name}) if search_scope else []
                     options = []
                     for radio in related_radios:
                         label_text = self._find_field_label(radio)
@@ -766,7 +769,7 @@ class StepAnalyzer:
                                 "value": radio_value or label_text,
                                 "text": label_text or radio_value
                             })
-                    
+
                     field_info["options"] = options
                     print(f"DEBUG: _extract_field_info - Radio options for '{radio_name}': {options}")
 
@@ -792,9 +795,10 @@ class StepAnalyzer:
             has_name = bool(field_info["name"])
             has_label = bool(field_info["label"])
             has_selector = bool(field_info["selector"])
-            
-            print(f"DEBUG: _extract_field_info - Validation: has_name={has_name}, has_label={has_label}, has_selector={has_selector}")
-            
+
+            print(
+                f"DEBUG: _extract_field_info - Validation: has_name={has_name}, has_label={has_label}, has_selector={has_selector}")
+
             if has_name or has_label or has_selector:
                 print(f"DEBUG: _extract_field_info - Field accepted: {field_info}")
                 return field_info
@@ -805,7 +809,7 @@ class StepAnalyzer:
         except Exception as e:
             print(f"DEBUG: _extract_field_info - Exception: {str(e)}")
             return None
-    
+
     def _generate_selector(self, element) -> str:
         """Generate unique CSS selector for element"""
         # Strategy 1: Use ID selector (most unique)
@@ -874,7 +878,7 @@ class StepAnalyzer:
                         pass
 
         return selector or element_type
-    
+
     def _extract_page_context(self, parsed_form: Dict[str, Any]) -> Dict[str, str]:
         """Extract page context information like titles, headings, descriptions"""
         context = {
@@ -883,23 +887,23 @@ class StepAnalyzer:
             "main_heading": "",
             "description": ""
         }
-        
+
         try:
             # Get the root element (could be form or entire page)
             elements = parsed_form.get("elements")
             if not elements:
                 return context
-            
+
             # Find the root document element
             root = elements
             while root.parent:
                 root = root.parent
-            
+
             # Extract page title from <title> tag
             title_tag = root.find("title")
             if title_tag:
                 context["page_title"] = title_tag.get_text(strip=True)
-            
+
             # Extract main heading from h1, h2, etc.
             for tag in ["h1", "h2", "h3"]:
                 heading = root.find(tag)
@@ -908,7 +912,7 @@ class StepAnalyzer:
                     if heading_text:
                         context["main_heading"] = heading_text
                         break
-            
+
             # Extract form title from fieldset legend or form heading
             form_element = parsed_form.get("elements")
             if hasattr(form_element, 'find'):
@@ -916,7 +920,7 @@ class StepAnalyzer:
                 legend = form_element.find("legend")
                 if legend:
                     context["form_title"] = legend.get_text(strip=True)
-                
+
                 # Look for headings within form
                 for tag in ["h1", "h2", "h3", "h4"]:
                     form_heading = form_element.find(tag)
@@ -937,10 +941,10 @@ class StepAnalyzer:
                     if description_candidates:
                         # Use the first meaningful description
                         context["description"] = description_candidates[0][:200]  # Limit length
-            
+
         except Exception as e:
             print(f"DEBUG: Error extracting page context: {str(e)}")
-        
+
         return context
 
     def _find_general_question_for_radio_checkbox(self, field: Dict[str, Any]) -> str:
@@ -1065,7 +1069,7 @@ class StepAnalyzer:
         field_label = field.get("label", "")
         field_type = field.get("type", "")
         placeholder = field.get("placeholder", "")
-        
+
         # Generate question text using field-specific information first
         question_text = ""
 
@@ -1098,22 +1102,23 @@ class StepAnalyzer:
             # Strategy 4: Fallback to field type
             else:
                 question_text = f"{field_type} field"
-        
+
         # Clean up the question text
         question_text = question_text.strip()
-        
+
         # Remove common HTML artifacts and clean up
         import re
         question_text = re.sub(r'\s+', ' ', question_text)  # Multiple spaces to single
         question_text = re.sub(r'[\r\n\t]', ' ', question_text)  # Remove line breaks
-        
+
         # Ensure it ends properly (but don't force question marks for statements)
         if question_text and not question_text.endswith(('.', '?', ':')):
             # Only add question mark if it's clearly a question
-            if any(word in question_text.lower() for word in ['what', 'which', 'how', 'when', 'where', 'who', 'choose', 'select', 'enter']):
+            if any(word in question_text.lower() for word in
+                   ['what', 'which', 'how', 'when', 'where', 'who', 'choose', 'select', 'enter']):
                 if not question_text.endswith('?'):
                     question_text += '?'
-        
+
         return {
             "id": f"q_{field_name}_{uuid.uuid4().hex[:8]}",
             "field_selector": field["selector"],
@@ -1124,8 +1129,9 @@ class StepAnalyzer:
             "required": field.get("required", False),
             "options": field.get("options", [])
         }
-    
-    def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+
+    def _generate_ai_answer(self, question: Dict[str, Any], profile: Dict[str, Any],
+                            profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate AI answer for a field question - Modified to only use external dummy data"""
         try:
             # First attempt: try to answer with profile_data (fill_data), with dummy data as secondary context
@@ -1133,8 +1139,8 @@ class StepAnalyzer:
 
             # If we have good confidence and answer from profile data, use it
             if (primary_result["confidence"] >= 20 and  # Lowered threshold to prioritize real data
-                primary_result["answer"] and 
-                not primary_result["needs_intervention"]):
+                    primary_result["answer"] and
+                    not primary_result["needs_intervention"]):
                 print(
                     f"DEBUG: Using profile_data for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 primary_result["used_dummy_data"] = False
@@ -1182,7 +1188,7 @@ class StepAnalyzer:
                 "needs_intervention": True,  # Mark as needing intervention
                 "used_dummy_data": False
             }
-                
+
         except Exception as e:
             return {
                 "question_id": question.get("id", ""),
@@ -1195,7 +1201,8 @@ class StepAnalyzer:
                 "used_dummy_data": False
             }
 
-    def _generate_smart_dummy_data(self, question: Dict[str, Any], profile: Dict[str, Any], primary_result: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_smart_dummy_data(self, question: Dict[str, Any], profile: Dict[str, Any],
+                                   primary_result: Dict[str, Any]) -> Dict[str, Any]:
         """Generate intelligent dummy data using LLM"""
         try:
             field_name = question.get("field_name", "")
@@ -1219,7 +1226,7 @@ class StepAnalyzer:
                     any(keyword in field_name.lower() or keyword in field_label.lower()
                         for keyword in ["purpose", "type", "category", "status", "gender", "title"])
             )
-            
+
             prompt = f"""
             # Important Context - UK Visa Website
             ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
@@ -1229,9 +1236,9 @@ class StepAnalyzer:
             - For international addresses, clearly mark them as foreign/international
 
             Generate appropriate dummy data for this form field:
-            
+
             {context}
-            
+
             Requirements:
             1. Generate realistic, appropriate dummy data
             2. For sensitive fields (bank account, passport, SSN, credit card), return empty string
@@ -1239,16 +1246,16 @@ class StepAnalyzer:
             4. For names, use common placeholder names
             5. For addresses, use realistic but generic addresses
             6. For dates, use reasonable dates (e.g., birth date should be adult age)
-            
+
             {"7. IMPORTANT: This appears to be a mutually exclusive checkbox group. Select ONLY ONE option, not multiple." if is_mutually_exclusive_checkbox else ""}
-            
+
             Return JSON in this exact format:
             {{
                 "answer": "your_generated_value",
                 "confidence": 85,
                 "reasoning": "why this value was chosen"
             }}
-            
+
             For radio/checkbox with options, return the option value, not the display text.
             {"For mutually exclusive checkboxes, return only ONE value." if is_mutually_exclusive_checkbox else ""}
             """
@@ -1321,7 +1328,7 @@ class StepAnalyzer:
                 print(f"DEBUG: Smart dummy data JSON parse error: {str(parse_error)}")
                 # Fallback to basic dummy data generation
                 return self._generate_basic_dummy_data(question)
-                
+
         except Exception as e:
             print(f"DEBUG: Smart dummy data generation error: {str(e)}")
             # Fallback to basic dummy data generation
@@ -1401,7 +1408,7 @@ class StepAnalyzer:
 
             # Task
             Based on the user data from {source_name}, determine the appropriate value for this form field:
-            
+
             Field Name: {question['field_name']}
             Field Type: {question['field_type']}
             Field Label: {question['field_label']}
@@ -1409,18 +1416,18 @@ class StepAnalyzer:
             Required: {question['required']}
             Question: {question['question']}
             Available Options: {json.dumps(question.get('options', []), indent=2) if question.get('options') else "No specific options provided"}
-            
+
             ⚠️⚠️⚠️ CRITICAL REMINDER ⚠️⚠️⚠️: If Available Options shows multiple options above, you MUST analyze ALL of them!
-            
+
             # Primary Data Source ({source_name}):
             {json.dumps(data_source, indent=2)}
-            
+
             # Secondary Data Source (for context and cross-reference):
             {json.dumps(secondary_data, indent=2) if secondary_data else "None available"}
-            
+
             MANDATORY FIRST STEP: COMPREHENSIVE ANALYSIS
             Before attempting to answer, you MUST complete these steps IN ORDER:
-            
+
             STEP 1 - JSON DATA ANALYSIS:
             1. List ALL top-level fields in BOTH the Primary and Secondary data sources above
             2. List ALL nested fields (go deep into objects and arrays) in BOTH data sources
@@ -1428,14 +1435,14 @@ class StepAnalyzer:
             4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*) in BOTH sources
             5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*) in BOTH sources
             6. Cross-reference between Primary and Secondary data sources for comprehensive analysis
-            
+
             STEP 2 - OPTION ANALYSIS (if Available Options are provided):
             1. List ALL available options (both text and value)
             2. For each option, analyze what type of data it expects (boolean, numerical range, text, etc.)
             3. For numerical options (like "3 years or less", "More than 3 years"), identify the threshold values
             4. Determine which option(s) could match the data you found in Step 1
             5. CRITICAL: Your final answer must be the option text or value, NOT the original data value
-            
+
             # CRITICAL INSTRUCTIONS - DEEP JSON ANALYSIS AND SEMANTIC UNDERSTANDING:
              1. **COMPREHENSIVE JSON ANALYSIS**: FIRST, carefully read and analyze the ENTIRE JSON structure. List all available fields and their values before attempting to answer
              2. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
@@ -1493,12 +1500,12 @@ class StepAnalyzer:
             10. **VALIDATION**: Ensure the data type and format matches the field requirements
             11. **MUTUAL EXCLUSIVITY**: For radio/checkbox fields, select only ONE appropriate value
             12. **EMPTY DATA HANDLING**: If data exists but is empty/null, set needs_intervention=true
-            
+
             # Special Instructions for Telephone Fields:
             - For "telephoneNumber": Extract the actual phone number from contactInformation.telephoneNumber
             - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", "Business" -> "business")
             - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
-            
+
             # Special Instructions for SELECT Fields (Dropdown Lists):
             - For ALL select/dropdown fields: ALWAYS prefer the readable option text over option values/codes
             - This applies to country fields, category fields, type fields, status fields, etc.
@@ -1509,15 +1516,15 @@ class StepAnalyzer:
             - When user data shows "Electronics" or similar, answer should be "Electronics" (the readable text), not "ELEC" (the code)
             - For birth country, current country, nationality: Use the full country name from the option text, not the ISO code
             - The goal is to make the form more user-friendly by using human-readable values instead of technical codes
-            
+
             # SEMANTIC MATCHING EXAMPLES (CRITICAL - STUDY THESE PATTERNS):
-            
+
             ## BOOLEAN/YES-NO EXAMPLES:
             - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" = Answer: "false" (confidence 90+)
             - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: true" = Answer: "true" (confidence 90+)
             - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
             - Question about "contact by phone" + Data "canContactByPhone: false" = Answer: "false" (confidence 90+)
-            
+
             ## CRITICAL: REVERSE SEMANTIC UNDERSTANDING FOR NEGATIVE STATEMENTS:
             - Question "I do not have my parents' details" (checkbox) + Data "familyDetails.parents.provideDetails: false" = Answer: "true" (confidence 95+)
               * Logic: User does NOT want to provide details (false) → So they DO NOT have details (true/checked)
@@ -1525,17 +1532,17 @@ class StepAnalyzer:
               * Logic: User CAN be contacted (true) → So they CAN be contacted, not "cannot" (false/unchecked)
             - Question "I do not want to receive emails" + Data "wantsEmails: true" = Answer: "false" (confidence 90+)
               * Logic: User WANTS emails (true) → So they do NOT "not want" emails (false/unchecked)
-            
+
             ## PARENT/FAMILY DETAILS SPECIFIC EXAMPLES:
             - Question "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
             - Question "I do not have my parents' details" + Data "provideDetails: true" = Answer: "false" (confidence 95+)
             - Question "What if I do not have my parents' details?" with checkbox "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
-            
+
             ## DIRECT TEXT EXAMPLES:
             - Field "telephoneNumber" + Data "contactInformation.telephoneNumber: '+1234567890'" = Answer: "+1234567890" (confidence 95)
             - Field "telephoneNumberType" + Data "contactInformation.telephoneType: 'Mobile'" = Answer: "mobile" (confidence 90)
             - Field "givenName" + Data "personalDetails.givenName: 'John'" = Answer: "John" (confidence 95)
-            
+
             ## NUMERICAL RANGE EXAMPLES (MOST IMPORTANT FOR YOUR CASE):
             - Question "What is the length of the visa?" + Data "visaLength: '5 years'" + Options ["3 years or less", "More than 3 years"]:
               * Step 1: Found data "5 years"
@@ -1546,17 +1553,17 @@ class StepAnalyzer:
               * Step 1: Found data "2 years"  
               * Step 2: Check against "3 years or less" → 2 ≤ 3, so MATCH!
               * Final Answer: "3 years or less" (confidence 95)
-            
+
             ## KEY PRINCIPLE: 
             When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
-            
+
             ## CRITICAL FINAL STEP - ANSWER VALIDATION:
             Before providing your final JSON response, you MUST:
             1. Re-check that your "answer" field contains EXACTLY one of the available option values or texts
             2. If you found data like "5 years" and determined it matches "More than 3 years", your answer MUST be "More than 3 years" or "moreThanThreeYears"
             3. NEVER put the original data value (like "5 years") in the answer field when options are provided
             4. Double-check your logic: if your reasoning says option X matches, your answer MUST be option X
-            
+
             # Response Format (JSON only):
             {{
                 "answer": "your answer here or empty if no data available",
@@ -1564,34 +1571,34 @@ class StepAnalyzer:
                 "reasoning": "detailed explanation of data source and matching logic - BE SPECIFIC about which data field you used",
                 "needs_intervention": false
             }}
-            
+
             # Examples of HIGH confidence scenarios (70+):
             - Field "telephoneNumber" matches contactInformation.telephoneNumber
             - Field "givenName" matches personalDetails.givenName
             - Field "email" matches contactInformation.primaryEmail
             - Field "telephoneNumberType" can be mapped from contactInformation.telephoneType
-            
+
             # Examples of when needs_intervention should be true:
             - No matching data found in any nested structure
             - Data exists but is empty/null/undefined
             - Field is required but confidence is below 30
             - Data type mismatch that cannot be resolved
-            
+
             # Examples of when needs_intervention should be false:
             - Exact match found in data source (high confidence 70+)
             - Semantic match found in data source (medium confidence 50+)
             - Data type matches field requirements
             - Data is empty/null/undefined but field not required
-            
+
             REMEMBER: Your goal is to USE the real data provided whenever possible. Be generous with confidence scores for real data matches!
             """
 
             response = self._invoke_llm([HumanMessage(content=prompt)])
-            
+
             try:
                 # Try to parse JSON response using robust parsing
                 result = robust_json_parse(response.content)
-                
+
                 # Determine if intervention is needed based on AI response and confidence
                 needs_intervention = result.get("needs_intervention", False)
                 confidence = result.get("confidence", 0)
@@ -1617,14 +1624,14 @@ class StepAnalyzer:
                     answer = ""
                 else:
                     answer = str(answer)
-                
+
                 # Additional logic: if confidence is very low or answer is empty for required fields
                 if not needs_intervention:
                     if question.get("required", False) and not answer:
                         needs_intervention = True
                     elif confidence < 30:  # Very low confidence threshold
                         needs_intervention = True
-                
+
                 return {
                     "question_id": question["id"],
                     "field_selector": question["field_selector"],
@@ -1651,7 +1658,7 @@ class StepAnalyzer:
                     "reasoning": f"JSON parsing failed: {str(parse_error)}",
                     "needs_intervention": True
                 }
-                
+
         except Exception as e:
             return {
                 "question_id": question["id"],
@@ -1674,7 +1681,7 @@ class StepAnalyzer:
 
         # CRITICAL: Always generate action with selector and type
         # Even if no answer, we need to provide the basic action structure
-        
+
         # Get field information
         selector = merged_data["field_selector"]
         field_name = merged_data["field_name"]
@@ -1721,7 +1728,7 @@ class StepAnalyzer:
                         "type": "click",
                         "value": ""
                     })
-                
+
         elif field_type == "checkbox":
             # For checkboxes, handle multiple values separated by commas
             if answer:
@@ -1772,7 +1779,7 @@ class StepAnalyzer:
                 "type": "input",
                 "value": answer if answer else ""
             })
-            
+
         elif field_type == "select":
             # For select dropdowns, use input action with value (even if empty)
             actions.append({
@@ -1810,7 +1817,7 @@ class StepAnalyzer:
         question_selector = question.get("field_selector", "")
         question_id = question.get("id", "")
         question_field_name = question.get("field_name", "")
-        
+
         for answer in answers:
             # Try multiple matching strategies
             # Strategy 1: Match by field_selector (if both have it)
@@ -1827,7 +1834,7 @@ class StepAnalyzer:
             answer_field_name = answer.get("field_name", "")
             if question_field_name and answer_field_name and answer_field_name == question_field_name:
                 return answer
-        
+
         return None
 
     def _is_duration_comparison_match(self, ai_value: str, option_text: str) -> bool:
@@ -1877,9 +1884,10 @@ class StepAnalyzer:
             print(f"DEBUG: _is_duration_comparison_match - Error parsing values: {e}")
             return False
 
-    def _create_answer_data(self, question: Dict[str, Any], ai_answer: Optional[Dict[str, Any]], needs_intervention: bool) -> List[Dict[str, Any]]:
+    def _create_answer_data(self, question: Dict[str, Any], ai_answer: Optional[Dict[str, Any]],
+                            needs_intervention: bool) -> List[Dict[str, Any]]:
         """Create answer data array based on field type and AI answer
-        
+
         Updated logic:
         - If AI provided an answer (including dummy data): mark as check=1 and show the answer
         - If no answer at all: mark as check=0 for user selection
@@ -1909,7 +1917,7 @@ class StepAnalyzer:
 
                 # Enhanced matching logic for boolean/yes-no questions and numerical comparisons
                 ai_value_lower = ai_answer_value.lower().strip()
-                
+
                 for option in options:
                     option_value = option.get("value", "").lower()
                     option_text = option.get("text", "").lower()
@@ -1994,7 +2002,7 @@ class StepAnalyzer:
                     else:
                         # For radio/checkbox, keep using the original value
                         select_value = matched_option.get("value", "")
-                    
+
                     # 使用匹配选项的文本作为答案显示
                     return [{
                         "name": matched_option.get("text", matched_option.get("value", "")),
@@ -2030,7 +2038,7 @@ class StepAnalyzer:
                                 f"DEBUG: _create_answer_data - SELECT field default: using value '{default_value}' instead of text '{default_option.get('text', '')}'")
                         else:
                             default_value = default_option.get("value", "")
-                        
+
                         print(
                             f"DEBUG: _create_answer_data - No matching option found for AI answer '{ai_answer_value}', using first option: '{default_option.get('text', '')}' with selector '{default_selector}'")
                         return [{
@@ -2050,7 +2058,7 @@ class StepAnalyzer:
             else:
                 # 没有答案：存储完整选项列表供用户选择
                 answer_data = []
-                
+
                 for option in options:
                     # 构建选择器
                     if field_type == "autocomplete":
@@ -2073,14 +2081,14 @@ class StepAnalyzer:
                         else:
                             # 使用属性选择器
                             selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
-                    
+
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
                         "value": option_value_to_use,  # Use text for select, value for radio/checkbox
                         "check": 0,  # Not selected - waiting for user input
                         "selector": selector
                     })
-                
+
                 return answer_data
         else:
             # For text inputs, textarea, etc.
@@ -2104,7 +2112,7 @@ class StepAnalyzer:
     async def analyze_step_async(self, html_content: str, workflow_id: str, current_step_key: str) -> Dict[str, Any]:
         """
         异步版本的步骤分析 - 分析当前页面属于当前步骤还是下一步骤
-        
+
         改进逻辑：
         - 同时获取当前步骤和下一步骤的上下文信息
         - 使用 LLM 比较页面内容更符合哪个步骤
@@ -2207,25 +2215,25 @@ class StepAnalyzer:
             prompt = f"""
             # Role
             You are a workflow step analyzer. Determine which step this page belongs to.
-            
+
             # Task
             Analyze the current page content and determine if it belongs to the current step or the next step.
-            
+
             # Page Analysis:
             {json.dumps(page_analysis, indent=2, ensure_ascii=False)}
-            
+
             # Current Step Context ({current_step_key}):
             {json.dumps(current_step_context, indent=2, ensure_ascii=False)}
-            
+
             # Next Step Context ({next_step_key if next_step_key else 'None'}):
             {json.dumps(next_step_context, indent=2, ensure_ascii=False) if next_step_context else 'No next step available'}
-            
+
             # Instructions
             1. Compare the page content with both step contexts
             2. Determine which step the page content best matches
             3. Consider the questions being asked, form fields, and page title
             4. Provide confidence scores for your analysis
-            
+
             # Response Format (JSON only):
             {{
                 "belongs_to_current_step": true/false,
@@ -2235,7 +2243,7 @@ class StepAnalyzer:
                 "confidence_next": 0-100,
                 "reasoning": "detailed explanation of the analysis"
             }}
-            
+
             **IMPORTANT**: Return ONLY the JSON response, no other text.
             """
 
@@ -2283,7 +2291,7 @@ class StepAnalyzer:
 
 class LangGraphFormProcessor:
     """Form processor using LangGraph workflow"""
-    
+
     def __init__(self, db_session: Session):
         """Initialize processor with database session"""
         self.db = db_session
@@ -2373,11 +2381,11 @@ class LangGraphFormProcessor:
         if used_workflow_id:
             print(f"[workflow_id:{used_workflow_id}] DEBUG: Invoking LLM")
         return self.llm.invoke(messages)
-    
+
     def _create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
         workflow = StateGraph(FormAnalysisState)
-        
+
         # Add nodes
         workflow.add_node("html_parser", self._html_parser_node)
         workflow.add_node("field_detector", self._field_detector_node)
@@ -2389,10 +2397,10 @@ class LangGraphFormProcessor:
         workflow.add_node("llm_action_generator", self._llm_action_generator_node)  # New LLM-based action generator
         workflow.add_node("result_saver", self._result_saver_node)
         workflow.add_node("error_handler", self._error_handler_node)
-        
+
         # Set entry point
         workflow.set_entry_point("html_parser")
-        
+
         # Add edges
         workflow.add_edge("html_parser", "field_detector")
         workflow.add_edge("field_detector", "question_generator")
@@ -2404,7 +2412,7 @@ class LangGraphFormProcessor:
         workflow.add_edge("llm_action_generator", "result_saver")  # Updated edge
         workflow.add_edge("result_saver", END)
         workflow.add_edge("error_handler", END)
-        
+
         # Add conditional edges for error handling
         workflow.add_conditional_edges(
             "html_parser",
@@ -2414,9 +2422,9 @@ class LangGraphFormProcessor:
                 "error": "error_handler"
             }
         )
-        
+
         return workflow
-    
+
     def _check_llm_action_for_field(self, field_name: str, field_value: str, llm_actions: List[Dict[str, Any]]) -> bool:
         """Check if LLM actions contain a click action for the specific field value"""
         for action in llm_actions:
@@ -2430,17 +2438,19 @@ class LangGraphFormProcessor:
                     return True
         return False
 
-    def process_form(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any], profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    def process_form(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
+                     profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process form using LangGraph workflow"""
         try:
             print(f"DEBUG: process_form - Starting with workflow_id: {workflow_id}, step_key: {step_key}")
             print(f"DEBUG: process_form - HTML length: {len(form_html)}")
             print(f"DEBUG: process_form - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
-            print(f"DEBUG: process_form - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+            print(
+                f"DEBUG: process_form - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
 
             # Set workflow_id for thread isolation
             self.set_workflow_id(workflow_id)
-            
+
             # Create initial state
             initial_state = FormAnalysisState(
                 workflow_id=workflow_id,
@@ -2461,13 +2471,13 @@ class LangGraphFormProcessor:
                 error_details=None,
                 messages=[]
             )
-            
+
             # Run the workflow
             result = self.app.invoke(initial_state)
-            
+
             print(f"DEBUG: process_form - Workflow completed")
             print(f"DEBUG: process_form - Result keys: {list(result.keys())}")
-            
+
             # Check for errors
             if result.get("error_details"):
                 return {
@@ -2503,7 +2513,7 @@ class LangGraphFormProcessor:
                     "step_key": step_key
                 }
             }
-            
+
         except Exception as e:
             print(f"DEBUG: process_form - Exception: {str(e)}")
             return {
@@ -2525,7 +2535,7 @@ class LangGraphFormProcessor:
             workflow_id = state.get("workflow_id", "unknown")
             print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Starting")
             soup = BeautifulSoup(state["form_html"], 'html.parser')
-            
+
             # Find form element
             form = soup.find("form")
             if not form:
@@ -2542,12 +2552,12 @@ class LangGraphFormProcessor:
             self.step_analyzer._current_form_html = state["form_html"]
 
             print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Completed successfully")
-            
+
         except Exception as e:
             workflow_id = state.get("workflow_id", "unknown")
             print(f"[workflow_id:{workflow_id}] DEBUG: HTML Parser - Error: {str(e)}")
             state["error_details"] = f"HTML parsing failed: {str(e)}"
-        
+
         return state
 
     def _field_detector_node(self, state: FormAnalysisState) -> FormAnalysisState:
@@ -2555,15 +2565,15 @@ class LangGraphFormProcessor:
         try:
             workflow_id = state.get("workflow_id", "unknown")
             print(f"[workflow_id:{workflow_id}] DEBUG: Field Detector - Starting with optimizations")
-            
+
             if not state["parsed_form"]:
                 state["error_details"] = "No parsed form available"
                 return state
-            
+
             # 修复：从 HTML 字符串重新解析 BeautifulSoup 对象
             html_content = state["parsed_form"]["html_content"]
             form_elements = BeautifulSoup(html_content, 'html.parser')
-            
+
             detected_fields = []
             processed_field_groups = set()  # Track processed radio/checkbox groups
             field_groups = {}  # Track field groups for optimization
@@ -2571,7 +2581,7 @@ class LangGraphFormProcessor:
             # 🚀 NEW: First pass - detect autocomplete pairs
             autocomplete_pairs = {}
             processed_autocomplete = set()
-            
+
             if hasattr(form_elements, 'find_all'):
                 all_elements = form_elements.find_all(["input", "select", "textarea"])
 
@@ -2611,7 +2621,8 @@ class LangGraphFormProcessor:
                 for element in all_elements:
                     element_id = element.get("id", "")
                     element_name = element.get("name", "")
-                    element_type = element.get("type", "text").lower() if element.name == "input" else element.name.lower()
+                    element_type = element.get("type",
+                                               "text").lower() if element.name == "input" else element.name.lower()
 
                     # Skip if this element is part of an autocomplete pair that we've already processed
                     if element_id in processed_autocomplete:
@@ -2636,7 +2647,7 @@ class LangGraphFormProcessor:
                             print(
                                 f"DEBUG: Field Detector - Found autocomplete field: {field_info['name']} ({field_info['type']})")
                         continue
-                    
+
                     # For radio and checkbox fields, only process each group once
                     if element_type in ["radio", "checkbox"] and element_name:
                         group_key = f"{element_type}_{element_name}"
@@ -2674,19 +2685,19 @@ class LangGraphFormProcessor:
                                     print(
                                         f"DEBUG: Field Detector - Found related field {element_name} for group {group_name}")
                                     # Don't add to group, but mark the relationship for later processing
-                        
+
                         print(f"DEBUG: Field Detector - Found field: {field_info['name']} ({field_info['type']})")
-            
+
             state["detected_fields"] = detected_fields
             state["field_groups_info"] = field_groups  # Store grouping info
-            
+
             print(f"DEBUG: Field Detector - Found {len(detected_fields)} fields (after deduplication)")
             print(f"DEBUG: Field Detector - Created {len(field_groups)} field groups")
-            
+
         except Exception as e:
             print(f"DEBUG: Field Detector - Error: {str(e)}")
             state["error_details"] = f"Field detection failed: {str(e)}"
-        
+
         return state
 
     def _extract_autocomplete_field_info(self, autocomplete_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2741,7 +2752,7 @@ class LangGraphFormProcessor:
         """Node: Generate questions for form fields with grouping optimization and HTML position ordering"""
         try:
             print("DEBUG: Question Generator - Starting with optimizations and position ordering")
-            
+
             # Extract page context for better question generation
             page_context = self.step_analyzer._extract_page_context(state["parsed_form"])
             self.step_analyzer._page_context = page_context
@@ -2749,7 +2760,7 @@ class LangGraphFormProcessor:
             # 🚀 OPTIMIZATION: Use field groups to generate better questions
             field_groups_info = state.get("field_groups_info", {})
             detected_fields = state["detected_fields"]
-            
+
             questions = []
             processed_fields = set()
 
@@ -2864,25 +2875,25 @@ class LangGraphFormProcessor:
                 print(f"DEBUG: Question Generator - Error sorting questions by position: {str(e)}")
                 # Fallback to unsorted order
                 questions = all_questions
-            
+
             state["field_questions"] = questions
             print(
                 f"DEBUG: Question Generator - Generated {len(questions)} questions ({len(field_groups_info)} grouped), sorted by HTML position")
-            
+
         except Exception as e:
             print(f"DEBUG: Question Generator - Error: {str(e)}")
             state["error_details"] = f"Question generation failed: {str(e)}"
-        
+
         return state
 
     def _profile_retriever_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Retrieve user profile data (already provided in state)"""
         try:
             print("DEBUG: Profile Retriever - Starting")
-            
+
             # Profile data is already in state, just validate it
             profile_data = state.get("profile_data", {})
-            
+
             if not profile_data:
                 print("DEBUG: Profile Retriever - No profile data provided")
                 state["messages"].append({
@@ -2891,27 +2902,27 @@ class LangGraphFormProcessor:
                 })
             else:
                 print(f"DEBUG: Profile Retriever - Profile data available with {len(profile_data)} keys")
-            
+
         except Exception as e:
             print(f"DEBUG: Profile Retriever - Error: {str(e)}")
             state["error_details"] = f"Profile retrieval failed: {str(e)}"
-        
+
         return state
 
     def _ai_answerer_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Generate AI answers for questions"""
         try:
             print("DEBUG: AI Answerer - Starting")
-            
+
             answers = []
             dummy_usage = []
             profile_data = state.get("profile_data", {})
             profile_dummy_data = state.get("profile_dummy_data", {})
-            
+
             for question in state["field_questions"]:
                 answer = self.step_analyzer._generate_ai_answer(question, profile_data, profile_dummy_data)
                 answers.append(answer)
-                
+
                 # Track dummy data usage (including AI-generated dummy data)
                 if answer.get("used_dummy_data", False):
                     dummy_source = answer.get("dummy_data_source", "unknown")
@@ -2924,29 +2935,32 @@ class LangGraphFormProcessor:
                         "confidence": answer.get("confidence", 0),
                         "reasoning": answer.get("reasoning", "")
                     })
-                    
+
                     if dummy_source == "ai_generated":
-                        print(f"DEBUG: AI Answerer - Generated smart dummy data for {question['field_name']}: {answer['answer']} (confidence: {answer['confidence']})")
+                        print(
+                            f"DEBUG: AI Answerer - Generated smart dummy data for {question['field_name']}: {answer['answer']} (confidence: {answer['confidence']})")
                     else:
-                        print(f"DEBUG: AI Answerer - Used provided dummy data for {question['field_name']}: {answer['answer']}")
+                        print(
+                            f"DEBUG: AI Answerer - Used provided dummy data for {question['field_name']}: {answer['answer']}")
                 else:
-                    print(f"DEBUG: AI Answerer - Used profile data for {question['field_name']}: confidence={answer['confidence']}")
-            
+                    print(
+                        f"DEBUG: AI Answerer - Used profile data for {question['field_name']}: confidence={answer['confidence']}")
+
             state["ai_answers"] = answers
             state["dummy_data_usage"] = dummy_usage
             print(f"DEBUG: AI Answerer - Generated {len(answers)} answers, {len(dummy_usage)} used dummy data")
-            
+
         except Exception as e:
             print(f"DEBUG: AI Answerer - Error: {str(e)}")
             state["error_details"] = f"AI answer generation failed: {str(e)}"
-        
+
         return state
 
     def _qa_merger_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Merge questions and answers into unified data structure"""
         try:
             print("DEBUG: Q&A Merger - Starting")
-            
+
             questions = state.get("field_questions", [])
             answers = state.get("ai_answers", [])
 
@@ -2957,7 +2971,7 @@ class LangGraphFormProcessor:
                 print("DEBUG: Q&A Merger - No questions to process")
                 state["merged_qa_data"] = []
                 return state
-            
+
             # Group questions by question text to merge related fields
             question_groups = {}
             for i, question in enumerate(questions):
@@ -2969,18 +2983,19 @@ class LangGraphFormProcessor:
                 if "question" not in question:
                     print(f"DEBUG: Q&A Merger - Skipping question at index {i}: missing 'question' field")
                     continue
-                
+
                 question_text = question["question"]
                 if question_text not in question_groups:
                     question_groups[question_text] = []
                 question_groups[question_text].append(question)
 
             print(f"DEBUG: Q&A Merger - Created {len(question_groups)} question groups")
-            
+
             merged_data = []
-            
+
             for question_text, grouped_questions in question_groups.items():
-                print(f"DEBUG: Q&A Merger - Processing question group: '{question_text}' with {len(grouped_questions)} fields")
+                print(
+                    f"DEBUG: Q&A Merger - Processing question group: '{question_text}' with {len(grouped_questions)} fields")
 
                 # Validate grouped questions
                 valid_questions = []
@@ -3012,10 +3027,10 @@ class LangGraphFormProcessor:
                 if not valid_questions:
                     print(f"DEBUG: Q&A Merger - No valid questions in group '{question_text}', skipping")
                     continue
-                
+
                 # Determine the primary question (usually the first one or the main input field)
                 primary_question = self._find_primary_question(valid_questions)
-                
+
                 # Collect all related fields and their answers
                 all_field_data = []
                 all_needs_intervention = []
@@ -3025,38 +3040,39 @@ class LangGraphFormProcessor:
                 for question in valid_questions:
                     # Find corresponding answer
                     ai_answer = self.step_analyzer._find_answer_for_question(question, answers)
-                    
+
                     # Determine if intervention is needed for this field
-                    needs_intervention = (not ai_answer or 
-                                        ai_answer.get("needs_intervention", False) or 
-                                        ai_answer.get("confidence", 0) < 50)
-                    
+                    needs_intervention = (not ai_answer or
+                                          ai_answer.get("needs_intervention", False) or
+                                          ai_answer.get("confidence", 0) < 50)
+
                     all_needs_intervention.append(needs_intervention)
                     all_confidences.append(ai_answer.get("confidence", 0) if ai_answer else 0)
                     all_reasonings.append(ai_answer.get("reasoning", "") if ai_answer else "")
-                    
+
                     # Create answer data for this field
                     field_answer_data = self.step_analyzer._create_answer_data(question, ai_answer, needs_intervention)
                     all_field_data.extend(field_answer_data)
-                
+
                 # Determine the overall answer type based on the field types in the group
                 answer_type = self._determine_group_answer_type(valid_questions)
-                
+
                 # Determine overall intervention status (if any field needs intervention)
                 overall_needs_intervention = any(all_needs_intervention)
-                
+
                 # CRITICAL: Check if any answer data has check=1 (indicating an answer exists)
                 # If any answer has check=1, then no interrupt should be set regardless of needs_intervention
                 has_valid_answer = any(item.get("check", 0) == 1 for item in all_field_data)
-                
+
                 # Interrupt logic: only set interrupt if needs intervention AND no valid answer exists
                 should_interrupt = overall_needs_intervention and not has_valid_answer
-                
-                print(f"DEBUG: Q&A Merger - Question '{question_text}': needs_intervention={overall_needs_intervention}, has_valid_answer={has_valid_answer}, should_interrupt={should_interrupt}")
-                
+
+                print(
+                    f"DEBUG: Q&A Merger - Question '{question_text}': needs_intervention={overall_needs_intervention}, has_valid_answer={has_valid_answer}, should_interrupt={should_interrupt}")
+
                 # Calculate average confidence
                 avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
-                
+
                 # Combine all reasoning
                 combined_reasoning = "; ".join(filter(None, all_reasonings))
 
@@ -3067,7 +3083,7 @@ class LangGraphFormProcessor:
                     first_field_selector = all_field_data[0].get("selector", "")
                     if first_field_selector:
                         correct_selector = first_field_selector
-                
+
                 # Create merged data structure
                 merged_item = {
                     "question": {
@@ -3096,18 +3112,18 @@ class LangGraphFormProcessor:
                         "grouped_fields": [q.get("field_name", "") for q in valid_questions]  # Track all grouped fields
                     }
                 }
-                
+
                 # Add interrupt field at question level ONLY if should_interrupt is True
                 if should_interrupt:
                     merged_item["question"]["type"] = "interrupt"
                     interrupt_status = "interrupt"
                 else:
                     interrupt_status = "normal" if has_valid_answer else "no_answer_but_no_interrupt"
-                
+
                 merged_data.append(merged_item)
                 print(
                     f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(valid_questions)}, status={interrupt_status}")
-            
+
             state["merged_qa_data"] = merged_data
 
             # 🚀 OPTIMIZATION: Consistency checking
@@ -3130,61 +3146,63 @@ class LangGraphFormProcessor:
                                 item['question']['type'] = 'interrupt'
             else:
                 print("DEBUG: Q&A Merger - No consistency issues found")
-            
-            print(f"DEBUG: Q&A Merger - Created {len(merged_data)} merged question groups from {len(questions)} original questions")
-            
+
+            print(
+                f"DEBUG: Q&A Merger - Created {len(merged_data)} merged question groups from {len(questions)} original questions")
+
         except Exception as e:
             print(f"DEBUG: Q&A Merger - Error: {str(e)}")
             import traceback
             traceback.print_exc()
             state["error_details"] = f"Q&A merging failed: {str(e)}"
-        
+
         return state
 
     def _find_primary_question(self, grouped_questions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Find the primary question from a group of related questions"""
         # Priority order: input fields first, then radio, then checkbox, then select
-        type_priority = {"input": 1, "number": 1, "text": 1, "email": 1, "tel": 1, 
-                        "radio": 2, "checkbox": 3, "select": 4}
-        
+        type_priority = {"input": 1, "number": 1, "text": 1, "email": 1, "tel": 1,
+                         "radio": 2, "checkbox": 3, "select": 4}
+
         # Sort by type priority, then by field name length (shorter names are often primary)
-        sorted_questions = sorted(grouped_questions, 
-                                key=lambda q: (type_priority.get(q["field_type"], 5), len(q["field_name"])))
-        
+        sorted_questions = sorted(grouped_questions,
+                                  key=lambda q: (type_priority.get(q["field_type"], 5), len(q["field_name"])))
+
         return sorted_questions[0]
 
     def _determine_group_answer_type(self, grouped_questions: List[Dict[str, Any]]) -> str:
         """Determine the answer type for a group of related questions based on HTML field types"""
         if not grouped_questions:
             return "input"
-        
+
         # Get the primary question (most representative field)
         primary_question = self._find_primary_question(grouped_questions)
         primary_field_type = primary_question["field_type"]
         primary_field_name = primary_question.get("field_name", "unknown")
-        
+
         print(f"DEBUG: _determine_group_answer_type - Group has {len(grouped_questions)} fields")
-        print(f"DEBUG: _determine_group_answer_type - Primary field: '{primary_field_name}' (type: {primary_field_type})")
-        
+        print(
+            f"DEBUG: _determine_group_answer_type - Primary field: '{primary_field_name}' (type: {primary_field_type})")
+
         # Directly map the primary field's HTML type to answer component type
         answer_type = self._map_field_type_to_answer_type(primary_field_type)
-        
+
         print(f"DEBUG: _determine_group_answer_type - Final answer type: '{answer_type}'")
-        
+
         return answer_type
 
     def _combine_all_options(self, grouped_questions: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         """Combine options from all questions in a group"""
         all_options = []
         seen_values = set()
-        
+
         for question in grouped_questions:
             for option in question.get("options", []):
                 option_value = option.get("value", "")
                 if option_value and option_value not in seen_values:
                     all_options.append(option)
                     seen_values.add(option_value)
-        
+
         return all_options
 
     def _map_field_type_to_answer_type(self, field_type: str) -> str:
@@ -3192,7 +3210,7 @@ class LangGraphFormProcessor:
         type_mapping = {
             # Text input types
             "text": "input",
-            "email": "input", 
+            "email": "input",
             "password": "input",
             "number": "input",
             "tel": "input",
@@ -3207,29 +3225,30 @@ class LangGraphFormProcessor:
             "range": "input",
             "file": "input",
             "textarea": "input",
-            
+
             # Selection types
             "radio": "radio",
-            "checkbox": "checkbox", 
+            "checkbox": "checkbox",
             "select": "select",
             "select-one": "select",
             "select-multiple": "select",
-            
+
             # Button types (usually not for data input)
             "button": "button",
             "submit": "button",
             "reset": "button",
             "image": "button",
-            
+
             # Hidden and other types
             "hidden": "input"
         }
-        
+
         field_type_lower = field_type.lower()
         answer_type = type_mapping.get(field_type_lower, "input")
-        
-        print(f"DEBUG: _map_field_type_to_answer_type - HTML field type '{field_type}' mapped to answer type '{answer_type}'")
-        
+
+        print(
+            f"DEBUG: _map_field_type_to_answer_type - HTML field type '{field_type}' mapped to answer type '{answer_type}'")
+
         return answer_type
 
     def _generate_grouped_question(self, group_fields: List[Dict[str, Any]], base_name: str) -> Dict[str, Any]:
@@ -3445,10 +3464,10 @@ class LangGraphFormProcessor:
         """Node: Generate form actions from merged Q&A data"""
         try:
             print("DEBUG: Action Generator - Starting")
-            
+
             actions = []
             merged_data = state.get("merged_qa_data", [])
-            
+
             for item in merged_data:
                 # Extract metadata for action generation
                 metadata = item.get("_metadata", {})
@@ -3458,7 +3477,7 @@ class LangGraphFormProcessor:
                 is_interrupt = question_data.get("type") == "interrupt"
                 print(
                     f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')} (interrupt: {is_interrupt})")
-                
+
                 answer_data = question_data.get("answer", {})
 
                 # Extract answer value from the data array
@@ -3474,10 +3493,12 @@ class LangGraphFormProcessor:
                 print(
                     f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
 
-                # For checkbox and radio fields, we need to generate actions for each checked item
+                                # For checkbox and radio fields, we need to generate actions for each checked item
                 if metadata.get("field_type") in ["checkbox", "radio"]:
                     data_array = answer_data.get("data", [])
-                    precise_actions_generated = False
+                    has_checked_items = False
+                    
+                    # Check if any item should be checked
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # Generate action for this specific checked item
@@ -3487,11 +3508,17 @@ class LangGraphFormProcessor:
                                 "value": data_item.get("value", "")
                             }
                             actions.append(action)
-                            precise_actions_generated = True
+                            has_checked_items = True
                             print(f"DEBUG: Action Generator - Generated {metadata.get('field_type')} action: {action}")
-
-                    if precise_actions_generated:
-                        continue  # Skip the traditional action generation only if we generated precise actions
+                    
+                    # CRITICAL FIX: For checkboxes/radios, if no items should be checked (all check=0),
+                    # we should NOT generate any click actions. Skip to next field.
+                    if not has_checked_items:
+                        print(f"DEBUG: Action Generator - Skipping {metadata.get('field_name', 'unknown')} - no items to check (all check=0)")
+                        continue
+                    
+                    # If we generated actions for checked items, skip traditional generation
+                    continue
 
                 # For non-checkbox fields or checkboxes without checked items, use traditional generation
                 # Generate action for input fields and other field types
@@ -3528,7 +3555,7 @@ class LangGraphFormProcessor:
                                     action_value = item_name
                                     print(
                                         f"DEBUG: Action Generator - Using readable country name '{item_name}' instead of code '{item_value}'")
-                            
+
                             # Generate input action for this field
                             # 🚀 NEW: Determine action type based on field type
                             field_type = metadata.get("field_type", "")
@@ -3541,7 +3568,7 @@ class LangGraphFormProcessor:
                             else:
                                 # For other field types (text, email, etc.), use input action
                                 action_type = "input"
-                            
+
                             action = {
                                 "selector": data_item.get("selector", metadata.get("field_selector", "")),
                                 "type": action_type,
@@ -3552,7 +3579,7 @@ class LangGraphFormProcessor:
                             # 🚀 CRITICAL FIX: Process ALL data items, not just the first one
                             # This ensures multiple related fields (e.g., issue date AND expiry date) are all handled
                     continue  # Skip traditional generation for input fields
-                
+
                 # Create a compatible data structure for the existing action generator
                 compatible_item = {
                     "field_selector": metadata.get("field_selector", ""),
@@ -3585,7 +3612,7 @@ class LangGraphFormProcessor:
                     print(
                         f"DEBUG: Action Generator - Failed to generate action for {metadata.get('field_name', 'unknown')}: {str(action_error)}")
                     continue
-
+                    
             # 🚀 CRITICAL FIX: Always add submit button action at the end
             has_submit = any(
                 "submit" in action.get("selector", "").lower() or
@@ -3655,7 +3682,7 @@ class LangGraphFormProcessor:
 
             # Sort actions by HTML element position
             actions.sort(key=get_action_sort_key)
-            
+
             state["form_actions"] = actions
             print(f"DEBUG: Action Generator - Generated {len(actions)} actions total (including submit)")
             print("DEBUG: Action Generator - Actions sorted by HTML element position order")
@@ -3665,13 +3692,13 @@ class LangGraphFormProcessor:
                 position = get_action_sort_key(action)
                 print(
                     f"DEBUG: Action {i} (HTML Position {position}): {action.get('selector', 'no selector')} -> {action.get('type', 'no type')} ({action.get('value', 'no value')})")
-            
+
         except Exception as e:
             print(f"DEBUG: Action Generator - Error: {str(e)}")
             import traceback
             traceback.print_exc()
             state["error_details"] = f"Action generation failed: {str(e)}"
-        
+
         return state
 
     def _extract_answer_from_data(self, answer_data: Dict[str, Any]) -> str:
@@ -3696,7 +3723,7 @@ class LangGraphFormProcessor:
                         item_value.isupper() and
                         len(item_value) <= 3):
                     value = item_name  # Use "Turkey" instead of "TUR"
-                
+
                 # Ensure value is a string
                 if isinstance(value, list):
                     # If value is a list, join it or take first element
@@ -3712,7 +3739,7 @@ class LangGraphFormProcessor:
         # Return comma-separated values for multiple selections
         if checked_items:
             return ",".join(checked_items)
-        
+
         # If no checked item, return empty string
         return ""
 
@@ -3886,13 +3913,13 @@ class LangGraphFormProcessor:
                 response = self._invoke_llm([HumanMessage(content=prompt)], self._current_workflow_id)
             else:
                 response = self.llm.invoke([HumanMessage(content=prompt)])
-            
+
             print(f"DEBUG: LLM Action Generator - Received response: {response.content}")
 
             try:
                 # Try to parse JSON response using robust parsing
                 llm_result = robust_json_parse(response.content)
-                
+
                 if "actions" in llm_result:
                     actions = llm_result["actions"]
 
@@ -3924,11 +3951,11 @@ class LangGraphFormProcessor:
                             print(f"DEBUG: LLM Action Generator - Added submit action: {submit_action}")
                         else:
                             print("DEBUG: LLM Action Generator - No submit button found in HTML")
-                    
+
                     # Store the LLM-generated actions in the dedicated field
                     state["llm_generated_actions"] = actions
                     print(f"DEBUG: LLM Action Generator - Successfully parsed {len(actions)} actions")
-                    
+
                     # Log the types of actions generated for debugging
                     action_types = {}
                     action_values = []
@@ -3939,7 +3966,7 @@ class LangGraphFormProcessor:
                             action_values.append(f"{action.get('selector', 'unknown')}: {action.get('value')}")
                     print(f"DEBUG: LLM Action Generator - Action types: {action_types}")
                     print(f"DEBUG: LLM Action Generator - Action values: {action_values}")
-                    
+
                     state["messages"].append({
                         "type": "system",
                         "content": f"LLM generated {len(actions)} actions successfully using dummy data context. Types: {action_types}"
@@ -4146,17 +4173,17 @@ class LangGraphFormProcessor:
         """Node: Save results to database"""
         try:
             print("DEBUG: Result Saver - Starting")
-            
+
             # Get step instance
             step = self.step_repo.get_step_by_key(state["workflow_id"], state["step_key"])
             if not step:
                 print("DEBUG: Result Saver - Step not found, creating new step")
                 step = self.step_repo.create_step(state["workflow_id"], state["step_key"])
-            
+
             # Get existing data to preserve history
             existing_data = step.data or {}
             existing_history = existing_data.get("history", [])
-            
+
             # Create new operation record for history
             new_operation = {
                 "processed_at": datetime.utcnow().isoformat(),
@@ -4169,14 +4196,14 @@ class LangGraphFormProcessor:
                 "action_count": len(state.get("llm_generated_actions", [])),
                 "dummy_data_used_count": len(state.get("dummy_data_usage", []))
             }
-            
+
             # Add error details if present
             if state.get("error_details"):
                 new_operation["error_details"] = state["error_details"]
-            
+
             # Append new operation to history (newest at end)
             updated_history = existing_history + [new_operation]
-            
+
             # Prepare the main data structure in the expected format
             save_data = {
                 "form_data": state.get("merged_qa_data", []),  # 合并的问答数据
@@ -4196,14 +4223,14 @@ class LangGraphFormProcessor:
                 },
                 "history": updated_history  # 完整的历史记录
             }
-            
+
             # Add error details to metadata if present
             if state.get("error_details"):
                 save_data["metadata"]["error_details"] = state["error_details"]
-            
+
             # Save to database (replace existing data with new structure)
             self.step_repo.update_step_data(step.step_instance_id, save_data)
-            
+
             # Update WorkflowInstance with dummy data usage if any dummy data was used
             dummy_usage = state.get("dummy_data_usage", [])
             if dummy_usage:
@@ -4212,14 +4239,14 @@ class LangGraphFormProcessor:
                     workflow_instance = self.db.query(WorkflowInstance).filter(
                         WorkflowInstance.workflow_instance_id == state["workflow_id"]
                     ).first()
-                    
+
                     if workflow_instance:
                         # Get existing dummy data usage array or initialize empty
                         existing_dummy_usage = workflow_instance.dummy_data_usage or []
-                        
+
                         # Create new records for current processing using the tool function
                         new_records = self._create_workflow_dummy_data(dummy_usage, state["step_key"])
-                        
+
                         # For backward compatibility, also create simple records for all dummy usage
                         simple_records = []
                         for usage in dummy_usage:
@@ -4231,54 +4258,57 @@ class LangGraphFormProcessor:
                                 "source": usage.get("dummy_data_source", "unknown")
                             }
                             simple_records.append(simple_record)
-                        
+
                         # Append both detailed records and simple records to existing array (incremental update)
                         # This ensures both new format and backward compatibility
                         updated_dummy_usage = existing_dummy_usage + simple_records
-                        
+
                         # Update workflow instance
                         workflow_instance.dummy_data_usage = updated_dummy_usage
                         self.db.commit()
-                        
-                        print(f"DEBUG: Result Saver - Added {len(simple_records)} dummy data usage records to WorkflowInstance")
+
+                        print(
+                            f"DEBUG: Result Saver - Added {len(simple_records)} dummy data usage records to WorkflowInstance")
                         print(f"DEBUG: Result Saver - {len(new_records)} AI-generated dummy data records created")
                         print(f"DEBUG: Result Saver - Total dummy usage records: {len(updated_dummy_usage)}")
                     else:
-                        print(f"DEBUG: Result Saver - Warning: WorkflowInstance {state['workflow_id']} not found for dummy data update")
-                        
+                        print(
+                            f"DEBUG: Result Saver - Warning: WorkflowInstance {state['workflow_id']} not found for dummy data update")
+
                 except Exception as e:
                     print(f"DEBUG: Result Saver - Error updating WorkflowInstance dummy data usage: {str(e)}")
                     # Don't fail the whole operation if this update fails
-            
+
             # Store saved data in state for reference
             state["saved_step_data"] = save_data
-            
-            print(f"DEBUG: Result Saver - Saved data for step {state['step_key']} with {len(save_data['form_data'])} form_data items, {len(save_data['actions'])} actions, and {len(updated_history)} history records")
-            
+
+            print(
+                f"DEBUG: Result Saver - Saved data for step {state['step_key']} with {len(save_data['form_data'])} form_data items, {len(save_data['actions'])} actions, and {len(updated_history)} history records")
+
             # Mark analysis as complete
             state["analysis_complete"] = True
-            
+
         except Exception as e:
             print(f"DEBUG: Result Saver - Error: {str(e)}")
             state["error_details"] = f"Result saving failed: {str(e)}"
-        
+
         return state
 
     def _error_handler_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Handle errors"""
         try:
             print(f"DEBUG: Error Handler - Processing error: {state.get('error_details', 'Unknown error')}")
-            
+
             # Get step instance to preserve history
             step = self.step_repo.get_step_by_key(state["workflow_id"], state["step_key"])
             if not step:
                 print("DEBUG: Error Handler - Step not found, creating new step")
                 step = self.step_repo.create_step(state["workflow_id"], state["step_key"])
-            
+
             # Get existing data to preserve history
             existing_data = step.data or {}
             existing_history = existing_data.get("history", [])
-            
+
             # Create error operation record for history
             error_operation = {
                 "processed_at": datetime.utcnow().isoformat(),
@@ -4291,32 +4321,32 @@ class LangGraphFormProcessor:
                 "action_count": 0,  # No actions in error case
                 "error_details": state.get("error_details", "Unknown error")
             }
-            
+
             # Append error operation to history (newest at end)
             updated_history = existing_history + [error_operation]
-            
+
             # Create error response with question structure even on error
             error_questions = []
-            
+
             # Try to extract basic field information even if processing failed
             if state.get("detected_fields"):
                 for field in state["detected_fields"]:
                     # Map field type to answer component type
                     answer_type = self._map_field_type_to_answer_type(field.get("type", "text"))
-                    
+
                     # Create answer data with check=0 (no valid answer)
                     answer_data = [{
                         "name": "",
                         "value": "",
                         "check": 0  # No valid answer in error case
                     }]
-                    
+
                     # Apply interrupt logic: since check=0 (no valid answer) and needs_intervention=True,
                     # we should set interrupt=1
                     has_valid_answer = any(item.get("check", 0) == 1 for item in answer_data)
                     needs_intervention = True  # Always true in error case
                     should_interrupt = needs_intervention and not has_valid_answer  # True in error case
-                    
+
                     error_question = {
                         "question": {
                             "data": {
@@ -4342,18 +4372,19 @@ class LangGraphFormProcessor:
                             "has_valid_answer": has_valid_answer
                         }
                     }
-                    
+
                     # Add interrupt field ONLY if should_interrupt is True (which is always true in error case)
                     if should_interrupt:
                         error_question["question"]["type"] = "interrupt"
-                    
+
                     error_questions.append(error_question)
-                    print(f"DEBUG: Error Handler - Created error question for {field.get('name', 'unknown')}: interrupt={should_interrupt}")
-            
+                    print(
+                        f"DEBUG: Error Handler - Created error question for {field.get('name', 'unknown')}: interrupt={should_interrupt}")
+
             # Update state with error questions
             state["merged_qa_data"] = error_questions
             state["llm_generated_actions"] = []
-            
+
             # Save error data in the expected format
             error_save_data = {
                 "form_data": error_questions,  # 错误情况下的问答数据
@@ -4372,15 +4403,16 @@ class LangGraphFormProcessor:
                 },
                 "history": updated_history  # 包含错误记录的历史
             }
-            
+
             # Save error data to database
             self.step_repo.update_step_data(step.step_instance_id, error_save_data)
-            
+
             # Store saved data in state for reference
             state["saved_step_data"] = error_save_data
-            
-            print(f"DEBUG: Error Handler - Created {len(error_questions)} error questions and saved error data with {len(updated_history)} history records")
-            
+
+            print(
+                f"DEBUG: Error Handler - Created {len(error_questions)} error questions and saved error data with {len(updated_history)} history records")
+
         except Exception as e:
             print(f"DEBUG: Error Handler - Exception in error handling: {str(e)}")
             # Ensure we have some basic structure even if error handling fails
@@ -4391,16 +4423,16 @@ class LangGraphFormProcessor:
 
     def _create_workflow_dummy_data(self, dummy_usage: List[Dict[str, Any]], step_key: str) -> List[Dict[str, Any]]:
         """Create formatted dummy data for workflow instance storage
-        
+
         Args:
             dummy_usage: List of dummy data usage records
             step_key: Current step key
-            
+
         Returns:
             List of formatted dummy data records for workflow storage
         """
         workflow_dummy_data = []
-        
+
         for usage in dummy_usage:
             # Only include AI-generated dummy data in workflow storage
             # (provided dummy data from profile_dummy_data is not stored as it's already known)
@@ -4417,7 +4449,7 @@ class LangGraphFormProcessor:
                     "source": "ai_generated"
                 }
                 workflow_dummy_data.append(workflow_record)
-        
+
         return workflow_dummy_data
 
     async def _invoke_llm_async(self, messages: List, workflow_id: str = None):
@@ -4453,7 +4485,7 @@ class LangGraphFormProcessor:
 
             # Task
             Based on the user data from {source_name}, determine the appropriate value for this form field:
-            
+
             Field Name: {question['field_name']}
             Field Type: {question['field_type']}
             Field Label: {question['field_label']}
@@ -4461,29 +4493,29 @@ class LangGraphFormProcessor:
             Required: {question['required']}
             Question: {question['question']}
             Available Options: {json.dumps(question.get('options', []), indent=2) if question.get('options') else "No specific options provided"}
-            
+
             ⚠️⚠️⚠️ CRITICAL REMINDER ⚠️⚠️⚠️: If Available Options shows multiple options above, you MUST analyze ALL of them!
-            
+
             # User Data ({source_name}):
             {json.dumps(data_source, indent=2)}
-            
+
             MANDATORY FIRST STEP: COMPREHENSIVE ANALYSIS
             Before attempting to answer, you MUST complete these steps IN ORDER:
-            
+
             STEP 1 - JSON DATA ANALYSIS:
             1. List ALL top-level fields in the JSON above
             2. List ALL nested fields (go deep into objects and arrays)
             3. Identify any fields that could semantically relate to the question
             4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
             5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
-            
+
             STEP 2 - OPTION ANALYSIS (if Available Options are provided):
             1. List ALL available options (both text and value)
             2. For each option, analyze what type of data it expects (boolean, numerical range, text, etc.)
             3. For numerical options (like "3 years or less", "More than 3 years"), identify the threshold values
             4. Determine which option(s) could match the data you found in Step 1
             5. CRITICAL: Your final answer must be the option text or value, NOT the original data value
-            
+
             # Instructions - SEMANTIC UNDERSTANDING AND INTELLIGENT MATCHING
             1. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
             2. **INTELLIGENT MAPPING**: Use AI reasoning to connect data semantics to form questions
@@ -4528,17 +4560,17 @@ class LangGraphFormProcessor:
                - 50-69: Reasonable inference from context
                - 30-49: Weak match, uncertain
                - 0-29: No good semantic match found
-            
+
             ## KEY PRINCIPLE: 
             When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
-            
+
             ## CRITICAL FINAL STEP - ANSWER VALIDATION:
             Before providing your final JSON response, you MUST:
             1. Re-check that your "answer" field contains EXACTLY one of the available option values or texts
             2. If you found data like "5 years" and determined it matches "More than 3 years", your answer MUST be "More than 3 years" or "moreThanThreeYears"
             3. NEVER put the original data value (like "5 years") in the answer field when options are provided
             4. Double-check your logic: if your reasoning says option X matches, your answer MUST be option X
-            
+
             # Response Format (JSON only):
             {{
                 "answer": "value_to_fill_or_empty_string",
@@ -4548,7 +4580,7 @@ class LangGraphFormProcessor:
                 "data_source_path": "path.to.data.in.source",
                 "field_match_type": "exact|semantic|inferred|none"
             }}
-            
+
             **IMPORTANT**: Return ONLY the JSON response, no other text.
             """
 
@@ -4634,26 +4666,26 @@ class LangGraphFormProcessor:
 
             # Task
             Generate appropriate dummy data for this form field:
-            
+
             Field Name: {question['field_name']}
             Field Type: {question['field_type']}
             Field Label: {question['field_label']}
             Required: {question['required']}
             Question: {question['question']}
-            
+
             # Context (available user data for context):
             {json.dumps(profile, indent=2, ensure_ascii=False)}
-            
+
             # Previous Analysis Result:
             {json.dumps(fallback_result, indent=2, ensure_ascii=False)}
-            
+
             # Instructions
             1. Generate realistic dummy data that matches the field type and purpose
             2. Use context from available user data when possible (e.g., if user has UK address, generate UK phone number)
             3. Follow common formats and conventions for the field type
             4. Ensure the data is appropriate for the field's purpose
             5. Set confidence based on how well you can generate appropriate data
-            
+
             # Field Type Guidelines:
             - **Phone/Telephone**: Use format appropriate to user's country/region
             - **Email**: Generate realistic email addresses
@@ -4664,7 +4696,7 @@ class LangGraphFormProcessor:
             - **Text**: Generate contextually appropriate text
             - **Checkboxes/Radio**: Choose most likely option
             - **Select**: Choose most common/appropriate option
-            
+
             # Response Format (JSON only):
             {{
                 "answer": "generated_dummy_value",
@@ -4673,7 +4705,7 @@ class LangGraphFormProcessor:
                 "needs_intervention": false,
                 "dummy_data_type": "phone|email|name|address|date|number|text|selection|other"
             }}
-            
+
             **IMPORTANT**: Return ONLY the JSON response, no other text.
             """
 
@@ -4746,7 +4778,7 @@ class LangGraphFormProcessor:
         if "phone" in field_name or "tel" in field_name or field_type == "tel":
             return "07123456789"
 
-        # Email fields  
+        # Email fields
         elif "email" in field_name or field_type == "email":
             return "user@example.com"
 
@@ -4762,7 +4794,7 @@ class LangGraphFormProcessor:
         elif field_type in ["date", "datetime-local"]:
             return "1990-01-01"
 
-        # Number fields  
+        # Number fields
         elif field_type == "number" or "number" in field_name:
             return "123"
 
@@ -4777,8 +4809,6 @@ class LangGraphFormProcessor:
         # Default text
         else:
             return "Sample Data"
-
-
 
     async def process_form_async(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -5198,7 +5228,7 @@ class LangGraphFormProcessor:
 
                         if not selector:
                             print(f"DEBUG: Skipping item without selector: {data_item}")
-                            continue
+                        continue
 
                         # Determine action type based on field type
                         if field_type in ["radio", "checkbox"]:
@@ -5522,18 +5552,18 @@ class LangGraphFormProcessor:
 
             # Task
             Analyze ALL the following form fields and provide answers based on the user data:
-            
+
             # Form Fields to Analyze:
             {json.dumps(fields_data, indent=2, ensure_ascii=False)}
-            
+
             ⚠️⚠️⚠️ CRITICAL REMINDER ⚠️⚠️⚠️: For each field above that has "options" array, you MUST check your answer against ALL options in that array!
-            
+
             # User Data (fill_data):
             {json.dumps(profile_data, indent=2, ensure_ascii=False)}
-            
+
             # Profile Dummy Data (backup data):
             {json.dumps(profile_dummy_data, indent=2, ensure_ascii=False) if profile_dummy_data else "None"}
-            
+
             MANDATORY FIRST STEP: COMPREHENSIVE JSON ANALYSIS
             Before attempting to answer any field, you MUST:
             1. List ALL top-level fields in the User Data and Profile Dummy Data above
@@ -5541,7 +5571,7 @@ class LangGraphFormProcessor:
             3. Identify any fields that could semantically relate to ANY of the form questions
             4. Pay special attention to boolean fields (has*, is*, can*, allow*, enable*)
             5. Look for email-related fields (hasOtherEmail*, additionalEmail*, secondaryEmail*)
-            
+
             # Instructions - SEMANTIC UNDERSTANDING AND INTELLIGENT MATCHING
             1. **SEMANTIC UNDERSTANDING**: Understand the MEANING of each data field, not just the field name
             2. **DATA PRIORITY**: 
@@ -5569,27 +5599,27 @@ class LangGraphFormProcessor:
                - Use logical comparison (numerical, boolean, string matching)
                - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
             6. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
-               
+
                ## BOOLEAN/YES-NO EXAMPLES:
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
-               
+
                ## CRITICAL: REVERSE SEMANTIC UNDERSTANDING FOR NEGATIVE STATEMENTS:
                - Question "I do not have my parents' details" (checkbox) + Data "familyDetails.parents.provideDetails: false" = Answer: "true" (confidence 95+)
                  * Logic: User does NOT want to provide details (false) → So they DO NOT have details (true/checked)
                - Question "I cannot be contacted by phone" + Data "canContactByPhone: true" = Answer: "false" (confidence 90+)
                  * Logic: User CAN be contacted (true) → So they CAN be contacted, not "cannot" (false/unchecked)
-               
+
                ## PARENT/FAMILY DETAILS SPECIFIC EXAMPLES:
                - Question "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
                - Question "I do not have my parents' details" + Data "provideDetails: true" = Answer: "false" (confidence 95+)
                - Question "What if I do not have my parents' details?" with checkbox "I do not have my parents' details" + Data "provideDetails: false" = Answer: "true" (confidence 95+)
-               
+
                ## DIRECT TEXT EXAMPLES:
                - Field about "telephone" + Data "contactInformation.telephoneNumber" → Use the phone number
                - Field about "name" + Data "personalDetails.givenName" → Use the name
-               
+
                ## NUMERICAL RANGE EXAMPLES (MOST IMPORTANT):
                - Question "What is the length of the visa?" + Data "visaLength: '5 years'" + Options ["3 years or less", "More than 3 years"]:
                  * Step 1: Found data "5 years"
@@ -5600,10 +5630,10 @@ class LangGraphFormProcessor:
                  * Step 1: Found data "2 years"  
                  * Step 2: Check against "3 years or less" → 2 ≤ 3, so MATCH!
                  * Final Answer: "3 years or less" (confidence 95)
-               
+
                ## KEY PRINCIPLE: 
                When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
-               
+
                ## CRITICAL FINAL STEP - ANSWER VALIDATION:
                Before providing your final JSON response, you MUST:
                1. For each field with options, re-check that your "answer" field contains EXACTLY one of the available option values or texts
@@ -5617,7 +5647,7 @@ class LangGraphFormProcessor:
                - 50-69: Reasonable inference from context
                - 30-49: Weak match, uncertain
                - 0-29: No good semantic match found
-            
+
             # Response Format (JSON array with one object per field):
             [
                 {{
@@ -5632,7 +5662,7 @@ class LangGraphFormProcessor:
                 }},
                 ...
             ]
-            
+
             **IMPORTANT**: Return ONLY the JSON array, no other text. Process ALL {len(questions)} fields.
             """
 
@@ -5660,7 +5690,7 @@ class LangGraphFormProcessor:
                             used_dummy_data = ("contactInformation" in result.get("data_source_path", "") or
                                                "dummy" in result.get("reasoning", "").lower() or
                                                result.get("confidence", 0) >= 70 and result.get("answer", ""))
-                            
+
                             formatted_result = {
                                 "question_id": question["id"],
                                 "field_selector": question["field_selector"],
