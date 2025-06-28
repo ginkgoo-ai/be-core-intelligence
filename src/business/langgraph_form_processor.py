@@ -3549,7 +3549,8 @@ class LangGraphFormProcessor:
                             }
                             actions.append(action)
                             print(f"DEBUG: Action Generator - Generated {action['type']} action: {action}")
-                            break  # Only need one input action per field
+                            # 🚀 CRITICAL FIX: Process ALL data items, not just the first one
+                            # This ensures multiple related fields (e.g., issue date AND expiry date) are all handled
                     continue  # Skip traditional generation for input fields
                 
                 # Create a compatible data structure for the existing action generator
