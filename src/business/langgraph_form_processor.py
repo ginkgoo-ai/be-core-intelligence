@@ -1994,26 +1994,31 @@ class StepAnalyzer:
                         # 生成指向特定选项值的选择器
                         field_name = question.get("field_name", "")
                         option_value = matched_option.get("value", "")
+                        original_selector = question.get("field_selector", "")
 
                         # 🚀 OPTIMIZATION: 智能选择器生成
-                        # 首先尝试使用字段名+值的ID格式（最常见的模式）
-                        if option_value in ["true", "false"]:
-                            # 尝试常见的ID模式
-                            possible_selectors = [
-                                f"#{field_name}_{option_value}",  # addAnother_false
-                                f"#value_{option_value}",  # value_false
-                                f"#{field_name}_{option_value.title()}",  # addAnother_False
-                                f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"  # fallback
-                            ]
+                        # 首先检查原始selector是否直接可用（单选项checkbox的情况）
+                        if field_type == "checkbox" and len(options) == 1:
+                            # 单选项checkbox通常直接使用原始字段selector
+                            correct_selector = original_selector
                         else:
-                            # 对于非布尔值，使用属性选择器
-                            possible_selectors = [
-                                f"#{field_name}_{option_value}",
-                                f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
-                            ]
-
-                        # 选择第一个可能的选择器作为主选择器
-                        correct_selector = possible_selectors[0]
+                            # 多选项radio/checkbox，需要生成指向特定选项的selector
+                            if option_value in ["true", "false"]:
+                                # 尝试常见的ID模式
+                                possible_selectors = [
+                                    f"#{field_name}_{option_value}",  # addAnother_false
+                                    f"#value_{option_value}",  # value_false
+                                    f"#{field_name}_{option_value.title()}",  # addAnother_False
+                                    f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"  # fallback
+                                ]
+                            else:
+                                possible_selectors = [
+                                    f"#{field_name}_{option_value}",
+                                    f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                                ]
+                            
+                            # 选择第一个可能的选择器作为主选择器
+                            correct_selector = possible_selectors[0]
                     else:
                         correct_selector = question["field_selector"]
 
@@ -2051,11 +2056,18 @@ class StepAnalyzer:
                         if field_type in ["radio", "checkbox"]:
                             field_name = question.get("field_name", "")
                             option_value = default_option.get("value", "")
+                            original_selector = question.get("field_selector", "")
 
-                            if option_value in ["true", "false"]:
-                                default_selector = f"#{field_name}_{option_value}"  # 使用字段名+值的格式
+                            # 首先检查原始selector是否直接可用（单选项checkbox的情况）
+                            if field_type == "checkbox" and len(options) == 1:
+                                # 单选项checkbox通常直接使用原始字段selector
+                                default_selector = original_selector
                             else:
-                                default_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                                # 多选项radio/checkbox，需要生成指向特定选项的selector
+                                if option_value in ["true", "false"]:
+                                    default_selector = f"#{field_name}_{option_value}"  # 使用字段名+值的格式
+                                else:
+                                    default_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
                         else:
                             default_selector = question["field_selector"]
 
@@ -2106,13 +2118,20 @@ class StepAnalyzer:
                         field_name = question.get("field_name", "")
                         option_value = option.get("value", "")
                         option_value_to_use = option_value  # Keep original value for radio/checkbox
+                        original_selector = question.get("field_selector", "")
 
-                        # 使用字段名+值的ID格式（最常见的模式）
-                        if option_value in ["true", "false"]:
-                            selector = f"#{field_name}_{option_value}"  # addAnother_false
+                        # 首先检查原始selector是否直接可用（单选项checkbox的情况）
+                        if field_type == "checkbox" and len(options) == 1:
+                            # 单选项checkbox通常直接使用原始字段selector
+                            selector = original_selector
                         else:
-                            # 使用属性选择器
-                            selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                            # 多选项radio/checkbox，需要生成指向特定选项的selector
+                            # 使用字段名+值的ID格式（最常见的模式）
+                            if option_value in ["true", "false"]:
+                                selector = f"#{field_name}_{option_value}"  # addAnother_false
+                            else:
+                                # 使用属性选择器
+                                selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
 
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
@@ -3752,10 +3771,48 @@ class LangGraphFormProcessor:
             # Sort actions by HTML position, keeping submit buttons at the end
             def get_action_sort_key(action):
                 selector = action.get("selector", "").lower()
+                
+                # Submit buttons always go last
                 if "submit" in selector or action.get("type") == "submit":
                     return 99999  # Always put submit buttons at the very end
-                else:
-                    return get_element_position_in_html(action)
+                
+                # Details expand actions (summary elements) should go before dependent fields
+                # Check if this is a details expand action
+                if ("summary" in selector and 
+                    ("aria-controls" in selector or action.get("type") == "click")):
+                    # Find the lowest position of any field that might depend on this details
+                    min_dependent_position = 99999
+                    
+                    # Extract details ID from aria-controls attribute
+                    details_id = None
+                    if "aria-controls=" in selector:
+                        try:
+                            start = selector.find("aria-controls='") + 15
+                            end = selector.find("'", start)
+                            if start > 14 and end > start:
+                                details_id = selector[start:end]
+                        except:
+                            pass
+                    
+                    # If we found details ID, look for fields that might be inside this details
+                    if details_id:
+                        for other_action in actions:
+                            other_selector = other_action.get("selector", "")
+                            # This is a rough check - in practice, fields inside details would be
+                            # positioned after the details element in HTML
+                            if other_selector != selector:  # Don't compare with self
+                                other_position = get_element_position_in_html(other_action)
+                                if other_position < min_dependent_position:
+                                    min_dependent_position = other_position
+                    
+                    # Place details expand action slightly before the first dependent field
+                    if min_dependent_position < 99999:
+                        return max(0, min_dependent_position - 1)
+                    else:
+                        return 0  # If no dependent fields found, put at the beginning
+                
+                # For all other actions, use HTML position
+                return get_element_position_in_html(action)
 
             # Sort actions by HTML element position
             actions.sort(key=get_action_sort_key)
