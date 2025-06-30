@@ -1162,6 +1162,14 @@ class StepAnalyzer:
                         dummy_result["answer"] and not dummy_result["needs_intervention"]:
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
+                    
+                    # 🚀 SPECIAL HANDLING: Remove "+" from phone code fields  
+                    if self._is_phone_code_field(question):
+                        original_answer = dummy_result["answer"]
+                        if original_answer and original_answer.startswith("+"):
+                            dummy_result["answer"] = original_answer[1:]  # Remove the "+" prefix
+                            print(f"DEBUG: Removed '+' from phone code field {question['field_name']}: '{original_answer}' -> '{dummy_result['answer']}'")
+                    
                     print(
                         f"DEBUG: ✅ Using external dummy data for field {question['field_name']}: answer='{dummy_result['answer']}', confidence={dummy_result['confidence']}")
                     return dummy_result
@@ -1505,6 +1513,30 @@ class StepAnalyzer:
             - For "telephoneNumber": Extract the actual phone number from contactInformation.telephoneNumber
             - For "telephoneNumberType": Map from contactInformation.telephoneType ("Mobile" -> "mobile", "Home" -> "home", "Business" -> "business")
             - For "telephoneNumberPurpose": If from contactInformation, likely "useInUK" (give high confidence)
+            - For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
+              * Field asking for "international code", "country code", "phone code" etc.
+              * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
+              * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
+              * This applies to any field that semantically represents a phone country code
+              
+            # ⚠️⚠️⚠️ CRITICAL: Field Requirements and Constraints ⚠️⚠️⚠️
+            BEFORE generating ANY answer, you MUST examine the field data for constraints:
+            
+            **Character Limits**: Check field data for:
+            - "maxlength" attribute: maxlength="500" means answer must be ≤ 500 characters
+            - Validation error messages: "maximum 500 characters", "Required field"
+            - Character count displays: "X characters remaining of Y characters"
+            
+            **Content Adaptation for Limits**:
+            - If data exceeds character limits, prioritize key information
+            - For 500 char limit: Include purpose + key dates + essential details only
+            - Remove redundant phrases, verbose language, unnecessary details
+            - Maintain factual accuracy while staying within constraints
+            
+            **Examples**:
+            - Field with maxlength="500" → Answer MUST be ≤ 500 characters
+            - Validation showing "maximum 500 characters" → Shorten existing content
+            - Required field → Generate appropriate content or flag for intervention
 
             # Special Instructions for SELECT Fields (Dropdown Lists):
             - For ALL select/dropdown fields: ALWAYS prefer the readable option text over option values/codes
@@ -3473,32 +3505,41 @@ class LangGraphFormProcessor:
                 metadata = item.get("_metadata", {})
                 question_data = item.get("question", {})
 
-                # CHANGED: Don't skip interrupt fields - generate basic actions for them too
+                # Skip fields that need human intervention
+                needs_intervention = metadata.get('needs_intervention', False)
+                has_valid_answer = metadata.get('has_valid_answer', False)
                 is_interrupt = question_data.get("type") == "interrupt"
-                print(
-                    f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')} (interrupt: {is_interrupt})")
+                
+                print(f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')}")
+                print(f"DEBUG: Action Generator - Field type: {metadata.get('field_type', 'unknown')}")
+                print(f"DEBUG: Action Generator - Needs intervention: {needs_intervention}")
+                print(f"DEBUG: Action Generator - Has valid answer: {has_valid_answer}")
+                print(f"DEBUG: Action Generator - Is interrupt: {is_interrupt}")
+
+                # Skip fields that need intervention or are interrupt fields
+                if needs_intervention or is_interrupt or not has_valid_answer:
+                    print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - intervention needed or no valid answer")
+                    continue
 
                 answer_data = question_data.get("answer", {})
 
                 # Extract answer value from the data array
                 answer_value = self._extract_answer_from_data(answer_data)
-
-                print(f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')}")
-                print(f"DEBUG: Action Generator - Field type: {metadata.get('field_type', 'unknown')}")
                 print(f"DEBUG: Action Generator - Answer value: '{answer_value}'")
-                print(f"DEBUG: Action Generator - Needs intervention: {metadata.get('needs_intervention', False)}")
-                print(f"DEBUG: Action Generator - Has valid answer: {metadata.get('has_valid_answer', False)}")
 
-                # CRITICAL: Always generate action with selector and type, even if no answer
+                # Skip if no meaningful answer value
+                if not answer_value or answer_value.strip() == "":
+                    print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - empty answer")
+                    continue
+
+                # Generate action for fields with valid answers
                 print(
                     f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
 
-                                # For checkbox and radio fields, we need to generate actions for each checked item
+                # For checkbox and radio fields, we need to generate actions for each checked item
                 if metadata.get("field_type") in ["checkbox", "radio"]:
                     data_array = answer_data.get("data", [])
-                    has_checked_items = False
-                    
-                    # Check if any item should be checked
+                    precise_actions_generated = False
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # Generate action for this specific checked item
@@ -3508,17 +3549,11 @@ class LangGraphFormProcessor:
                                 "value": data_item.get("value", "")
                             }
                             actions.append(action)
-                            has_checked_items = True
+                            precise_actions_generated = True
                             print(f"DEBUG: Action Generator - Generated {metadata.get('field_type')} action: {action}")
                     
-                    # CRITICAL FIX: For checkboxes/radios, if no items should be checked (all check=0),
-                    # we should NOT generate any click actions. Skip to next field.
-                    if not has_checked_items:
-                        print(f"DEBUG: Action Generator - Skipping {metadata.get('field_name', 'unknown')} - no items to check (all check=0)")
-                        continue
-                    
-                    # If we generated actions for checked items, skip traditional generation
-                    continue
+                    if precise_actions_generated:
+                        continue  # Skip the traditional action generation only if we generated precise actions
 
                 # For non-checkbox fields or checkboxes without checked items, use traditional generation
                 # Generate action for input fields and other field types
@@ -3630,7 +3665,7 @@ class LangGraphFormProcessor:
                 else:
                     print("DEBUG: Action Generator - No submit button found in HTML")
 
-            # 🚀 CRITICAL FIX: Sort actions by HTML element position order
+            # 🚀 IMPROVED: Sort actions by HTML element position order with better detection
             def get_element_position_in_html(action):
                 """Get the position of element in HTML to maintain visual order"""
                 try:
@@ -3639,43 +3674,75 @@ class LangGraphFormProcessor:
                     # Parse HTML to find element positions
                     soup = BeautifulSoup(state["form_html"], 'html.parser')
                     selector = action.get("selector", "")
+                    element = None
 
-                    # Handle different selector formats
+                    # Enhanced selector parsing
                     if selector.startswith("#"):
-                        # ID selector
+                        # ID selector like "#parent_givenName"
                         element_id = selector[1:]
-                        element = soup.find(id=element_id)
-                    elif "submit" in selector and "[" in selector:
-                        # Attribute selector like input[id='submit'][type='submit']
-                        element = soup.find("input", {"type": "submit"})
-                        if not element:
-                            element = soup.find("button", {"type": "submit"})
+                        element = soup.find(attrs={"id": element_id})
+                    elif selector.startswith("input[") and "name=" in selector:
+                        # Name-based selector like "input[name='parent.givenName']"
+                        name_start = selector.find("name='") + 6
+                        name_end = selector.find("'", name_start)
+                        if name_start > 5 and name_end > name_start:
+                            field_name = selector[name_start:name_end]
+                            element = soup.find("input", {"name": field_name})
+                    elif selector.startswith("select[") and "name=" in selector:
+                        # Select name-based selector
+                        name_start = selector.find("name='") + 6
+                        name_end = selector.find("'", name_start)
+                        if name_start > 5 and name_end > name_start:
+                            field_name = selector[name_start:name_end]
+                            element = soup.find("select", {"name": field_name})
+                    elif selector.startswith("textarea[") and "name=" in selector:
+                        # Textarea name-based selector
+                        name_start = selector.find("name='") + 6
+                        name_end = selector.find("'", name_start)
+                        if name_start > 5 and name_end > name_start:
+                            field_name = selector[name_start:name_end]
+                            element = soup.find("textarea", {"name": field_name})
+                    elif "submit" in selector.lower():
+                        # Submit button selectors
+                        element = soup.find("input", {"type": "submit"}) or soup.find("button", {"type": "submit"})
                     else:
-                        # Try to find by selector (simplified)
-                        element = soup.select_one(selector)
+                        # Try CSS selector as fallback
+                        try:
+                            element = soup.select_one(selector)
+                        except Exception:
+                            print(f"DEBUG: Failed to parse CSS selector: {selector}")
 
                     if element:
-                        # Get all form elements to determine position
-                        all_elements = soup.find_all(["input", "select", "textarea", "button"])
+                        # Create ordered list of all form elements
+                        all_form_elements = []
+                        for tag in soup.find_all(["input", "select", "textarea", "button", "fieldset"]):
+                            all_form_elements.append(tag)
+                        
                         try:
-                            position = all_elements.index(element)
+                            position = all_form_elements.index(element)
                             print(f"DEBUG: Element {selector} found at position {position}")
                             return position
                         except ValueError:
-                            print(f"DEBUG: Element {selector} not found in all_elements list")
-                            return 9999  # Put at end if not found
+                            print(f"DEBUG: Element {selector} not found in form elements list")
+                            # Try to get a rough position by text content search
+                            html_text = state["form_html"]
+                            if element.get("name"):
+                                name_pos = html_text.find(f'name="{element.get("name")}"')
+                                if name_pos > 0:
+                                    return name_pos // 100  # Rough position estimate
+                            return 9999
                     else:
                         print(f"DEBUG: Element {selector} not found in HTML")
-                        return 9999  # Put at end if not found
+                        return 9999
 
                 except Exception as e:
                     print(f"DEBUG: Error getting element position for {selector}: {str(e)}")
-                    return 9999  # Put at end if error
+                    return 9999
 
-            # Sort actions by HTML position, but keep submit buttons at the end
+            # Sort actions by HTML position, keeping submit buttons at the end
             def get_action_sort_key(action):
                 selector = action.get("selector", "").lower()
-                if "submit" in selector:
+                if "submit" in selector or action.get("type") == "submit":
                     return 99999  # Always put submit buttons at the very end
                 else:
                     return get_element_position_in_html(action)
@@ -4561,6 +4628,32 @@ class LangGraphFormProcessor:
                - 30-49: Weak match, uncertain
                - 0-29: No good semantic match found
 
+            # Special Instructions for Phone/Country Code Fields:
+            - For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
+              * Field asking for "international code", "country code", "phone code" etc.
+              * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
+              * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
+              * This applies to any field that semantically represents a phone country code
+
+            # ⚠️⚠️⚠️ CRITICAL: Field Requirements and Constraints ⚠️⚠️⚠️
+            BEFORE generating ANY answer, you MUST examine the field data for constraints:
+            
+            **Character Limits**: Check field data for:
+            - "maxlength" attribute: maxlength="500" means answer must be ≤ 500 characters
+            - Validation error messages: "maximum 500 characters", "Required field"
+            - Character count displays: "X characters remaining of Y characters"
+            
+            **Content Adaptation for Limits**:
+            - If data exceeds character limits, prioritize key information
+            - For 500 char limit: Include purpose + key dates + essential details only
+            - Remove redundant phrases, verbose language, unnecessary details
+            - Maintain factual accuracy while staying within constraints
+            
+            **Examples**:
+            - Field with maxlength="500" → Answer MUST be ≤ 500 characters
+            - Validation showing "maximum 500 characters" → Shorten existing content
+            - Required field → Generate appropriate content or flag for intervention
+
             ## KEY PRINCIPLE: 
             When options are provided, your answer MUST be one of the option texts/values, NOT the original data value!
 
@@ -5148,6 +5241,14 @@ class LangGraphFormProcessor:
                         dummy_result["answer"] and not dummy_result["needs_intervention"]:
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
+                    
+                    # 🚀 SPECIAL HANDLING: Remove "+" from phone code fields
+                    if self._is_phone_code_field(question):
+                        original_answer = dummy_result["answer"]
+                        if original_answer and original_answer.startswith("+"):
+                            dummy_result["answer"] = original_answer[1:]  # Remove the "+" prefix
+                            print(f"DEBUG: Removed '+' from phone code field {question['field_name']}: '{original_answer}' -> '{dummy_result['answer']}'")
+                    
                     print(
                         f"DEBUG: ✅ Using external dummy data for field {question['field_name']}: answer='{dummy_result['answer']}', confidence={dummy_result['confidence']}")
                     return dummy_result
@@ -5647,6 +5748,32 @@ class LangGraphFormProcessor:
                - 50-69: Reasonable inference from context
                - 30-49: Weak match, uncertain
                - 0-29: No good semantic match found
+
+            # Special Instructions for Phone/Country Code Fields:
+            - For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
+              * Field asking for "international code", "country code", "phone code" etc.
+              * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
+              * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
+              * This applies to any field that semantically represents a phone country code
+
+            # ⚠️⚠️⚠️ CRITICAL: Field Requirements and Constraints ⚠️⚠️⚠️
+            BEFORE generating ANY answer, you MUST examine each field for constraints:
+            
+            **Character Limits**: For each field, check:
+            - "maxlength" attribute in field data: maxlength="500" means answer must be ≤ 500 characters
+            - Validation error messages: "maximum 500 characters", "Required field"
+            - Character count displays: "X characters remaining of Y characters"
+            
+            **Content Adaptation for Limits**:
+            - If data exceeds character limits, prioritize key information and summarize
+            - For 500 char limit: Include purpose + key dates + essential details only
+            - Remove redundant phrases, verbose language, unnecessary details
+            - Maintain factual accuracy while staying within constraints
+            
+            **Constraint Examples**:
+            - Field with maxlength="500" → Answer MUST be ≤ 500 characters
+            - Validation showing "maximum 500 characters" → Shorten existing content
+            - Required field → Generate appropriate content or flag for intervention
 
             # Response Format (JSON array with one object per field):
             [
