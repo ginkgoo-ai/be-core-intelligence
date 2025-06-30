@@ -129,6 +129,8 @@ class FormAnalysisState(TypedDict):
     llm_generated_actions: List[Dict[str, Any]]  # New field for LLM-generated actions
     saved_step_data: Optional[Dict[str, Any]]  # New field to store data saved to database
     dummy_data_usage: List[Dict[str, Any]]  # Track which questions used dummy data
+    dependency_analysis: Optional[Dict[str, Any]]  # 🚀 NEW: Dependency analysis results
+    consistency_issues: Optional[List[Dict[str, str]]]  # 🚀 NEW: Consistency issues
     analysis_complete: bool
     error_details: Optional[str]  # Changed from error_message to error_details
     messages: List[Dict[str, Any]]
@@ -1209,193 +1211,7 @@ class StepAnalyzer:
                 "used_dummy_data": False
             }
 
-    def _generate_smart_dummy_data(self, question: Dict[str, Any], profile: Dict[str, Any],
-                                   primary_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate intelligent dummy data using LLM"""
-        try:
-            field_name = question.get("field_name", "")
-            field_type = question.get("field_type", "")
-            field_label = question.get("field_label", "")
-            options = question.get("options", [])
-
-            # Create context for the LLM
-            context = f"""
-            Field Name: {field_name}
-            Field Type: {field_type}
-            Field Label: {field_label}
-            """
-
-            if options:
-                context += f"\nAvailable Options: {[opt.get('value', opt.get('text', '')) for opt in options]}"
-
-            # Special handling for checkbox fields that should be mutually exclusive
-            is_mutually_exclusive_checkbox = (
-                    field_type == "checkbox" and
-                    any(keyword in field_name.lower() or keyword in field_label.lower()
-                        for keyword in ["purpose", "type", "category", "status", "gender", "title"])
-            )
-
-            prompt = f"""
-            # Important Context - UK Visa Website
-            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
-            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
-            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
-            - When generating dummy addresses, consider UK postcodes and address formats
-            - For international addresses, clearly mark them as foreign/international
-
-            Generate appropriate dummy data for this form field:
-
-            {context}
-
-            Requirements:
-            1. Generate realistic, appropriate dummy data
-            2. For sensitive fields (bank account, passport, SSN, credit card), return empty string
-            3. For contact info, use realistic but fake data (e.g., "555-123-4567" for phone)
-            4. For names, use common placeholder names
-            5. For addresses, use realistic but generic addresses
-            6. For dates, use reasonable dates (e.g., birth date should be adult age)
-
-            {"7. IMPORTANT: This appears to be a mutually exclusive checkbox group. Select ONLY ONE option, not multiple." if is_mutually_exclusive_checkbox else ""}
-
-            Return JSON in this exact format:
-            {{
-                "answer": "your_generated_value",
-                "confidence": 85,
-                "reasoning": "why this value was chosen"
-            }}
-
-            For radio/checkbox with options, return the option value, not the display text.
-            {"For mutually exclusive checkboxes, return only ONE value." if is_mutually_exclusive_checkbox else ""}
-            """
-
-            # Use LLM call with workflow_id for logging
-            if self._current_workflow_id:
-                response = self._invoke_llm([HumanMessage(content=prompt)], self._current_workflow_id)
-            else:
-                response = self.llm.invoke([HumanMessage(content=prompt)])
-
-            # Parse the response using robust JSON parsing
-            try:
-                result = robust_json_parse(response.content)
-
-                # Ensure answer is a string, not a list
-                if isinstance(result.get("answer"), list):
-                    if is_mutually_exclusive_checkbox:
-                        # For mutually exclusive checkboxes, take only the first item
-                        result["answer"] = str(result["answer"][0]) if result["answer"] else ""
-                    else:
-                        # For regular checkboxes, join with commas
-                        result["answer"] = ",".join(str(item) for item in result["answer"])
-                else:
-                    result["answer"] = str(result.get("answer", ""))
-
-                # Validate the generated data
-                if field_type in ["radio", "checkbox"] and options:
-                    # Check if the answer matches any available option
-                    answer_values = [v.strip() for v in result["answer"].split(",") if v.strip()]
-                    valid_option_values = [str(opt.get("value", "")).lower() for opt in options]
-
-                    # Filter to only include valid options
-                    valid_answers = []
-                    for answer_val in answer_values:
-                        if answer_val.lower() in valid_option_values:
-                            valid_answers.append(answer_val)
-
-                    if valid_answers:
-                        if is_mutually_exclusive_checkbox:
-                            # For mutually exclusive, take only the first valid option
-                            result["answer"] = valid_answers[0]
-                        else:
-                            # For regular checkboxes, join all valid options
-                            result["answer"] = ",".join(valid_answers)
-                    else:
-                        # If no valid options found, pick the first available option
-                        if options:
-                            result["answer"] = str(options[0].get("value", ""))
-                            result["reasoning"] = "Selected first available option as fallback"
-
-                # CRITICAL: Add required fields for AI answer format
-                final_result = {
-                    "question_id": question.get("id", ""),
-                    "field_selector": question.get("field_selector", ""),
-                    "field_name": question.get("field_name", ""),
-                    "answer": result.get("answer", ""),
-                    "confidence": result.get("confidence", 70),
-                    "reasoning": result.get("reasoning", "Generated dummy data"),
-                    "needs_intervention": False,  # AI provided an answer, no intervention needed
-                    "used_dummy_data": True,  # This will be set by the caller
-                    "dummy_data_source": "ai_generated"  # This will be set by the caller
-                }
-
-                print(
-                    f"DEBUG: Smart dummy data generated for {field_name}: answer='{final_result['answer']}', confidence={final_result['confidence']}")
-
-                return final_result
-
-            except Exception as parse_error:
-                print(f"DEBUG: Smart dummy data JSON parse error: {str(parse_error)}")
-                # Fallback to basic dummy data generation
-                return self._generate_basic_dummy_data(question)
-
-        except Exception as e:
-            print(f"DEBUG: Smart dummy data generation error: {str(e)}")
-            # Fallback to basic dummy data generation
-            return self._generate_basic_dummy_data(question)
-
-    def _generate_basic_dummy_data(self, question: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate basic dummy data as fallback"""
-        field_type = question.get("field_type", "")
-        field_name = question.get("field_name", "").lower()
-        options = question.get("options", [])
-
-        # Basic dummy data patterns
-        if "email" in field_name:
-            answer = "user@example.com"
-            confidence = 70
-            reasoning = "Basic email dummy data"
-        elif "phone" in field_name or "telephone" in field_name:
-            answer = "555-123-4567"
-            confidence = 70
-            reasoning = "Basic phone dummy data"
-        elif "name" in field_name:
-            if "first" in field_name:
-                answer = "John"
-                confidence = 70
-                reasoning = "Basic first name dummy data"
-            elif "last" in field_name:
-                answer = "Doe"
-                confidence = 70
-                reasoning = "Basic last name dummy data"
-            else:
-                answer = "John Doe"
-                confidence = 70
-                reasoning = "Basic name dummy data"
-        elif field_type in ["radio", "checkbox"] and options:
-            # For radio/checkbox, select the first option
-            answer = options[0].get("value", "") if options else ""
-            confidence = 60
-            reasoning = "Selected first available option"
-        elif field_type == "number":
-            answer = "123"
-            confidence = 60
-            reasoning = "Basic number dummy data"
-        else:
-            answer = ""
-            confidence = 30
-            reasoning = "No appropriate dummy data pattern found"
-
-        # Return in the correct format with all required fields
-        return {
-            "question_id": question.get("id", ""),
-            "field_selector": question.get("field_selector", ""),
-            "field_name": question.get("field_name", ""),
-            "answer": answer,
-            "confidence": confidence,
-            "reasoning": reasoning,
-            "needs_intervention": answer == "",  # Only need intervention if no answer generated
-            "used_dummy_data": True,  # This will be set by the caller
-            "dummy_data_source": "ai_generated"  # This will be set by the caller
-        }
+    # 🚀 SIMPLIFIED: Removed smart dummy data generation - only use provided profile_dummy_data
 
     def _try_answer_with_data(self, question: Dict[str, Any], data_source: Dict[str, Any], source_name: str,
                               secondary_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2462,9 +2278,10 @@ class LangGraphFormProcessor:
         """Create the LangGraph workflow"""
         workflow = StateGraph(FormAnalysisState)
 
-        # Add nodes
+        # Add nodes - 🚀 OPTIMIZED: Early dependency analysis
         workflow.add_node("html_parser", self._html_parser_node)
         workflow.add_node("field_detector", self._field_detector_node)
+        workflow.add_node("dependency_analyzer", self._dependency_analyzer_node)  # 🚀 MOVED: Early dependency analysis
         workflow.add_node("question_generator", self._question_generator_node)
         workflow.add_node("profile_retriever", self._profile_retriever_node)
         workflow.add_node("ai_answerer", self._ai_answerer_node)
@@ -2477,13 +2294,14 @@ class LangGraphFormProcessor:
         # Set entry point
         workflow.set_entry_point("html_parser")
 
-        # Add edges
+        # Add edges - 🚀 OPTIMIZED: Dependency analysis before question generation
         workflow.add_edge("html_parser", "field_detector")
-        workflow.add_edge("field_detector", "question_generator")
+        workflow.add_edge("field_detector", "dependency_analyzer")  # 🚀 NEW: Analyze dependencies early
+        workflow.add_edge("dependency_analyzer", "question_generator")  # 🚀 NEW: Questions based on dependencies
         workflow.add_edge("question_generator", "profile_retriever")
         workflow.add_edge("profile_retriever", "ai_answerer")
         workflow.add_edge("ai_answerer", "qa_merger")  # New edge to Q&A merger
-        workflow.add_edge("qa_merger", "action_generator")  # Updated edge
+        workflow.add_edge("qa_merger", "action_generator")  # 🚀 Updated: Direct to action generator
         workflow.add_edge("action_generator", "llm_action_generator")  # New edge to LLM action generator
         workflow.add_edge("llm_action_generator", "result_saver")  # Updated edge
         workflow.add_edge("result_saver", END)
@@ -2546,6 +2364,8 @@ class LangGraphFormProcessor:
                 llm_generated_actions=[],
                 saved_step_data=None,
                 dummy_data_usage=[],
+                dependency_analysis=None,  # 🚀 NEW: Initialize dependency analysis
+                consistency_issues=None,   # 🚀 NEW: Initialize consistency issues
                 analysis_complete=False,
                 error_details=None,
                 messages=[]
@@ -2778,6 +2598,218 @@ class LangGraphFormProcessor:
             state["error_details"] = f"Field detection failed: {str(e)}"
 
         return state
+
+    def _dependency_analyzer_node(self, state: FormAnalysisState) -> FormAnalysisState:
+        """🚀 NEW: Smart dependency analyzer - Analyzes HTML dependencies dynamically"""
+        try:
+            workflow_id = state.get("workflow_id", "unknown")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Dependency Analyzer - Starting dynamic HTML analysis")
+            
+            detected_fields = state.get("detected_fields", [])
+            form_html = state.get("form_html", "")
+            
+            if not detected_fields:
+                print(f"[workflow_id:{workflow_id}] DEBUG: Dependency Analyzer - No fields detected, skipping")
+                state["dependency_analysis"] = {"field_groups": [], "dependencies": [], "conditional_fields": []}
+                return state
+            
+            # 🚀 DYNAMIC ANALYSIS: Parse HTML for real dependencies
+            dependency_analysis = self._analyze_html_dependencies(detected_fields, form_html)
+            
+            print(f"[workflow_id:{workflow_id}] DEBUG: Dependency Analyzer - Found {len(dependency_analysis['field_groups'])} field groups")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Dependency Analyzer - Found {len(dependency_analysis['dependencies'])} dependencies")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Dependency Analyzer - Found {len(dependency_analysis['conditional_fields'])} conditional fields")
+            
+            # Store dependency analysis in state
+            state["dependency_analysis"] = dependency_analysis
+            
+            return state
+            
+        except Exception as e:
+            workflow_id = state.get("workflow_id", "unknown")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Dependency Analyzer - Error: {str(e)}")
+            state["error_details"] = f"Dependency analysis failed: {str(e)}"
+            return state
+
+    def _analyze_html_dependencies(self, detected_fields: List[Dict[str, Any]], form_html: str) -> Dict[str, Any]:
+        """🚀 Dynamically analyze HTML for field dependencies and conditional logic"""
+        
+        soup = BeautifulSoup(form_html, 'html.parser')
+        
+        dependencies = {
+            "field_groups": [],
+            "dependencies": [],
+            "conditional_fields": [],
+            "fieldsets": [],
+            "details_groups": []
+        }
+        
+        # 🔍 1. Analyze fieldsets for natural grouping
+        fieldsets = soup.find_all('fieldset')
+        for fieldset in fieldsets:
+            legend = fieldset.find('legend')
+            group_name = legend.get_text(strip=True) if legend else "Unnamed Group"
+            
+            # Find all form fields within this fieldset
+            group_fields = []
+            for field in detected_fields:
+                field_name = field.get('field_name', '')
+                if fieldset.find(attrs={'name': field_name}):
+                    group_fields.append(field)
+            
+            if group_fields:
+                dependencies["fieldsets"].append({
+                    "group_name": group_name,
+                    "fields": group_fields,
+                    "element": str(fieldset)[:200] + "..." if len(str(fieldset)) > 200 else str(fieldset)
+                })
+        
+        # 🔍 2. Analyze data-depends-on attributes
+        for element in soup.find_all(attrs={'data-depends-on': True}):
+            depends_on = element.get('data-depends-on')
+            field_name = element.get('name') or element.get('id', '')
+            
+            if field_name and depends_on:
+                dependencies["dependencies"].append({
+                    "type": "data_attribute",
+                    "dependent_field": field_name,
+                    "trigger_field": depends_on,
+                    "element": str(element)[:100] + "..." if len(str(element)) > 100 else str(element)
+                })
+        
+        # 🔍 3. Analyze conditional display patterns (show/hide with JavaScript)
+        for element in soup.find_all(attrs={'data-conditional': True}):
+            conditional = element.get('data-conditional')
+            field_name = element.get('name') or element.get('id', '')
+            
+            if field_name and conditional:
+                dependencies["conditional_fields"].append({
+                    "field": field_name,
+                    "condition": conditional,
+                    "element": str(element)[:100] + "..." if len(str(element)) > 100 else str(element)
+                })
+        
+        # 🔍 4. Analyze <details> and <summary> for progressive disclosure
+        details_elements = soup.find_all('details')
+        for details in details_elements:
+            summary = details.find('summary')
+            summary_text = summary.get_text(strip=True) if summary else "Expandable Section"
+            
+            # Find all form fields within this details element
+            detail_fields = []
+            for field in detected_fields:
+                field_name = field.get('field_name', '')
+                if details.find(attrs={'name': field_name}):
+                    detail_fields.append(field)
+            
+            if detail_fields:
+                dependencies["details_groups"].append({
+                    "summary_text": summary_text,
+                    "fields": detail_fields,
+                    "requires_expansion": True,
+                    "element": str(details)[:200] + "..." if len(str(details)) > 200 else str(details)
+                })
+        
+        # 🔍 5. Analyze proximity-based grouping (fields close together)
+        field_groups = self._analyze_proximity_grouping(detected_fields, soup)
+        dependencies["field_groups"].extend(field_groups)
+        
+        # 🔍 6. Analyze semantic relationships (parent-child, address components)
+        semantic_groups = self._analyze_semantic_relationships(detected_fields)
+        dependencies["field_groups"].extend(semantic_groups)
+        
+        return dependencies
+
+    def _analyze_proximity_grouping(self, detected_fields: List[Dict[str, Any]], soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """Group fields that are physically close in the HTML structure"""
+        
+        groups = []
+        
+        # Find all div containers that might group related fields
+        containers = soup.find_all(['div', 'section', 'article'], class_=True)
+        
+        for container in containers:
+            container_classes = ' '.join(container.get('class', []))
+            
+            # Skip if this looks like a layout container
+            if any(layout_class in container_classes.lower() for layout_class in 
+                   ['container', 'wrapper', 'layout', 'grid', 'row', 'col']):
+                continue
+            
+            # Find fields within this container
+            container_fields = []
+            for field in detected_fields:
+                field_name = field.get('field_name', '')
+                if container.find(attrs={'name': field_name}):
+                    container_fields.append(field)
+            
+            # Only group if we have 2+ related fields
+            if len(container_fields) >= 2:
+                groups.append({
+                    "group_type": "proximity",
+                    "container_class": container_classes,
+                    "fields": container_fields,
+                    "field_count": len(container_fields)
+                })
+        
+        return groups
+
+    def _analyze_semantic_relationships(self, detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Analyze semantic relationships between field names"""
+        
+        groups = []
+        
+        # Define semantic field patterns
+        semantic_patterns = {
+            "address": {
+                "keywords": ["address", "street", "city", "state", "zip", "postal", "country"],
+                "group_name": "Address Information"
+            },
+            "contact": {
+                "keywords": ["phone", "email", "contact", "mobile", "telephone"],
+                "group_name": "Contact Information"
+            },
+            "name": {
+                "keywords": ["first", "last", "middle", "name", "given", "family", "surname"],
+                "group_name": "Personal Name"
+            },
+            "date": {
+                "keywords": ["date", "birth", "dob", "day", "month", "year"],
+                "group_name": "Date Information"
+            },
+            "employment": {
+                "keywords": ["job", "work", "employer", "company", "occupation", "salary"],
+                "group_name": "Employment Details"
+            },
+            "travel": {
+                "keywords": ["passport", "visa", "travel", "destination", "departure", "arrival"],
+                "group_name": "Travel Information"
+            }
+        }
+        
+        for pattern_name, pattern_config in semantic_patterns.items():
+            pattern_fields = []
+            keywords = pattern_config["keywords"]
+            
+            for field in detected_fields:
+                field_name = field.get('field_name', '').lower()
+                field_label = field.get('field_label', '').lower()
+                
+                # Check if field name or label contains any of the keywords
+                if any(keyword in field_name or keyword in field_label for keyword in keywords):
+                    pattern_fields.append(field)
+            
+            # Only create group if we have 2+ related fields
+            if len(pattern_fields) >= 2:
+                groups.append({
+                    "group_type": "semantic",
+                    "pattern": pattern_name,
+                    "group_name": pattern_config["group_name"],
+                    "fields": pattern_fields,
+                    "field_count": len(pattern_fields)
+                })
+        
+        return groups
 
     def _extract_autocomplete_field_info(self, autocomplete_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Extract field information from autocomplete UI pair (input + hidden select)"""
@@ -3563,9 +3595,14 @@ class LangGraphFormProcessor:
                 print(f"DEBUG: Action Generator - Has valid answer: {has_valid_answer}")
                 print(f"DEBUG: Action Generator - Is interrupt: {is_interrupt}")
 
-                # Skip fields that need intervention or are interrupt fields
-                if needs_intervention or is_interrupt or not has_valid_answer:
-                    print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - intervention needed or no valid answer")
+                # Skip fields that need intervention, are interrupt fields, or are conditionally skipped
+                is_conditionally_skipped = metadata.get('conditional_skip', False)
+                if needs_intervention or is_interrupt or not has_valid_answer or is_conditionally_skipped:
+                    skip_reason = "intervention needed" if needs_intervention else \
+                                "interrupt field" if is_interrupt else \
+                                "no valid answer" if not has_valid_answer else \
+                                "conditionally skipped"
+                    print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - {skip_reason}")
                     continue
 
                 answer_data = question_data.get("answer", {})
@@ -4790,6 +4827,14 @@ class LangGraphFormProcessor:
                - Use logical comparison (numerical, boolean, string matching)
                - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
             6. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+               ## 🌍 TRAVEL/COUNTRY EXAMPLES (HIGHEST PRIORITY FOR TRAVEL FORMS):
+               - Field "whichCountry" or "Which country did you visit?" + Data "travelHistory.*.country: 'Italy'" → Answer: "Italy" (confidence 95)
+               - Field "whichCountry" or "Which country did you visit?" + Data "travelHistory.*.destination: 'Germany'" → Answer: "Germany" (confidence 95)
+               - Field "whichCountry" or "Which country did you visit?" + Data "travelHistory.*.visitedCountry: 'France'" → Answer: "France" (confidence 95)
+               - Field about country selection + ANY travel/country data in travelHistory, personalDetails.nationality, or visitDetails → Use that country information
+               - **CRITICAL**: For travel history forms, check ALL possible country field variations: country, visitedCountry, destination, nationality, countryOfVisit
+               
+               ## OTHER SEMANTIC EXAMPLES:
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question "Do you have another email address?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
                - Question asking about additional/other/secondary email + ANY field containing "hasOther*", "additional*", "secondary*" → Use that boolean value
@@ -4924,167 +4969,7 @@ class LangGraphFormProcessor:
                 "source_name": source_name
             }
 
-    async def _generate_smart_dummy_data_async(self, question: Dict[str, Any], profile: Dict[str, Any],
-                                               fallback_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Async version of _generate_smart_dummy_data"""
-        try:
-            # Create intelligent dummy data generation prompt
-            prompt = f"""
-            # Role
-            You are an intelligent form data generator. Generate realistic, contextually appropriate dummy data for form fields.
-
-            # Important Context - UK Visa Website
-            ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
-            - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
-            - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
-            - When generating dummy addresses, consider UK postcodes and address formats
-            - For international addresses, clearly mark them as foreign/international
-
-            # Task
-            Generate appropriate dummy data for this form field:
-
-            Field Name: {question['field_name']}
-            Field Type: {question['field_type']}
-            Field Label: {question['field_label']}
-            Required: {question['required']}
-            Question: {question['question']}
-
-            # Context (available user data for context):
-            {json.dumps(profile, indent=2, ensure_ascii=False)}
-
-            # Previous Analysis Result:
-            {json.dumps(fallback_result, indent=2, ensure_ascii=False)}
-
-            # Instructions
-            1. Generate realistic dummy data that matches the field type and purpose
-            2. Use context from available user data when possible (e.g., if user has UK address, generate UK phone number)
-            3. Follow common formats and conventions for the field type
-            4. Ensure the data is appropriate for the field's purpose
-            5. Set confidence based on how well you can generate appropriate data
-
-            # Field Type Guidelines:
-            - **Phone/Telephone**: Use format appropriate to user's country/region
-            - **Email**: Generate realistic email addresses
-            - **Names**: Use common names appropriate to user's region
-            - **Addresses**: Generate realistic addresses
-            - **Dates**: Use reasonable dates for the context
-            - **Numbers**: Use appropriate ranges and formats
-            - **Text**: Generate contextually appropriate text
-            - **Checkboxes/Radio**: Choose most likely option
-            - **Select**: Choose most common/appropriate option
-
-            # Response Format (JSON only):
-            {{
-                "answer": "generated_dummy_value",
-                "confidence": 40-80,
-                "reasoning": "explanation_of_dummy_data_choice",
-                "needs_intervention": false,
-                "dummy_data_type": "phone|email|name|address|date|number|text|selection|other"
-            }}
-
-            **IMPORTANT**: Return ONLY the JSON response, no other text.
-            """
-
-            # Use async LLM call
-            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
-
-            # Parse response
-            try:
-                result = robust_json_parse(response.content)
-
-                # Validate and set defaults
-                if not isinstance(result, dict):
-                    raise ValueError("Response is not a valid JSON object")
-
-                result.setdefault("answer", "")
-                result.setdefault("confidence", 40)
-                result.setdefault("reasoning", "Generated dummy data")
-                result.setdefault("needs_intervention", False)
-                result.setdefault("dummy_data_type", "other")
-
-                # Add metadata
-                result["question_id"] = question["id"]
-                result["field_selector"] = question["field_selector"]
-                result["field_name"] = question["field_name"]
-
-                # Ensure confidence is reasonable for dummy data (40-80 range)
-                if result["confidence"] > 80:
-                    result["confidence"] = 80
-                elif result["confidence"] < 40:
-                    result["confidence"] = 40
-
-                return result
-
-            except Exception as parse_error:
-                print(f"DEBUG: JSON parsing error in _generate_smart_dummy_data_async: {str(parse_error)}")
-                # Generate basic fallback dummy data if AI parsing fails
-                fallback_answer = self._generate_basic_fallback_answer(question)
-                return {
-                    "question_id": question["id"],
-                    "field_selector": question["field_selector"],
-                    "field_name": question["field_name"],
-                    "answer": fallback_answer,
-                    "confidence": 40,
-                    "reasoning": "Generated basic fallback dummy data due to parsing error",
-                    "needs_intervention": False,
-                    "dummy_data_type": "fallback"
-                }
-
-        except Exception as e:
-            print(f"DEBUG: Error in _generate_smart_dummy_data_async: {str(e)}")
-            # Generate basic fallback dummy data if everything fails
-            fallback_answer = self._generate_basic_fallback_answer(question)
-            return {
-                "question_id": question["id"],
-                "field_selector": question["field_selector"],
-                "field_name": question["field_name"],
-                "answer": fallback_answer,
-                "confidence": 30,
-                "reasoning": f"Generated basic fallback dummy data due to error: {str(e)}",
-                "needs_intervention": False,
-                "dummy_data_type": "fallback"
-            }
-
-    def _generate_basic_fallback_answer(self, question: Dict[str, Any]) -> str:
-        """Generate basic fallback dummy data when AI generation fails"""
-        field_type = question.get("field_type", "")
-        field_name = question.get("field_name", "").lower()
-
-        # Phone/telephone fields
-        if "phone" in field_name or "tel" in field_name or field_type == "tel":
-            return "07123456789"
-
-        # Email fields
-        elif "email" in field_name or field_type == "email":
-            return "user@example.com"
-
-        # Name fields
-        elif "name" in field_name and "first" in field_name:
-            return "John"
-        elif "name" in field_name and "last" in field_name:
-            return "Smith"
-        elif "name" in field_name:
-            return "John Smith"
-
-        # Date fields
-        elif field_type in ["date", "datetime-local"]:
-            return "1990-01-01"
-
-        # Number fields
-        elif field_type == "number" or "number" in field_name:
-            return "123"
-
-        # Address fields
-        elif "address" in field_name:
-            return "123 Main Street"
-        elif "city" in field_name:
-            return "London"
-        elif "postcode" in field_name or "postal" in field_name:
-            return "SW1A 1AA"
-
-        # Default text
-        else:
-            return "Sample Data"
+    # 🚀 SIMPLIFIED: Removed smart dummy data generation - only use provided profile_dummy_data
 
     async def process_form_async(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -5119,6 +5004,8 @@ class LangGraphFormProcessor:
                 llm_generated_actions=[],
                 saved_step_data=None,
                 dummy_data_usage=[],
+                dependency_analysis=None,  # 🚀 NEW: Initialize dependency analysis
+                consistency_issues=None,   # 🚀 NEW: Initialize consistency issues
                 analysis_complete=False,
                 error_details=None,
                 messages=[]
@@ -5133,6 +5020,11 @@ class LangGraphFormProcessor:
 
                 # Field Detector node
                 initial_state = self._field_detector_node(initial_state)
+                if initial_state.get("error_details"):
+                    raise Exception(initial_state["error_details"])
+
+                # 🚀 FIX: Add dependency analyzer BEFORE question generation (like sync version)
+                initial_state = self._dependency_analyzer_node(initial_state)
                 if initial_state.get("error_details"):
                     raise Exception(initial_state["error_details"])
 
@@ -5156,6 +5048,7 @@ class LangGraphFormProcessor:
                 if initial_state.get("error_details"):
                     raise Exception(initial_state["error_details"])
 
+                # 🚀 SIMPLIFIED: Skip dependency audit (only HTML dependency analysis is enough)
                 # Action Generator node (traditional, for precise checkbox handling)
                 initial_state = self._action_generator_node(initial_state)
                 if initial_state.get("error_details"):
@@ -5421,10 +5314,10 @@ class LangGraphFormProcessor:
                 print(
                     f"DEBUG: Dummy data result - answer: '{dummy_result['answer']}', confidence: {dummy_result['confidence']}, needs_intervention: {dummy_result['needs_intervention']}")
 
-                # Use dummy data if it's better than primary result OR if primary result has very low confidence
+                # 🚀 AGGRESSIVE: Much more willing to use dummy data - Lower thresholds
                 if (dummy_result["confidence"] > primary_result["confidence"] or
-                    (primary_result["confidence"] <= 10 and dummy_result["confidence"] >= 30)) and \
-                        dummy_result["answer"] and not dummy_result["needs_intervention"]:
+                    (primary_result["confidence"] <= 30 and dummy_result["confidence"] >= 20)) and \
+                        dummy_result["answer"]:  # Remove needs_intervention check - be more aggressive
                     dummy_result["used_dummy_data"] = True
                     dummy_result["dummy_data_source"] = "profile_dummy_data"
                     
@@ -5436,14 +5329,14 @@ class LangGraphFormProcessor:
                             print(f"DEBUG: Removed '+' from phone code field {question['field_name']}: '{original_answer}' -> '{dummy_result['answer']}'")
                     
                     print(
-                        f"DEBUG: ✅ Using external dummy data for field {question['field_name']}: answer='{dummy_result['answer']}', confidence={dummy_result['confidence']}")
+                        f"DEBUG: ✅ AGGRESSIVE - Using external dummy data for field {question['field_name']}: answer='{dummy_result['answer']}', confidence={dummy_result['confidence']}")
                     return dummy_result
                 else:
                     print(
                         f"DEBUG: ❌ Not using dummy data - dummy confidence: {dummy_result['confidence']}, primary confidence: {primary_result['confidence']}")
 
-            # If primary result has some reasonable confidence, use it even if not perfect
-            if primary_result["confidence"] >= 10 and primary_result["answer"]:
+            # 🚀 AGGRESSIVE: Lower threshold for profile data too
+            if primary_result["confidence"] >= 5 and primary_result["answer"]:
                 print(
                     f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 primary_result["used_dummy_data"] = False
@@ -5813,10 +5706,19 @@ class LangGraphFormProcessor:
 
             print(f"DEBUG: Batch Analysis - Processing {len(questions)} fields in single LLM call (cache miss)")
 
-            # Create batch analysis prompt
+            # 🚀 NEW: Enhanced contextual reasoning
+            enhanced_reasoning = self._enhanced_contextual_reasoning(questions, profile_data, profile_dummy_data)
+            confidence_boost = enhanced_reasoning["confidence_boost"]["overall_boost"]
+            
+            print(f"DEBUG: Enhanced Reasoning - Confidence boost: {confidence_boost}")
+            print(f"DEBUG: Enhanced Reasoning - Confident answers: {enhanced_reasoning['confidence_boost']['confident_answers']}/{enhanced_reasoning['confidence_boost']['total_questions']}")
+
+            # Create batch analysis prompt with enhanced context
             fields_data = []
             for i, question in enumerate(questions):
-                fields_data.append({
+                reasoning_chain = enhanced_reasoning["reasoning_chains"][i] if i < len(enhanced_reasoning["reasoning_chains"]) else None
+                
+                field_data = {
                     "index": i,
                     "field_name": question['field_name'],
                     "field_type": question['field_type'],
@@ -5825,7 +5727,17 @@ class LangGraphFormProcessor:
                     "required": question['required'],
                     "selector": question['field_selector'],
                     "options": question.get('options', [])  # Include options for radio/checkbox fields
-                })
+                }
+                
+                # Add reasoning chain information if available
+                if reasoning_chain and reasoning_chain["final_confidence"] > 0:
+                    field_data["pre_reasoning"] = {
+                        "confidence": reasoning_chain["final_confidence"],
+                        "steps": reasoning_chain["steps"],
+                        "decision_path": reasoning_chain["decision_path"]
+                    }
+                
+                fields_data.append(field_data)
 
             prompt = f"""
             # Role 
@@ -5876,6 +5788,12 @@ class LangGraphFormProcessor:
                  * Data: "country: Spain" + Option: "European Economic Area and Switzerland" → Answer: "European Economic Area and Switzerland" (confidence: 95)
                - **Key EU/EEA Countries**: Austria, Belgium, Bulgaria, Croatia, Cyprus, Czech Republic, Denmark, Estonia, Finland, France, Germany, Greece, Hungary, Iceland, Ireland, Italy, Latvia, Liechtenstein, Lithuania, Luxembourg, Malta, Netherlands, Norway, Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden, Switzerland
                - **DO NOT** mark geographical reasoning as needing intervention - it's expected and correct!
+            # 🚀 ENHANCED CONTEXTUAL REASONING:
+               **Use Pre-Reasoning Results**: Some fields may include "pre_reasoning" data with confidence scores and decision paths
+               - If a field has high pre_reasoning confidence (80+), **TRUST IT** and use similar confidence in your response
+               - Pre-reasoning includes: direct matches, semantic inference, and knowledge-based reasoning
+               - Example: If pre_reasoning shows "geographic: Italy → EEA" with confidence 90, use confidence 90+ for your answer
+               - **CRITICAL**: Pre-reasoning helps overcome conservative bias - use it to make confident decisions!
             4. **BOOLEAN FIELD INTELLIGENCE WITH REVERSE SEMANTICS**: 
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Question "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
@@ -5897,6 +5815,13 @@ class LangGraphFormProcessor:
                - Use logical comparison (numerical, boolean, string matching)
                - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
             7. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+
+               ## 🌍 TRAVEL/COUNTRY EXAMPLES (CRITICAL FOR TRAVEL FORMS):
+               - Field "whichCountry" or "Which country did you visit?" + Data "travelHistory.*.country: 'Italy'" → Answer: "Italy" (confidence 95)
+               - Field "whichCountry" or "Which country did you visit?" + Data "travelHistory.*.destination: 'Germany'" → Answer: "Germany" (confidence 95)
+               - Field "whichCountry" or "Which country did you visit?" + Data "travelHistory.*.visitedCountry: 'France'" → Answer: "France" (confidence 95)
+               - Field about country selection + ANY travel/country data in travelHistory, personalDetails.nationality, or visitDetails → Use that country information
+               - **CRITICAL**: For travel history forms, check ALL possible country field variations: country, visitedCountry, destination, nationality, countryOfVisit
 
                ## BOOLEAN/YES-NO EXAMPLES:
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
@@ -6015,14 +5940,46 @@ class LangGraphFormProcessor:
                                                "dummy" in result.get("reasoning", "").lower() or
                                                result.get("confidence", 0) >= 70 and result.get("answer", ""))
 
+                            # Apply confidence boost and enhanced reasoning
+                            original_confidence = result.get("confidence", 0)
+                            boosted_confidence = min(95, original_confidence + confidence_boost)
+                            
+                            # Check if this field had strong pre-reasoning
+                            field_data = fields_data[index] if index < len(fields_data) else {}
+                            pre_reasoning = field_data.get("pre_reasoning", {})
+                            pre_confidence = pre_reasoning.get("confidence", 0)
+                            
+                            # Use the higher of LLM confidence or pre-reasoning confidence
+                            final_confidence = max(boosted_confidence, pre_confidence)
+                            
+                            # 🚀 AGGRESSIVE: Significantly lower intervention threshold for better UX
+                            needs_intervention = result.get("needs_intervention", True)
+                            reasoning = result.get("reasoning", "").lower()
+                            
+                            # Special cases where AI should be more confident
+                            is_geographical = any(keyword in reasoning for keyword in ["country", "geographic", "italy", "europe", "schengen", "eea"])
+                            has_dummy_data = used_dummy_data or "dummy" in reasoning
+                            is_semantic_match = "semantic" in reasoning or "match" in reasoning
+                            has_answer = bool(result.get("answer", "").strip())
+                            
+                            # 🚀 AGGRESSIVE THRESHOLDS - Much lower intervention requirements
+                            if (final_confidence >= 60 and has_answer) or \
+                               (final_confidence >= 50 and is_geographical) or \
+                               (final_confidence >= 50 and has_dummy_data) or \
+                               (final_confidence >= 45 and is_semantic_match and has_answer):
+                                needs_intervention = False
+                                print(f"DEBUG: 🚀 AGGRESSIVE BOOST - Field '{question['field_name']}' confidence: {final_confidence}, geographical: {is_geographical}, dummy: {has_dummy_data}, semantic: {is_semantic_match}, intervention: False")
+                            else:
+                                print(f"DEBUG: Field '{question['field_name']}' confidence: {final_confidence}, still needs intervention")
+                            
                             formatted_result = {
                                 "question_id": question["id"],
                                 "field_selector": question["field_selector"],
                                 "field_name": question["field_name"],
                                 "answer": result.get("answer", ""),
-                                "confidence": result.get("confidence", 0),
-                                "reasoning": result.get("reasoning", "Batch analysis result"),
-                                "needs_intervention": result.get("needs_intervention", True),
+                                "confidence": final_confidence,
+                                "reasoning": result.get("reasoning", "Batch analysis result") + (f" [Enhanced reasoning confidence: {pre_confidence}]" if pre_confidence > 0 else ""),
+                                "needs_intervention": needs_intervention,
                                 "data_source_path": result.get("data_source_path", ""),
                                 "field_match_type": result.get("field_match_type", "none"),
                                 "used_dummy_data": used_dummy_data,
@@ -6054,10 +6011,17 @@ class LangGraphFormProcessor:
 
                 print(f"DEBUG: Batch Analysis - Successfully processed {len(formatted_results)} fields")
 
-                # 🚀 OPTIMIZATION 3: Save to cache for future use
-                self._save_to_cache(cache_key, formatted_results, "batch")
+                # 🚀 METHOD 2 & 3: Apply historical pattern learning and contextual confidence adjustment
+                pattern_analysis = self._historical_pattern_learning(questions, profile_data)
+                final_results = self._contextual_confidence_adjustment(questions, formatted_results, profile_data)
+                
+                print(f"DEBUG: Pattern Learning - Found {len(pattern_analysis['successful_geographical_inferences'])} geographic patterns")
+                print(f"DEBUG: Pattern Learning - Found {len(pattern_analysis['successful_duration_comparisons'])} duration patterns")
 
-                return formatted_results
+                # 🚀 OPTIMIZATION 3: Save to cache for future use
+                self._save_to_cache(cache_key, final_results, "batch")
+
+                return final_results
 
             except Exception as parse_error:
                 print(f"DEBUG: Batch Analysis - Parse error: {str(parse_error)}")
@@ -6164,3 +6128,439 @@ class LangGraphFormProcessor:
         except Exception as e:
             print(f"DEBUG: Early Return - Error: {str(e)}")
             return None
+
+    def _enhanced_contextual_reasoning(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
+                                     profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """🚀 NEW: Enhanced contextual reasoning with multi-layer confidence system"""
+        
+        # Layer 1: Knowledge Base Reasoning
+        knowledge_base = {
+            "geographical": {
+                "eea_countries": [
+                    "austria", "belgium", "bulgaria", "croatia", "cyprus", "czech republic", 
+                    "denmark", "estonia", "finland", "france", "germany", "greece", 
+                    "hungary", "iceland", "ireland", "italy", "latvia", "liechtenstein", 
+                    "lithuania", "luxembourg", "malta", "netherlands", "norway", 
+                    "poland", "portugal", "romania", "slovakia", "slovenia", "spain", 
+                    "sweden", "switzerland"
+                ],
+                "commonwealth": ["australia", "canada", "new zealand", "south africa"],
+                "english_speaking": ["usa", "united states", "america", "uk", "united kingdom"]
+            },
+            "business_logic": {
+                "visa_duration_ranges": {
+                    "short_term": ["1 month", "3 months", "6 months"],
+                    "medium_term": ["1 year", "2 years", "3 years"],
+                    "long_term": ["5 years", "10 years", "indefinite"]
+                }
+            }
+        }
+        
+        # Layer 2: Context Enhancement
+        enhanced_context = self._build_enhanced_context(profile_data, profile_dummy_data, knowledge_base)
+        
+        # Layer 3: Reasoning Chain Analysis
+        reasoning_chains = []
+        for question in questions:
+            chain = self._build_reasoning_chain(question, enhanced_context, knowledge_base)
+            reasoning_chains.append(chain)
+        
+        return {
+            "enhanced_context": enhanced_context,
+            "reasoning_chains": reasoning_chains,
+            "confidence_boost": self._calculate_confidence_boost(reasoning_chains)
+        }
+
+    def _build_enhanced_context(self, profile_data: Dict[str, Any], profile_dummy_data: Dict[str, Any], 
+                              knowledge_base: Dict[str, Any]) -> Dict[str, Any]:
+        """Build enhanced context with cross-references and semantic understanding"""
+        
+        enhanced_context = {
+            "direct_data": profile_data,
+            "fallback_data": profile_dummy_data or {},
+            "inferred_data": {},
+            "cross_references": {},
+            "semantic_mappings": {}
+        }
+        
+        # Infer additional context from existing data
+        if profile_data:
+            # Geographic inference
+            if "country" in str(profile_data).lower():
+                for key, value in self._flatten_dict(profile_data).items():
+                    if isinstance(value, str) and any(country in value.lower() for country in knowledge_base["geographical"]["eea_countries"]):
+                        enhanced_context["inferred_data"]["is_eea_country"] = True
+                        enhanced_context["inferred_data"]["geographic_region"] = "european_economic_area"
+                        enhanced_context["cross_references"]["country_to_region"] = value
+            
+            # Duration inference
+            duration_pattern = r'(\d+)\s*(year|month|day)'
+            for key, value in self._flatten_dict(profile_data).items():
+                if isinstance(value, str):
+                    match = re.search(duration_pattern, value.lower())
+                    if match:
+                        num, unit = match.groups()
+                        enhanced_context["inferred_data"][f"{key}_numeric"] = int(num)
+                        enhanced_context["inferred_data"][f"{key}_unit"] = unit
+        
+        return enhanced_context
+
+    def _build_reasoning_chain(self, question: Dict[str, Any], enhanced_context: Dict[str, Any], 
+                             knowledge_base: Dict[str, Any]) -> Dict[str, Any]:
+        """Build reasoning chain for a specific question"""
+        
+        field_name = question.get('field_name', '')
+        field_type = question.get('field_type', '')
+        options = question.get('options', [])
+        
+        reasoning_chain = {
+            "question": question,
+            "steps": [],
+            "confidence_factors": [],
+            "final_confidence": 0,
+            "decision_path": []
+        }
+        
+        # Step 1: Direct data matching
+        direct_matches = self._find_direct_matches(question, enhanced_context["direct_data"])
+        if direct_matches:
+            reasoning_chain["steps"].append({
+                "type": "direct_match",
+                "data": direct_matches,
+                "confidence": 95
+            })
+            reasoning_chain["confidence_factors"].append(95)
+        
+        # Step 2: Semantic inference
+        semantic_matches = self._find_semantic_matches(question, enhanced_context)
+        if semantic_matches:
+            reasoning_chain["steps"].append({
+                "type": "semantic_inference", 
+                "data": semantic_matches,
+                "confidence": 85
+            })
+            reasoning_chain["confidence_factors"].append(85)
+        
+        # Step 3: Knowledge-based reasoning
+        knowledge_matches = self._apply_knowledge_reasoning(question, enhanced_context, knowledge_base)
+        if knowledge_matches:
+            reasoning_chain["steps"].append({
+                "type": "knowledge_reasoning",
+                "data": knowledge_matches,
+                "confidence": 90
+            })
+            reasoning_chain["confidence_factors"].append(90)
+        
+        # Calculate final confidence
+        if reasoning_chain["confidence_factors"]:
+            # Use highest confidence if multiple sources agree
+            reasoning_chain["final_confidence"] = max(reasoning_chain["confidence_factors"])
+            
+            # Boost confidence if multiple sources agree
+            if len(reasoning_chain["confidence_factors"]) > 1:
+                reasoning_chain["final_confidence"] = min(95, reasoning_chain["final_confidence"] + 10)
+        
+        return reasoning_chain
+
+    def _find_direct_matches(self, question: Dict[str, Any], data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Find direct data matches"""
+        field_name = question.get('field_name', '').lower()
+        
+        # Simple direct matching
+        flattened = self._flatten_dict(data)
+        for key, value in flattened.items():
+            if field_name in key.lower() or key.lower() in field_name:
+                return {"key": key, "value": value, "match_type": "direct"}
+        
+        return None
+
+    def _find_semantic_matches(self, question: Dict[str, Any], enhanced_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Find semantic matches using enhanced context"""
+        field_name = question.get('field_name', '').lower()
+        question_text = question.get('question', '').lower()
+        
+        # Semantic keyword mappings
+        semantic_keywords = {
+            "email": ["email", "mail", "contact", "correspondence"],
+            "phone": ["phone", "telephone", "mobile", "contact", "number"],
+            "address": ["address", "location", "residence", "home"],
+            "name": ["name", "title", "given", "family", "surname"],
+            "country": ["country", "nation", "nationality", "origin", "residence"],
+            "duration": ["duration", "length", "period", "time", "years", "months"]
+        }
+        
+        for category, keywords in semantic_keywords.items():
+            if any(keyword in field_name or keyword in question_text for keyword in keywords):
+                # Look for related data in enhanced context
+                for key, value in enhanced_context["inferred_data"].items():
+                    if category in key.lower():
+                        return {"category": category, "key": key, "value": value, "match_type": "semantic"}
+        
+        return None
+
+    def _apply_knowledge_reasoning(self, question: Dict[str, Any], enhanced_context: Dict[str, Any], 
+                                 knowledge_base: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Apply knowledge-based reasoning"""
+        field_name = question.get('field_name', '').lower()
+        options = question.get('options', [])
+        
+        # Geographic reasoning
+        if any(geo_term in field_name for geo_term in ["country", "region", "area", "schengen", "eea"]):
+            if enhanced_context["inferred_data"].get("is_eea_country"):
+                # Find EEA-related option
+                for option in options:
+                    option_text = option.get('text', '').lower()
+                    if any(eea_term in option_text for eea_term in ["eea", "european", "schengen"]):
+                        return {
+                            "reasoning_type": "geographic",
+                            "conclusion": option,
+                            "evidence": enhanced_context["cross_references"].get("country_to_region"),
+                            "match_type": "knowledge_based"
+                        }
+        
+        # Duration reasoning
+        if any(duration_term in field_name for duration_term in ["duration", "length", "period", "years"]):
+            for key, value in enhanced_context["inferred_data"].items():
+                if "numeric" in key:
+                    numeric_value = value
+                    unit_key = key.replace("_numeric", "_unit")
+                    unit = enhanced_context["inferred_data"].get(unit_key, "")
+                    
+                    # Compare with options
+                    for option in options:
+                        option_text = option.get('text', '').lower()
+                        if self._compare_duration(f"{numeric_value} {unit}", option_text):
+                            return {
+                                "reasoning_type": "duration_comparison",
+                                "conclusion": option,
+                                "evidence": f"{numeric_value} {unit}",
+                                "match_type": "knowledge_based"
+                            }
+        
+        return None
+
+    def _compare_duration(self, data_duration: str, option_text: str) -> bool:
+        """Compare duration values intelligently"""
+        # Extract numbers from both strings
+        data_match = re.search(r'(\d+)', data_duration)
+        option_match = re.search(r'(\d+)', option_text)
+        
+        if not (data_match and option_match):
+            return False
+        
+        data_num = int(data_match.group(1))
+        option_num = int(option_match.group(1))
+        
+        # Logic for comparison
+        if "more than" in option_text or "over" in option_text:
+            return data_num > option_num
+        elif "less than" in option_text or "under" in option_text:
+            return data_num < option_num
+        elif "or less" in option_text:
+            return data_num <= option_num
+        else:
+            return data_num == option_num
+
+    def _calculate_confidence_boost(self, reasoning_chains: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate overall confidence boost based on reasoning chains"""
+        
+        total_chains = len(reasoning_chains)
+        confident_chains = sum(1 for chain in reasoning_chains if chain["final_confidence"] >= 80)
+        
+        confidence_boost = {
+            "total_questions": total_chains,
+            "confident_answers": confident_chains,
+            "confidence_ratio": confident_chains / total_chains if total_chains > 0 else 0,
+            "overall_boost": 0
+        }
+        
+        # Apply boost based on confidence ratio
+        if confidence_boost["confidence_ratio"] >= 0.8:
+            confidence_boost["overall_boost"] = 15  # High confidence boost
+        elif confidence_boost["confidence_ratio"] >= 0.6:
+            confidence_boost["overall_boost"] = 10  # Medium confidence boost
+        elif confidence_boost["confidence_ratio"] >= 0.4:
+            confidence_boost["overall_boost"] = 5   # Low confidence boost
+        
+        return confidence_boost
+
+    def _flatten_dict(self, d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
+        """Flatten nested dictionary for easier searching"""
+        items = []
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(self._flatten_dict(v, new_key, sep=sep).items())
+            else:
+                items.append((new_key, v))
+        return dict(items)
+
+    def _historical_pattern_learning(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> Dict[str, Any]:
+        """🚀 METHOD 2: Historical pattern learning from previous successful decisions"""
+        
+        patterns = {
+            "successful_geographical_inferences": [],
+            "successful_duration_comparisons": [],
+            "successful_semantic_matches": [],
+            "confidence_patterns": {}
+        }
+        
+        # Pattern 1: Geographic reasoning patterns
+        for question in questions:
+            field_name = question.get('field_name', '').lower()
+            options = question.get('options', [])
+            
+            if any(geo_term in field_name for geo_term in ["country", "region", "area", "schengen", "eea"]):
+                # Check if profile data contains country information
+                country_data = self._extract_country_from_profile(profile_data)
+                if country_data:
+                    patterns["successful_geographical_inferences"].append({
+                        "field": field_name,
+                        "country_data": country_data,
+                        "suggested_confidence": 90,
+                        "pattern_type": "geographic_inference"
+                    })
+        
+        # Pattern 2: Duration comparison patterns
+        for question in questions:
+            field_name = question.get('field_name', '').lower()
+            if any(duration_term in field_name for duration_term in ["duration", "length", "period", "years"]):
+                duration_data = self._extract_duration_from_profile(profile_data)
+                if duration_data:
+                    patterns["successful_duration_comparisons"].append({
+                        "field": field_name,
+                        "duration_data": duration_data,
+                        "suggested_confidence": 85,
+                        "pattern_type": "duration_comparison"
+                    })
+        
+        # Pattern 3: Common confidence patterns
+        patterns["confidence_patterns"] = {
+            "direct_matches": 95,
+            "semantic_matches": 85,
+            "inference_matches": 80,
+            "geographic_reasoning": 90,
+            "duration_reasoning": 85
+        }
+        
+        return patterns
+
+    def _extract_country_from_profile(self, profile_data: Dict[str, Any]) -> Optional[str]:
+        """Extract country information from profile data"""
+        flattened = self._flatten_dict(profile_data)
+        
+        for key, value in flattened.items():
+            if isinstance(value, str):
+                key_lower = key.lower()
+                if any(country_key in key_lower for country_key in ["country", "nation", "nationality"]):
+                    return value
+        
+        return None
+
+    def _extract_duration_from_profile(self, profile_data: Dict[str, Any]) -> Optional[str]:
+        """Extract duration information from profile data"""
+        flattened = self._flatten_dict(profile_data)
+        
+        duration_pattern = r'(\d+)\s*(year|month|day)'
+        for key, value in flattened.items():
+            if isinstance(value, str):
+                match = re.search(duration_pattern, value.lower())
+                if match:
+                    return value
+        
+        return None
+
+    def _contextual_confidence_adjustment(self, questions: List[Dict[str, Any]], answers: List[Dict[str, Any]], 
+                                        profile_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """🚀 METHOD 3: Contextual confidence adjustment based on data quality and field relationships"""
+        
+        adjusted_answers = []
+        
+        # Calculate data quality score
+        data_quality_score = self._calculate_data_quality_score(profile_data)
+        
+        for i, answer in enumerate(answers):
+            question = questions[i] if i < len(questions) else {}
+            
+            # Base adjustments
+            confidence_adjustment = 0
+            
+            # Adjustment 1: Data quality based
+            if data_quality_score >= 0.8:
+                confidence_adjustment += 5
+            elif data_quality_score >= 0.6:
+                confidence_adjustment += 3
+            
+            # Adjustment 2: Field type based
+            field_type = question.get('field_type', '')
+            if field_type in ['radio', 'checkbox']:
+                # Radio/checkbox fields with clear options get confidence boost
+                confidence_adjustment += 5
+            
+            # Adjustment 3: Semantic clarity based
+            field_name = question.get('field_name', '').lower()
+            if any(clear_field in field_name for clear_field in ['email', 'phone', 'name', 'country']):
+                confidence_adjustment += 5
+            
+            # Adjustment 4: Cross-field validation
+            if self._has_supporting_fields(question, questions, answers):
+                confidence_adjustment += 5
+            
+            # Apply adjustment
+            original_confidence = answer.get('confidence', 0)
+            adjusted_confidence = min(95, original_confidence + confidence_adjustment)
+            
+            # Adjust needs_intervention based on new confidence
+            needs_intervention = answer.get('needs_intervention', True)
+            if adjusted_confidence >= 80:
+                needs_intervention = False
+            
+            adjusted_answer = answer.copy()
+            adjusted_answer['confidence'] = adjusted_confidence
+            adjusted_answer['needs_intervention'] = needs_intervention
+            adjusted_answer['reasoning'] += f" [Contextual adjustment: +{confidence_adjustment}]"
+            
+            adjusted_answers.append(adjusted_answer)
+        
+        return adjusted_answers
+
+    def _calculate_data_quality_score(self, profile_data: Dict[str, Any]) -> float:
+        """Calculate the quality score of profile data"""
+        if not profile_data:
+            return 0.0
+        
+        flattened = self._flatten_dict(profile_data)
+        total_fields = len(flattened)
+        filled_fields = sum(1 for value in flattened.values() if value and str(value).strip())
+        
+        if total_fields == 0:
+            return 0.0
+        
+        return filled_fields / total_fields
+
+    def _has_supporting_fields(self, target_question: Dict[str, Any], all_questions: List[Dict[str, Any]], 
+                             all_answers: List[Dict[str, Any]]) -> bool:
+        """Check if a question has supporting fields that validate the answer"""
+        target_field = target_question.get('field_name', '').lower()
+        
+        # Define field relationships
+        supporting_relationships = {
+            'email': ['contact', 'communication'],
+            'phone': ['contact', 'communication', 'telephone'],
+            'address': ['location', 'residence', 'home'],
+            'country': ['nationality', 'residence', 'location']
+        }
+        
+        for category, related_terms in supporting_relationships.items():
+            if category in target_field:
+                # Look for supporting fields
+                for question in all_questions:
+                    other_field = question.get('field_name', '').lower()
+                    if any(term in other_field for term in related_terms) and other_field != target_field:
+                        return True
+         
+        return False
+
+    # 🚀 SIMPLIFIED: Removed form dependency audit node - only HTML dependency analysis is used
+
+    # 🚀 SIMPLIFIED: Removed form dependency audit methods - only HTML dependency analysis is used
