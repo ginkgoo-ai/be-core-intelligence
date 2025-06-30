@@ -3152,17 +3152,39 @@ class LangGraphFormProcessor:
                     # Find corresponding answer
                     ai_answer = self.step_analyzer._find_answer_for_question(question, answers)
 
+                    # 🚀 NEW: Check if this field is conditionally hidden
+                    is_conditionally_hidden = self._check_conditional_field_visibility(
+                        question, valid_questions, answers, state.get("form_html", "")
+                    )
+                    
                     # Determine if intervention is needed for this field
-                    needs_intervention = (not ai_answer or
-                                          ai_answer.get("needs_intervention", False) or
-                                          ai_answer.get("confidence", 0) < 50)
+                    # Skip intervention for conditionally hidden fields
+                    if is_conditionally_hidden:
+                        needs_intervention = False
+                        print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' is conditionally hidden, skipping intervention")
+                    else:
+                        needs_intervention = (not ai_answer or
+                                              ai_answer.get("needs_intervention", False) or
+                                              ai_answer.get("confidence", 0) < 50)
 
                     all_needs_intervention.append(needs_intervention)
                     all_confidences.append(ai_answer.get("confidence", 0) if ai_answer else 0)
                     all_reasonings.append(ai_answer.get("reasoning", "") if ai_answer else "")
 
                     # Create answer data for this field
-                    field_answer_data = self.step_analyzer._create_answer_data(question, ai_answer, needs_intervention)
+                    # For conditionally hidden fields, create empty data with no intervention needed
+                    if is_conditionally_hidden:
+                        # Create minimal answer data for hidden field - no actions needed
+                        field_answer_data = [{
+                            "selector": question.get("field_selector", ""),
+                            "value": "",
+                            "check": 0,  # Not checked/selected
+                            "conditionally_hidden": True
+                        }]
+                        print(f"DEBUG: Q&A Merger - Created hidden field data for '{question.get('field_name')}'")
+                    else:
+                        field_answer_data = self.step_analyzer._create_answer_data(question, ai_answer, needs_intervention)
+                    
                     all_field_data.extend(field_answer_data)
 
                 # Determine the overall answer type based on the field types in the group
@@ -3268,6 +3290,149 @@ class LangGraphFormProcessor:
             state["error_details"] = f"Q&A merging failed: {str(e)}"
 
         return state
+
+    def _check_conditional_field_visibility(self, question: Dict[str, Any], all_questions: List[Dict[str, Any]], 
+                                           answers: List[Dict[str, Any]], form_html: str) -> bool:
+        """Check if a field should be hidden due to conditional logic"""
+        try:
+            field_name = question.get("field_name", "")
+            field_selector = question.get("field_selector", "")
+            
+            # Look for conditional attributes in HTML
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(form_html, 'html.parser')
+            
+            # Find the field element
+            field_element = None
+            if field_selector.startswith('#'):
+                field_element = soup.find(id=field_selector[1:])
+            elif field_name:
+                field_element = soup.find(attrs={"name": field_name})
+            
+            if not field_element:
+                return False
+                
+            # Check if the field or its container has conditional attributes
+            conditional_container = field_element.find_parent(attrs={"data-toggled-by": True})
+            is_reverse_logic = False
+            toggled_by = ""
+            
+            # Check for standard conditional logic
+            if conditional_container:
+                toggled_by = conditional_container.get("data-toggled-by", "")
+            elif field_element.get("data-toggled-by"):
+                conditional_container = field_element
+                toggled_by = field_element.get("data-toggled-by", "")
+            
+            # Check for reverse conditional logic (data-toggled-by-not)
+            if not toggled_by:
+                conditional_container = field_element.find_parent(attrs={"data-toggled-by-not": True})
+                if conditional_container:
+                    toggled_by = conditional_container.get("data-toggled-by-not", "")
+                    is_reverse_logic = True
+                elif field_element.get("data-toggled-by-not"):
+                    conditional_container = field_element
+                    toggled_by = field_element.get("data-toggled-by-not", "")
+                    is_reverse_logic = True
+            
+            # Check for HTML hidden attribute or CSS display:none
+            if not toggled_by:
+                if field_element.get("hidden") or field_element.get("aria-hidden") == "true":
+                    print(f"DEBUG: Conditional Field - Field '{field_name}' is statically hidden")
+                    return True  # Field is hidden
+                return False  # No conditional logic found
+            
+            if not toggled_by:
+                return False
+                
+            print(f"DEBUG: Conditional Field - Field '{field_name}' toggled by '{toggled_by}' (reverse_logic: {is_reverse_logic})")
+            
+            # Extract trigger field name and expected value
+            # Format: "fieldName_expectedValue" (e.g., "warCrimesInvolvement_true")
+            # Support multiple conditions: "field1_value1,field2_value2" or single condition
+            conditions = []
+            if "," in toggled_by:
+                # Multiple conditions (AND logic)
+                condition_parts = [part.strip() for part in toggled_by.split(",")]
+                for part in condition_parts:
+                    if "_" in part:
+                        field_name = part.rsplit("_", 1)[0]
+                        expected_val = part.rsplit("_", 1)[1]
+                    else:
+                        field_name = part
+                        expected_val = "true"
+                    conditions.append((field_name, expected_val))
+            else:
+                # Single condition
+                if "_" in toggled_by:
+                    trigger_field_name = toggled_by.rsplit("_", 1)[0]
+                    expected_value = toggled_by.rsplit("_", 1)[1]
+                else:
+                    trigger_field_name = toggled_by
+                    expected_value = "true"
+                conditions.append((trigger_field_name, expected_value))
+                
+            print(f"DEBUG: Conditional Field - Found {len(conditions)} condition(s) to check")
+            
+            # Check all conditions (AND logic - all must be satisfied)
+            all_conditions_satisfied = True
+            condition_results = []
+            
+            for trigger_field_name, expected_value in conditions:
+                print(f"DEBUG: Conditional Field - Checking: '{trigger_field_name}' should be '{expected_value}'")
+                
+                # Find the trigger field's answer
+                trigger_answer = None
+                for answer in answers:
+                    answer_field_name = answer.get("field_name", "")
+                    if trigger_field_name in answer_field_name or answer_field_name in trigger_field_name:
+                        trigger_answer = answer
+                        break
+                        
+                if not trigger_answer:
+                    print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
+                    all_conditions_satisfied = False
+                    condition_results.append(f"{trigger_field_name}: NOT_FOUND")
+                    continue
+                    
+                # Get the actual value from the trigger field
+                actual_value = trigger_answer.get("answer", "").lower()
+                expected_value_lower = expected_value.lower()
+                
+                condition_met = actual_value == expected_value_lower
+                condition_results.append(f"{trigger_field_name}: {actual_value}=={expected_value_lower} -> {condition_met}")
+                
+                if not condition_met:
+                    all_conditions_satisfied = False
+                    
+                print(f"DEBUG: Conditional Field - '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}', met={condition_met}")
+            
+            print(f"DEBUG: Conditional Field - Condition results: {'; '.join(condition_results)}")
+            print(f"DEBUG: Conditional Field - All conditions satisfied: {all_conditions_satisfied}")
+            
+            # Check if condition is satisfied (all conditions must be satisfied)
+            condition_satisfied = all_conditions_satisfied
+            
+            # Apply reverse logic if needed
+            if is_reverse_logic:
+                # For reverse logic, we want to hide when conditions ARE satisfied
+                should_hide = condition_satisfied
+                print(f"DEBUG: Conditional Field - Reverse logic: conditions_satisfied={condition_satisfied}, should_hide={should_hide}")
+            else:
+                # For normal logic, we hide when conditions are NOT satisfied
+                should_hide = not condition_satisfied
+                print(f"DEBUG: Conditional Field - Normal logic: conditions_satisfied={condition_satisfied}, should_hide={should_hide}")
+            
+            if should_hide:
+                print(f"DEBUG: Conditional Field - Field '{field_name}' should be hidden (condition not met)")
+            else:
+                print(f"DEBUG: Conditional Field - Field '{field_name}' should be visible (condition met)")
+                
+            return should_hide
+            
+        except Exception as e:
+            print(f"DEBUG: Conditional Field - Error checking visibility for '{question.get('field_name')}': {str(e)}")
+            return False
 
     def _find_primary_question(self, grouped_questions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Find the primary question from a group of related questions"""
@@ -3595,17 +3760,23 @@ class LangGraphFormProcessor:
                 print(f"DEBUG: Action Generator - Has valid answer: {has_valid_answer}")
                 print(f"DEBUG: Action Generator - Is interrupt: {is_interrupt}")
 
-                # Skip fields that need intervention, are interrupt fields, or are conditionally skipped
+                # Get answer data for processing
+                answer_data = question_data.get("answer", {})
+                data_array = answer_data.get("data", [])
+                
+                # 🚀 NEW: Check if field is conditionally hidden (from answer data)
+                is_conditionally_hidden = any(item.get("conditionally_hidden", False) for item in data_array)
+                
+                # Skip fields that need intervention, are interrupt fields, or are conditionally skipped/hidden
                 is_conditionally_skipped = metadata.get('conditional_skip', False)
-                if needs_intervention or is_interrupt or not has_valid_answer or is_conditionally_skipped:
+                if needs_intervention or is_interrupt or not has_valid_answer or is_conditionally_skipped or is_conditionally_hidden:
                     skip_reason = "intervention needed" if needs_intervention else \
                                 "interrupt field" if is_interrupt else \
                                 "no valid answer" if not has_valid_answer else \
-                                "conditionally skipped"
+                                "conditionally skipped" if is_conditionally_skipped else \
+                                "conditionally hidden"
                     print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - {skip_reason}")
                     continue
-
-                answer_data = question_data.get("answer", {})
 
                 # Extract answer value from the data array
                 answer_value = self._extract_answer_from_data(answer_data)
