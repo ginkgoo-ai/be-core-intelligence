@@ -5865,7 +5865,18 @@ class LangGraphFormProcessor:
                - FIRST: Try to match with User Data (fill_data) using semantic understanding
                - SECOND: If no match in fill_data, try Profile Dummy Data using semantic understanding
                - Use Profile Dummy Data with confidence 80+ if it semantically matches field meaning
-            3. **BOOLEAN FIELD INTELLIGENCE WITH REVERSE SEMANTICS**: 
+            3. **🌍 GEOGRAPHICAL REASONING (CRITICAL FOR TRAVEL FORMS)**:
+               **When you encounter country/region selection questions:**
+               - ✅ **ENCOURAGED**: Perform geographical reasoning with high confidence
+               - **European Economic Area (EEA)**: If data shows European countries (Italy, Germany, France, Spain, etc.), select "schengen" or "European Economic Area" option
+               - **Commonwealth/English-speaking**: If data shows Australia, Canada, New Zealand, select respective options
+               - **Examples with HIGH CONFIDENCE**:
+                 * Data: "country: Italy" + Options: ["Australia", "Canada", "USA", "European Economic Area"] → Answer: "European Economic Area" (confidence: 95)
+                 * Data: "country: Germany" + Options: ["schengen", "usa", "canada"] → Answer: "schengen" (confidence: 95)
+                 * Data: "country: Spain" + Option: "European Economic Area and Switzerland" → Answer: "European Economic Area and Switzerland" (confidence: 95)
+               - **Key EU/EEA Countries**: Austria, Belgium, Bulgaria, Croatia, Cyprus, Czech Republic, Denmark, Estonia, Finland, France, Germany, Greece, Hungary, Iceland, Ireland, Italy, Latvia, Liechtenstein, Lithuania, Luxembourg, Malta, Netherlands, Norway, Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden, Switzerland
+               - **DO NOT** mark geographical reasoning as needing intervention - it's expected and correct!
+            4. **BOOLEAN FIELD INTELLIGENCE WITH REVERSE SEMANTICS**: 
                - For yes/no questions, understand boolean values: true="yes", false="no"
                - Question "Do you have X?" + Data "hasX: false" → Answer: "false" or "no" (confidence 85+)
                - Question "Are you Y?" + Data "isY: true" → Answer: "true" or "yes" (confidence 85+)
@@ -5881,11 +5892,11 @@ class LangGraphFormProcessor:
                - "2 years" vs "3 years or less" → MATCHES (2 ≤ 3) (confidence 90+)
                - "2 years" vs "More than 3 years" → Does NOT match (2 ≤ 3)
                - Extract numbers from text and perform logical comparisons
-            5. **COMPREHENSIVE OPTION MATCHING**: For radio/checkbox fields with multiple options:
+            6. **COMPREHENSIVE OPTION MATCHING**: For radio/checkbox fields with multiple options:
                - Check data value against ALL available options, not just the first one
                - Use logical comparison (numerical, boolean, string matching)
                - Example: Data "5 years" should be checked against both "3 years or less" AND "More than 3 years"
-            6. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
+            7. **SEMANTIC MATCHING EXAMPLES** (CRITICAL - STUDY THESE PATTERNS):
 
                ## BOOLEAN/YES-NO EXAMPLES:
                - Question "Do you have another email?" + Data "hasOtherEmailAddresses: false" → Answer: "false" (confidence 90+)
@@ -5927,7 +5938,7 @@ class LangGraphFormProcessor:
                2. If you found data like "5 years" and determined it matches "More than 3 years", your answer MUST be "More than 3 years" or "moreThanThreeYears"
                3. NEVER put the original data value (like "5 years") in the answer field when options are provided
                4. Double-check your logic: if your reasoning says option X matches, your answer MUST be option X
-            7. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
+            8. **CONFIDENCE SCORING - FAVOR SEMANTIC UNDERSTANDING**: 
                - 90-95: Perfect semantic match in any data source (including numerical range matching)
                - 80-89: Strong semantic match with clear meaning
                - 70-79: Good semantic inference from data structure
