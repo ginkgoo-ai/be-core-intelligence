@@ -1756,29 +1756,43 @@ class StepAnalyzer:
             else:
                 element_type = "input"  # Default fallback
             
-            # Try to extract ID from original selector
-            element_id = ""
+            # Try to extract ID pattern from original selector
+            base_element_id = ""
             if original_selector.startswith("#"):
-                element_id = original_selector[1:]  # Remove #
+                base_element_id = original_selector[1:]  # Remove #
             elif "id=" in original_selector:
                 # Extract from attribute selector: input[id="someId"]
                 import re
                 id_match = re.search(r'id=["\']([^"\']*)["\']', original_selector)
                 if id_match:
-                    element_id = id_match.group(1)
+                    base_element_id = id_match.group(1)
             
-            # 🚀 ENHANCED: For radio/checkbox with option_value, try to generate specific ID if possible
-            if field_type in ["radio", "checkbox"] and option_value and not element_id:
-                # Try common ID patterns for specific option values
-                if option_value in ["true", "false"]:
-                    element_id = f"{field_name}_{option_value}"
-                elif field_name.endswith("[0]"):
-                    # For array fields like mandatoryDocuments[0], use base name + value + index
-                    base_name = field_name.replace("[0]", "")
-                    element_id = f"{base_name}_{option_value}_0"
+            # 🚀 FIXED: Generate correct ID based on option_value for radio/checkbox
+            element_id = ""
+            if field_type in ["radio", "checkbox"] and option_value:
+                if base_element_id:
+                    # If we have a base ID like "value_true", extract the pattern and use actual option_value
+                    if "_" in base_element_id:
+                        # Extract pattern: "value_true" -> "value" + "_" + actual_option_value
+                        base_pattern = base_element_id.rsplit("_", 1)[0]  # "value"
+                        element_id = f"{base_pattern}_{option_value}"  # "value_false"
+                    else:
+                        # No pattern, use base + option_value
+                        element_id = f"{base_element_id}_{option_value}"
                 else:
-                    # For other cases, use field_name + option_value pattern
-                    element_id = f"{field_name}_{option_value}".replace("[", "_").replace("]", "")
+                    # No base ID, generate from field_name
+                    if option_value in ["true", "false"]:
+                        element_id = f"{field_name}_{option_value}"
+                    elif field_name.endswith("[0]"):
+                        # For array fields like mandatoryDocuments[0], use base name + value + index
+                        base_name = field_name.replace("[0]", "")
+                        element_id = f"{base_name}_{option_value}_0"
+                    else:
+                        # For other cases, use field_name + option_value pattern
+                        element_id = f"{field_name}_{option_value}".replace("[", "_").replace("]", "")
+            elif base_element_id:
+                # For non-radio/checkbox fields, use the original ID as-is
+                element_id = base_element_id
             
             # Generate enhanced selector based on available information
             if element_id:
