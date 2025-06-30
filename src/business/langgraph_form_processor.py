@@ -2474,6 +2474,9 @@ class LangGraphFormProcessor:
                      profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process form using LangGraph workflow"""
         try:
+            # Reset details expansion tracking for new form
+            self._expanded_details = set()
+            
             print(f"DEBUG: process_form - Starting with workflow_id: {workflow_id}, step_key: {step_key}")
             print(f"DEBUG: process_form - HTML length: {len(form_html)}")
             print(f"DEBUG: process_form - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
@@ -3532,6 +3535,13 @@ class LangGraphFormProcessor:
                     print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - empty answer")
                     continue
 
+                # 🚀 NEW: Check if field is inside <details> element that needs to be expanded first
+                field_selector = metadata.get("field_selector", "")
+                details_action = self._check_and_create_details_expand_action(field_selector, state.get("form_html", ""))
+                if details_action:
+                    actions.append(details_action)
+                    print(f"DEBUG: Action Generator - Added details expand action: {details_action}")
+
                 # Generate action for fields with valid answers
                 print(
                     f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
@@ -3767,6 +3777,97 @@ class LangGraphFormProcessor:
             state["error_details"] = f"Action generation failed: {str(e)}"
 
         return state
+
+    def _check_and_create_details_expand_action(self, field_selector: str, form_html: str) -> Optional[Dict[str, Any]]:
+        """Check if field is inside <details> element and create expand action if needed"""
+        try:
+            from bs4 import BeautifulSoup
+            
+            # Track expanded details to avoid duplicates
+            if not hasattr(self, '_expanded_details'):
+                self._expanded_details = set()
+            
+            soup = BeautifulSoup(form_html, 'html.parser')
+            
+            # Find the target field element
+            field_element = None
+            if field_selector.startswith("#"):
+                element_id = field_selector[1:]
+                field_element = soup.find(id=element_id)
+            elif field_selector.startswith("."):
+                class_name = field_selector[1:]
+                field_element = soup.find(class_=class_name)
+            elif "[" in field_selector and "]" in field_selector:
+                # Handle attribute selectors like input[name="parent.relationshipRef"]
+                try:
+                    tag = field_selector.split("[")[0]
+                    attr_part = field_selector.split("[")[1].split("]")[0]
+                    if "=" in attr_part:
+                        attr_name, attr_value = attr_part.split("=", 1)
+                        attr_value = attr_value.strip('"\'')
+                        field_element = soup.find(tag, {attr_name: attr_value})
+                    else:
+                        field_element = soup.find(tag, {attr_part: True})
+                except:
+                    pass
+                    
+            if not field_element:
+                return None
+                
+            # Check if field is inside a <details> element
+            details_parent = field_element.find_parent('details')
+            if not details_parent:
+                return None
+                
+            # Get details element identifier to avoid duplicates
+            details_id = details_parent.get('id', '')
+            if not details_id:
+                # Use summary text as identifier if no id
+                summary = details_parent.find('summary')
+                if summary:
+                    details_id = summary.get_text(strip=True)[:50]  # First 50 chars as ID
+                    
+            if details_id in self._expanded_details:
+                return None  # Already expanded this details element
+                
+            # Find the summary element
+            summary_element = details_parent.find('summary')
+            if not summary_element:
+                return None
+                
+            # Mark this details as expanded
+            self._expanded_details.add(details_id)
+            
+            # Create selector for summary element
+            summary_selector = None
+            if summary_element.get('id'):
+                summary_selector = f"#{summary_element['id']}"
+            else:
+                # Use CSS selector for summary within this details
+                if details_parent.get('id'):
+                    summary_selector = f"#{details_parent['id']} summary"
+                else:
+                    # Fallback: use aria-controls attribute if available
+                    aria_controls = summary_element.get('aria-controls')
+                    if aria_controls:
+                        summary_selector = f"summary[aria-controls='{aria_controls}']"
+                    else:
+                        # Last resort: generic summary selector (risky but better than nothing)
+                        summary_selector = "summary"
+            
+            # Create expand action
+            expand_action = {
+                "selector": summary_selector,
+                "type": "click",
+                "value": ""
+            }
+            
+            print(f"DEBUG: Details expand action created - selector: {summary_selector}")
+            return expand_action
+            
+        except Exception as e:
+            print(f"DEBUG: Error in _check_and_create_details_expand_action: {str(e)}")
+            return None
 
     def _extract_answer_from_data(self, answer_data: Dict[str, Any]) -> str:
         """Extract answer value from answer data structure"""
@@ -4907,6 +5008,9 @@ class LangGraphFormProcessor:
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Async version of process_form using LangGraph workflow"""
         try:
+            # Reset details expansion tracking for new form
+            self._expanded_details = set()
+            
             print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Starting with step_key: {step_key}")
             print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - HTML length: {len(form_html)}")
             print(
