@@ -2424,6 +2424,31 @@ class LangGraphFormProcessor:
         # Also set it for the step analyzer
         if hasattr(self.step_analyzer, 'set_workflow_id'):
             self.step_analyzer.set_workflow_id(workflow_id)
+    
+    def _is_phone_code_field(self, question: Dict[str, Any]) -> bool:
+        """Check if a field is a phone/country code field that should have '+' prefix removed"""
+        field_name = question.get("field_name", "").lower()
+        field_label = question.get("field_label", "").lower()
+        field_selector = question.get("field_selector", "").lower()
+        
+        # Keywords that indicate phone/country code fields
+        code_keywords = [
+            "international code", "country code", "phone code", "dialing code",
+            "area code", "calling code", "telephone code", "mobile code"
+        ]
+        
+        # Check field name, label, and selector for code-related keywords
+        for keyword in code_keywords:
+            if (keyword in field_name or 
+                keyword in field_label or 
+                keyword in field_selector):
+                return True
+        
+        # Additional pattern checks
+        if "code" in field_name and ("phone" in field_name or "country" in field_name):
+            return True
+            
+        return False
 
     def _invoke_llm(self, messages: List, workflow_id: str = None):
         """Invoke LLM (workflow_id kept for logging purposes only)"""
