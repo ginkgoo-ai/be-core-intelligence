@@ -1732,6 +1732,82 @@ class StepAnalyzer:
             print(f"DEBUG: _is_duration_comparison_match - Error parsing values: {e}")
             return False
 
+    def _generate_enhanced_selector(self, question: Dict[str, Any], option_value: str = None) -> str:
+        """Generate enhanced CSS selector with element type and attributes
+        
+        Examples:
+        - input[id="mandatoryDocuments_travelDocRef-TUR-Elif Kaya_0"]
+        - input[type="radio"][name="warCrimesInvolvement"][value="false"]
+        """
+        try:
+            field_type = question.get("field_type", "")
+            field_name = question.get("field_name", "")
+            original_selector = question.get("field_selector", "")
+            
+            # Extract element type from field type
+            if field_type in ["radio", "checkbox"]:
+                element_type = "input"
+            elif field_type == "textarea":
+                element_type = "textarea"
+            elif field_type in ["select", "select-one", "select-multiple"]:
+                element_type = "select"
+            elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local"]:
+                element_type = "input"
+            else:
+                element_type = "input"  # Default fallback
+            
+            # Try to extract ID from original selector
+            element_id = ""
+            if original_selector.startswith("#"):
+                element_id = original_selector[1:]  # Remove #
+            elif "id=" in original_selector:
+                # Extract from attribute selector: input[id="someId"]
+                import re
+                id_match = re.search(r'id=["\']([^"\']*)["\']', original_selector)
+                if id_match:
+                    element_id = id_match.group(1)
+            
+            # 🚀 ENHANCED: For radio/checkbox with option_value, try to generate specific ID if possible
+            if field_type in ["radio", "checkbox"] and option_value and not element_id:
+                # Try common ID patterns for specific option values
+                if option_value in ["true", "false"]:
+                    element_id = f"{field_name}_{option_value}"
+                elif field_name.endswith("[0]"):
+                    # For array fields like mandatoryDocuments[0], use base name + value + index
+                    base_name = field_name.replace("[0]", "")
+                    element_id = f"{base_name}_{option_value}_0"
+                else:
+                    # For other cases, use field_name + option_value pattern
+                    element_id = f"{field_name}_{option_value}".replace("[", "_").replace("]", "")
+            
+            # Generate enhanced selector based on available information
+            if element_id:
+                # Use ID-based selector with element type
+                enhanced_selector = f'{element_type}[id="{element_id}"]'
+            elif field_name and option_value:
+                # Generate attribute-based selector for radio/checkbox with specific value
+                enhanced_selector = f'{element_type}[type="{field_type}"][name="{field_name}"][value="{option_value}"]'
+            elif field_name:
+                # Generate attribute-based selector for the field
+                if field_type in ["radio", "checkbox"]:
+                    enhanced_selector = f'{element_type}[type="{field_type}"][name="{field_name}"]'
+                else:
+                    enhanced_selector = f'{element_type}[name="{field_name}"]'
+            else:
+                # Fallback to original selector with element type
+                if original_selector.startswith("#") or original_selector.startswith("."):
+                    # Keep CSS shorthand but add element type
+                    enhanced_selector = f'{element_type}{original_selector}'
+                else:
+                    enhanced_selector = original_selector
+                
+            print(f"DEBUG: Enhanced selector - Field: '{field_name}', Type: '{field_type}', Option: '{option_value}' -> '{enhanced_selector}'")
+            return enhanced_selector
+            
+        except Exception as e:
+            print(f"DEBUG: Error generating enhanced selector: {str(e)}")
+            return question.get("field_selector", "")
+
     def _create_answer_data(self, question: Dict[str, Any], ai_answer: Optional[Dict[str, Any]],
                             needs_intervention: bool) -> List[Dict[str, Any]]:
         """Create answer data array based on field type and AI answer
@@ -1812,31 +1888,15 @@ class StepAnalyzer:
                         option_value = matched_option.get("value", "")
                         original_selector = question.get("field_selector", "")
 
-                        # 🚀 OPTIMIZATION: 智能选择器生成
-                        # 首先检查原始selector是否直接可用（单选项checkbox的情况）
+                        # 🚀 ENHANCED: Use enhanced selector generation
                         if field_type == "checkbox" and len(options) == 1:
-                            # 单选项checkbox通常直接使用原始字段selector
-                            correct_selector = original_selector
+                            # Single checkbox uses original selector enhanced
+                            correct_selector = self._generate_enhanced_selector(question)
                         else:
-                            # 多选项radio/checkbox，需要生成指向特定选项的selector
-                            if option_value in ["true", "false"]:
-                                # 尝试常见的ID模式
-                                possible_selectors = [
-                                    f"#{field_name}_{option_value}",  # addAnother_false
-                                    f"#value_{option_value}",  # value_false
-                                    f"#{field_name}_{option_value.title()}",  # addAnother_False
-                                    f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"  # fallback
-                                ]
-                            else:
-                                possible_selectors = [
-                                    f"#{field_name}_{option_value}",
-                                    f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
-                                ]
-                            
-                            # 选择第一个可能的选择器作为主选择器
-                            correct_selector = possible_selectors[0]
+                            # Multi-option radio/checkbox with specific value
+                            correct_selector = self._generate_enhanced_selector(question, option_value)
                     else:
-                        correct_selector = question["field_selector"]
+                        correct_selector = self._generate_enhanced_selector(question)
 
                     print(
                         f"DEBUG: _create_answer_data - Generated correct selector: '{correct_selector}' for option '{matched_option.get('text', '')}'")
@@ -1874,18 +1934,13 @@ class StepAnalyzer:
                             option_value = default_option.get("value", "")
                             original_selector = question.get("field_selector", "")
 
-                            # 首先检查原始selector是否直接可用（单选项checkbox的情况）
+                            # 🚀 ENHANCED: Use enhanced selector generation for default option
                             if field_type == "checkbox" and len(options) == 1:
-                                # 单选项checkbox通常直接使用原始字段selector
-                                default_selector = original_selector
+                                default_selector = self._generate_enhanced_selector(question)
                             else:
-                                # 多选项radio/checkbox，需要生成指向特定选项的selector
-                                if option_value in ["true", "false"]:
-                                    default_selector = f"#{field_name}_{option_value}"  # 使用字段名+值的格式
-                                else:
-                                    default_selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                                default_selector = self._generate_enhanced_selector(question, option_value)
                         else:
-                            default_selector = question["field_selector"]
+                            default_selector = self._generate_enhanced_selector(question)
 
                         # 🚀 FIXED: Different handling for select vs autocomplete fields (default options)
                         if field_type == "autocomplete":
@@ -1913,7 +1968,7 @@ class StepAnalyzer:
                             "name": ai_answer_value,
                             "value": ai_answer_value,
                             "check": 1,  # Mark as selected because AI provided an answer
-                            "selector": question["field_selector"]
+                            "selector": self._generate_enhanced_selector(question)
                         }]
             else:
                 # 没有答案：存储完整选项列表供用户选择
@@ -1922,32 +1977,23 @@ class StepAnalyzer:
                 for option in options:
                     # 构建选择器
                     if field_type == "autocomplete":
-                        selector = question["field_selector"]
+                        selector = self._generate_enhanced_selector(question)
                         # For autocomplete fields, use text as value in option list
                         option_value_to_use = option.get("text", option.get("value", ""))
                     elif field_type == "select":
-                        selector = question["field_selector"]
+                        selector = self._generate_enhanced_selector(question)
                         # For regular select fields, use value in option list
                         option_value_to_use = option.get("value", "")
                     else:
-                        # 为radio/checkbox生成正确的选择器
-                        field_name = question.get("field_name", "")
+                        # 🚀 ENHANCED: Generate enhanced selector for option list
                         option_value = option.get("value", "")
                         option_value_to_use = option_value  # Keep original value for radio/checkbox
-                        original_selector = question.get("field_selector", "")
 
-                        # 首先检查原始selector是否直接可用（单选项checkbox的情况）
+                        # Use enhanced selector generation for each option
                         if field_type == "checkbox" and len(options) == 1:
-                            # 单选项checkbox通常直接使用原始字段selector
-                            selector = original_selector
+                            selector = self._generate_enhanced_selector(question)
                         else:
-                            # 多选项radio/checkbox，需要生成指向特定选项的selector
-                            # 使用字段名+值的ID格式（最常见的模式）
-                            if option_value in ["true", "false"]:
-                                selector = f"#{field_name}_{option_value}"  # addAnother_false
-                            else:
-                                # 使用属性选择器
-                                selector = f"input[type='{field_type}'][name='{field_name}'][value='{option_value}']"
+                            selector = self._generate_enhanced_selector(question, option_value)
 
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
@@ -1965,7 +2011,7 @@ class StepAnalyzer:
                     "name": ai_answer_value,
                     "value": ai_answer_value,
                     "check": 1,  # Mark as filled because AI provided an answer
-                    "selector": question["field_selector"]
+                    "selector": self._generate_enhanced_selector(question)
                 }]
             else:
                 # No answer from AI - show empty field for user input
@@ -1973,7 +2019,7 @@ class StepAnalyzer:
                     "name": "",
                     "value": "",
                     "check": 0,  # Empty field - waiting for user input
-                    "selector": question["field_selector"]
+                    "selector": self._generate_enhanced_selector(question)
                 }]
 
     async def analyze_step_async(self, html_content: str, workflow_id: str, current_step_key: str) -> Dict[str, Any]:
