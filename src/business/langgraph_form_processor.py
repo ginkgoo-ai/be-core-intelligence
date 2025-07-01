@@ -1300,7 +1300,7 @@ class StepAnalyzer:
                - "2 years" vs "3 years or less" → MATCHES (2 ≤ 3) (confidence 90+)
                - "2 years" vs "More than 3 years" → Does NOT match (2 ≤ 3)
                - Extract numbers from text and perform logical comparisons
-                         7. **SEMANTIC MATCHING PATTERNS**:
+            7. **SEMANTIC MATCHING PATTERNS**:
                - "another/additional/other email" matches "hasOtherEmailAddresses", "additionalEmail", "secondaryEmail"
                - "telephone/phone number" matches "telephoneNumber", "phoneNumber", "contactNumber"
                - "first/given name" matches "givenName", "firstName", "name"
@@ -3800,33 +3800,52 @@ class LangGraphFormProcessor:
         """Node: Generate form actions from merged Q&A data"""
         try:
             print("DEBUG: Action Generator - Starting")
+            print(f"DEBUG: Action Generator - Total merged_qa_data items: {len(state.get('merged_qa_data', []))}")
 
             actions = []
             merged_data = state.get("merged_qa_data", [])
+            
+            # 统计各种跳过原因
+            skip_stats = {
+                "intervention_needed": 0,
+                "interrupt_field": 0,
+                "no_valid_answer": 0,
+                "conditionally_skipped": 0,
+                "conditionally_hidden": 0,
+                "empty_answer": 0,
+                "processed": 0
+            }
 
             for item in merged_data:
                 # Extract metadata for action generation
                 metadata = item.get("_metadata", {})
                 question_data = item.get("question", {})
 
+                # Get answer data for processing
+                answer_data = question_data.get("answer", {})
+                data_array = answer_data.get("data", [])
+                
                 # Skip fields that need human intervention
                 needs_intervention = metadata.get('needs_intervention', False)
                 has_valid_answer = metadata.get('has_valid_answer', False)
                 is_interrupt = question_data.get("type") == "interrupt"
+                
+                # 🚀 NEW: Check if field is conditionally hidden (from answer data)
+                # Only consider a field conditionally hidden if ALL items are hidden AND none are checked
+                checked_items = [item for item in data_array if item.get("check") == 1]
+                hidden_items = [item for item in data_array if item.get("conditionally_hidden", False)]
+                is_conditionally_hidden = len(hidden_items) == len(data_array) and len(checked_items) == 0
                 
                 print(f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')}")
                 print(f"DEBUG: Action Generator - Field type: {metadata.get('field_type', 'unknown')}")
                 print(f"DEBUG: Action Generator - Needs intervention: {needs_intervention}")
                 print(f"DEBUG: Action Generator - Has valid answer: {has_valid_answer}")
                 print(f"DEBUG: Action Generator - Is interrupt: {is_interrupt}")
+                print(f"DEBUG: Action Generator - Data array length: {len(data_array)}")
+                print(f"DEBUG: Action Generator - Checked items: {len(checked_items)}")
+                print(f"DEBUG: Action Generator - Hidden items: {len(hidden_items)}")
+                print(f"DEBUG: Action Generator - Is conditionally hidden: {is_conditionally_hidden}")
 
-                # Get answer data for processing
-                answer_data = question_data.get("answer", {})
-                data_array = answer_data.get("data", [])
-                
-                # 🚀 NEW: Check if field is conditionally hidden (from answer data)
-                is_conditionally_hidden = any(item.get("conditionally_hidden", False) for item in data_array)
-                
                 # Skip fields that need intervention, are interrupt fields, or are conditionally skipped/hidden
                 is_conditionally_skipped = metadata.get('conditional_skip', False)
                 if needs_intervention or is_interrupt or not has_valid_answer or is_conditionally_skipped or is_conditionally_hidden:
@@ -3835,8 +3854,23 @@ class LangGraphFormProcessor:
                                 "no valid answer" if not has_valid_answer else \
                                 "conditionally skipped" if is_conditionally_skipped else \
                                 "conditionally hidden"
+                    
+                    # 更新统计信息
+                    if needs_intervention:
+                        skip_stats["intervention_needed"] += 1
+                    elif is_interrupt:
+                        skip_stats["interrupt_field"] += 1
+                    elif not has_valid_answer:
+                        skip_stats["no_valid_answer"] += 1
+                    elif is_conditionally_skipped:
+                        skip_stats["conditionally_skipped"] += 1
+                    elif is_conditionally_hidden:
+                        skip_stats["conditionally_hidden"] += 1
+                        
                     print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - {skip_reason}")
+                    print(f"DEBUG: Action Generator - Field details - confidence: {metadata.get('confidence', 'N/A')}, reasoning: {metadata.get('reasoning', 'N/A')[:100]}...")
                     continue
+
 
                 # Extract answer value from the data array
                 answer_value = self._extract_answer_from_data(answer_data)
@@ -3844,8 +3878,13 @@ class LangGraphFormProcessor:
 
                 # Skip if no meaningful answer value
                 if not answer_value or answer_value.strip() == "":
+                    skip_stats["empty_answer"] += 1
                     print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - empty answer")
+                    print(f"DEBUG: Action Generator - Answer data: {answer_data}")
                     continue
+                
+                # 字段将被处理
+                skip_stats["processed"] += 1
 
                 # 🚀 NEW: Check if field is inside <details> element that needs to be expanded first
                 field_selector = metadata.get("field_selector", "")
@@ -3862,6 +3901,7 @@ class LangGraphFormProcessor:
                 if metadata.get("field_type") in ["checkbox", "radio"]:
                     data_array = answer_data.get("data", [])
                     precise_actions_generated = False
+                    print(f"DEBUG: Action Generator - Processing {metadata.get('field_type')} field with {len(data_array)} options")
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # Generate action for this specific checked item
@@ -3875,13 +3915,18 @@ class LangGraphFormProcessor:
                             print(f"DEBUG: Action Generator - Generated {metadata.get('field_type')} action: {action}")
                     
                     if precise_actions_generated:
+                        print(f"DEBUG: Action Generator - Skipping traditional generation for {metadata.get('field_name')} - precise actions generated")
                         continue  # Skip the traditional action generation only if we generated precise actions
+                    else:
+                        print(f"DEBUG: Action Generator - No checked items found for {metadata.get('field_name')}, continuing to traditional generation")
 
                 # For non-checkbox fields or checkboxes without checked items, use traditional generation
                 # Generate action for input fields and other field types
                 if metadata.get("field_type") in ["text", "email", "password", "number", "tel", "url", "date", "time",
-                                                  "datetime-local", "textarea", "select"]:
+                                                  "datetime-local", "textarea", "select", "autocomplete"]:
                     data_array = answer_data.get("data", [])
+                    print(f"DEBUG: Action Generator - Processing input field {metadata.get('field_name')} with {len(data_array)} data items")
+                    actions_generated_for_field = 0
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # 🚀 OPTIMIZATION: For country/location fields, prefer readable text over codes
@@ -3932,9 +3977,11 @@ class LangGraphFormProcessor:
                                 "value": action_value
                             }
                             actions.append(action)
+                            actions_generated_for_field += 1
                             print(f"DEBUG: Action Generator - Generated {action['type']} action: {action}")
                             # 🚀 CRITICAL FIX: Process ALL data items, not just the first one
                             # This ensures multiple related fields (e.g., issue date AND expiry date) are all handled
+                    print(f"DEBUG: Action Generator - Generated {actions_generated_for_field} actions for input field {metadata.get('field_name')}")
                     continue  # Skip traditional generation for input fields
 
                 # Create a compatible data structure for the existing action generator
@@ -4113,6 +4160,8 @@ class LangGraphFormProcessor:
             state["form_actions"] = actions
             print(f"DEBUG: Action Generator - Generated {len(actions)} actions total (including submit)")
             print("DEBUG: Action Generator - Actions sorted by HTML element position order")
+            print(f"DEBUG: Action Generator - Skip statistics: {skip_stats}")
+            print(f"DEBUG: Action Generator - Processing success rate: {skip_stats['processed']}/{len(merged_data)} ({skip_stats['processed']/len(merged_data)*100:.1f}% if merged_data else 0)" if merged_data else "No merged data")
 
             # Debug: Print all generated actions in order
             for i, action in enumerate(actions, 1):
@@ -4300,6 +4349,8 @@ class LangGraphFormProcessor:
                         break
 
             print(f"DEBUG: LLM Action Generator - Extracted dummy data context: {dummy_data_context}")
+            print(f"DEBUG: LLM Action Generator - Dummy data fields count: {len(dummy_data_context)}")
+            print(f"DEBUG: LLM Action Generator - Profile data structure: {list(state['profile_data'].keys())}")
 
             # Prepare enhanced prompt with HTML, profile data, and dummy data context
             prompt = f"""
