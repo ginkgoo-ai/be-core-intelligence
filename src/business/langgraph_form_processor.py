@@ -5305,10 +5305,11 @@ class LangGraphFormProcessor:
                 if initial_state.get("error_details"):
                     raise Exception(initial_state["error_details"])
 
-                # 🚀 FIX: Add dependency analyzer BEFORE question generation (like sync version)
-                initial_state = self._dependency_analyzer_node(initial_state)
-                if initial_state.get("error_details"):
-                    raise Exception(initial_state["error_details"])
+                # 🚀 PERFORMANCE: Skip dependency analysis for better speed (can be re-enabled if needed)
+                # initial_state = self._dependency_analyzer_node(initial_state)
+                # if initial_state.get("error_details"):
+                #     raise Exception(initial_state["error_details"])
+                print("DEBUG: Skipping dependency analysis for performance optimization")
 
                 # Question Generator node
                 initial_state = self._question_generator_node(initial_state)
@@ -5330,6 +5331,9 @@ class LangGraphFormProcessor:
                 if initial_state.get("error_details"):
                     raise Exception(initial_state["error_details"])
 
+                # 🚀 PERFORMANCE: Skip consistency checks for better speed
+                # initial_state = self._consistency_checker_node(initial_state)
+                
                 # 🚀 SIMPLIFIED: Skip dependency audit (only HTML dependency analysis is enough)
                 # Action Generator node (traditional, for precise checkbox handling)
                 initial_state = self._action_generator_node(initial_state)
@@ -5456,7 +5460,7 @@ class LangGraphFormProcessor:
                 remaining_questions = []
 
                 try:
-                    # Attempt batch analysis for all questions
+                    # 🚀 PERFORMANCE: Always try batch processing first, regardless of question count
                     batch_answers = await self._batch_analyze_fields_async(field_questions, profile_data,
                                                                            profile_dummy_data)
 
@@ -5623,6 +5627,14 @@ class LangGraphFormProcessor:
                     f"DEBUG: Using profile_data despite lower confidence for field {question['field_name']}: answer='{primary_result['answer']}', confidence={primary_result['confidence']}")
                 primary_result["used_dummy_data"] = False
                 return primary_result
+
+            # 🚀 NEW: Smart field correlation - try to infer values from related fields
+            smart_inference = self._try_smart_field_correlation(question, profile_dummy_data)
+            if smart_inference and smart_inference["confidence"] >= 60:
+                print(f"DEBUG: ✅ SMART INFERENCE - Using correlated field data for {question['field_name']}: answer='{smart_inference['answer']}', confidence={smart_inference['confidence']}")
+                smart_inference["used_dummy_data"] = True
+                smart_inference["dummy_data_source"] = "smart_correlation"
+                return smart_inference
 
             # If all attempts failed, return empty result (no AI generation)
             print(f"DEBUG: No suitable data found for field {question['field_name']}, leaving empty")
@@ -6383,7 +6395,7 @@ class LangGraphFormProcessor:
 
             # Only use early return if we have a high percentage of exact matches
             exact_match_ratio = exact_matches / len(questions)
-            if exact_match_ratio >= 0.7:  # 70% or more exact matches
+            if exact_match_ratio >= 0.4:  # 🚀 PERFORMANCE: Lowered to 40% for better early return rate
                 print(
                     f"DEBUG: Early Return - Found {exact_matches}/{len(questions)} exact matches ({exact_match_ratio:.1%})")
 
@@ -6842,6 +6854,111 @@ class LangGraphFormProcessor:
                         return True
          
         return False
+
+    def _try_smart_field_correlation(self, question: Dict[str, Any], profile_dummy_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """🚀 NEW: Smart field correlation - infer values from related fields and data"""
+        try:
+            field_name = question.get("field_name", "").lower()
+            field_type = question.get("field_type", "")
+            
+            print(f"DEBUG: Smart correlation - Analyzing field '{field_name}' (type: {field_type})")
+            
+            # Pattern 1: Time duration calculation (timeLived + timeLivedUnit)
+            if field_name == "timelived" and profile_dummy_data:
+                # Look for date information in contactInformation.currentAddress
+                contact_info = profile_dummy_data.get("contactInformation", {})
+                current_address = contact_info.get("currentAddress", {})
+                date_moved_in = current_address.get("dateMovedIn", "")
+                
+                if date_moved_in:
+                    print(f"DEBUG: Smart correlation - Found dateMovedIn: {date_moved_in}")
+                    try:
+                        from datetime import datetime
+                        # Parse the date (format: YYYY-MM-DD)
+                        move_date = datetime.strptime(date_moved_in, "%Y-%m-%d")
+                        current_date = datetime.now()
+                        
+                        # Calculate years difference
+                        years_lived = current_date.year - move_date.year
+                        if current_date.month < move_date.month or (current_date.month == move_date.month and current_date.day < move_date.day):
+                            years_lived -= 1
+                        
+                        print(f"DEBUG: Smart correlation - Calculated years lived: {years_lived}")
+                        
+                        if years_lived > 0:
+                            return {
+                                "question_id": question.get("id", ""),
+                                "field_selector": question.get("field_selector", ""),
+                                "field_name": question.get("field_name", ""),
+                                "answer": str(years_lived),
+                                "confidence": 85,
+                                "reasoning": f"Calculated from dateMovedIn ({date_moved_in}): approximately {years_lived} years at current address",
+                                "needs_intervention": False,
+                                "used_dummy_data": True
+                            }
+                    except Exception as date_error:
+                        print(f"DEBUG: Smart correlation - Date parsing error: {date_error}")
+            
+            # Pattern 2: Address completion (if one address field is filled, infer others)
+            if "address" in field_name or "street" in field_name or "city" in field_name:
+                contact_info = profile_dummy_data.get("contactInformation", {}) if profile_dummy_data else {}
+                current_address = contact_info.get("currentAddress", {})
+                
+                # Map field names to address components
+                address_mapping = {
+                    "addressline1": current_address.get("addressLine1", ""),
+                    "addressline2": current_address.get("addressLine2", ""),
+                    "city": current_address.get("city", ""),
+                    "postalcode": current_address.get("postalCode", ""),
+                    "country": current_address.get("country", "")
+                }
+                
+                for addr_key, addr_value in address_mapping.items():
+                    if addr_key in field_name and addr_value:
+                        print(f"DEBUG: Smart correlation - Found address match: {addr_key} = {addr_value}")
+                        return {
+                            "question_id": question.get("id", ""),
+                            "field_selector": question.get("field_selector", ""),
+                            "field_name": question.get("field_name", ""),
+                            "answer": str(addr_value),
+                            "confidence": 90,
+                            "reasoning": f"Direct match from contactInformation.currentAddress.{addr_key}",
+                            "needs_intervention": False,
+                            "used_dummy_data": True
+                        }
+            
+            # Pattern 3: Personal details inference
+            if any(keyword in field_name for keyword in ["name", "surname", "firstname", "lastname"]):
+                personal_details = profile_dummy_data.get("personalDetails", {}) if profile_dummy_data else {}
+                
+                name_mapping = {
+                    "firstname": personal_details.get("givenName", ""),
+                    "givenname": personal_details.get("givenName", ""),
+                    "lastname": personal_details.get("familyName", ""),
+                    "familyname": personal_details.get("familyName", ""),
+                    "surname": personal_details.get("familyName", "")
+                }
+                
+                for name_key, name_value in name_mapping.items():
+                    if name_key in field_name and name_value:
+                        print(f"DEBUG: Smart correlation - Found name match: {name_key} = {name_value}")
+                        return {
+                            "question_id": question.get("id", ""),
+                            "field_selector": question.get("field_selector", ""),
+                            "field_name": question.get("field_name", ""),
+                            "answer": str(name_value),
+                            "confidence": 95,
+                            "reasoning": f"Direct match from personalDetails.{name_key}",
+                            "needs_intervention": False,
+                            "used_dummy_data": True
+                        }
+            
+            print(f"DEBUG: Smart correlation - No correlation found for field '{field_name}'")
+            return None
+            
+        except Exception as e:
+            print(f"DEBUG: Smart correlation - Error: {str(e)}")
+            return None
 
     # 🚀 SIMPLIFIED: Removed form dependency audit node - only HTML dependency analysis is used
 
