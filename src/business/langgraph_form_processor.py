@@ -4286,7 +4286,7 @@ For each field, check:
                         needs_intervention = False
                         print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' is conditionally hidden, skipping intervention")
                     else:
-                        # 🚀 CRITICAL FIX: Enhanced intervention logic for required fields
+                        # 🚀 CRITICAL FIX: Enhanced intervention logic for ALL fields with empty answers
                         ai_answer_value = ai_answer.get("answer", "").strip() if ai_answer else ""
                         is_required = question.get("required", False)
                         
@@ -4294,14 +4294,14 @@ For each field, check:
                         # 1. No AI answer at all
                         # 2. AI explicitly marked as needing intervention
                         # 3. Low confidence (< 50)
-                        # 4. NEW: Required field with empty answer (regardless of confidence)
+                        # 4. ENHANCED: ANY field with empty answer (regardless of required status)
                         needs_intervention = (not ai_answer or
                                               ai_answer.get("needs_intervention", False) or
                                               ai_answer.get("confidence", 0) < 50 or
-                                              (is_required and not ai_answer_value))
+                                              not ai_answer_value)  # Check empty answer for ALL fields
                         
-                        if is_required and not ai_answer_value:
-                            print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                        if not ai_answer_value:
+                            print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required})")
                         elif needs_intervention:
                             print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
 
