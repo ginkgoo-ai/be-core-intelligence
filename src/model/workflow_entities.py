@@ -36,8 +36,8 @@ class WorkflowDefinition(Base):
     type = Column(String(50), nullable=False, default="visa", comment="模板类型(visa,passport,immigration等)")
     is_active = Column(Boolean, default=True, comment="是否激活")
     step_definitions = Column(JSON, nullable=True, comment="步骤定义JSON")
-    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
+    created_at = Column(DateTime, default=lambda: datetime.now(), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now(), comment="更新时间")
     
     # Relationships
     workflow_instances = relationship("WorkflowInstance", back_populates="workflow_definition")
@@ -57,8 +57,8 @@ class WorkflowInstance(Base):
     current_step_key = Column(String(100), nullable=True, comment="当前步骤键")
     progress_file_id = Column(String(100), nullable=True, comment="进度文件ID(外部系统管理)")
     dummy_data_usage = Column(JSON, nullable=True, comment="虚拟数据使用记录JSON数组: [{'processed_at':'2024-01-01T12:00:00','step_key':'personal_details','question':'请选择您的国籍','answer':'i am dummy data'}]")
-    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
+    created_at = Column(DateTime, default=lambda: datetime.now(), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now(), comment="更新时间")
     completed_at = Column(DateTime, nullable=True, comment="完成时间")
     
     # Relationships (removed user relationship)
@@ -86,7 +86,7 @@ class StepInstance(Base):
     current_question = Column(String, comment="当前页面要回答的问题")
     expected_questions = Column(JSON, comment="步骤预期要回答的问题列表")
     sub_steps = Column(JSON, comment="子步骤信息")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now(), comment="更新时间")
     
     # Relationships
     workflow_instance = relationship("WorkflowInstance", back_populates="step_instances")

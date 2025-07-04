@@ -904,7 +904,7 @@ async def get_current_step(
             # 更新工作流当前步骤
             workflow_instance.current_step_key = current_step.step_key
             current_step.status = StepStatus.ACTIVE
-            current_step.started_at = datetime.utcnow()
+            current_step.started_at = datetime.now()
             db.commit()
 
         return {

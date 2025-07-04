@@ -116,7 +116,7 @@ async def global_exception_handler(request, exc):
             "error": "Internal server error",
             "message": str(exc),
             "type": type(exc).__name__,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
     )
 

@@ -579,7 +579,7 @@ class StepService:
                 step_instance_id=step.step_instance_id,
                 status=StepStatus.COMPLETED_SUCCESS,
                 message=f"步骤 {step_key} 已完成",
-                updated_at=datetime.utcnow()
+                updated_at=datetime.now()
             )
             
         except Exception as e:
@@ -658,7 +658,7 @@ class StepService:
             
             return AutosaveConfirmation(
                 step_instance_id=step.step_instance_id,
-                saved_at=datetime.utcnow(),
+                saved_at=datetime.now(),
                 message="数据已自动保存"
             )
             
