@@ -1,16 +1,14 @@
-from sqlalchemy.orm import Session
-from typing import List, Optional, Dict, Any
-from datetime import datetime
 import uuid
+from datetime import datetime
+from typing import List, Optional, Dict, Any
+
+from sqlalchemy.orm import Session
 
 from src.model.workflow_entities import (
-    WorkflowDefinition, WorkflowInstance, StepInstance, 
+    WorkflowDefinition, WorkflowInstance, StepInstance,
     WorkflowStatus, StepStatus
 )
-from src.model.workflow_schemas import (
-    WorkflowInitiationPayload, WorkflowInstanceSummary, WorkflowInstanceDetail,
-    StepDataModel, PersonalDetailsModel, ContactAddressModel
-)
+
 
 class BaseRepository:
     """Base repository class"""
@@ -76,7 +74,7 @@ class WorkflowDefinitionRepository(BaseRepository):
             if field in allowed_fields and value is not None:
                 setattr(definition, field, value)
         
-        definition.updated_at = datetime.utcnow()
+        definition.updated_at = datetime.now()
         self.db.flush()
         return definition
     
@@ -87,7 +85,7 @@ class WorkflowDefinitionRepository(BaseRepository):
             return False
         
         definition.is_active = False
-        definition.updated_at = datetime.utcnow()
+        definition.updated_at = datetime.now()
         self.db.flush()
         return True
     
@@ -198,9 +196,9 @@ class WorkflowInstanceRepository(BaseRepository):
             if status is not None:
                 instance.status = status
                 if status == WorkflowStatus.COMPLETED:
-                    instance.completed_at = datetime.utcnow()
+                    instance.completed_at = datetime.now()
             
-            instance.updated_at = datetime.utcnow()
+            instance.updated_at = datetime.now()
             if current_step_key:
                 instance.current_step_key = current_step_key
             return instance
@@ -211,7 +209,7 @@ class WorkflowInstanceRepository(BaseRepository):
         instance = self.get_instance_by_id(instance_id)
         if instance:
             instance.progress_file_id = file_id
-            instance.updated_at = datetime.utcnow()
+            instance.updated_at = datetime.now()
             return instance
         return None
     
@@ -287,12 +285,12 @@ class StepInstanceRepository(BaseRepository):
         step = self.get_step_by_id(step_id)
         if step:
             step.status = status
-            step.updated_at = datetime.utcnow()
+            step.updated_at = datetime.now()
             
             if status == StepStatus.ACTIVE:
-                step.started_at = datetime.utcnow()
+                step.started_at = datetime.now()
             elif status in [StepStatus.COMPLETED_SUCCESS, StepStatus.COMPLETED_ERROR]:
-                step.completed_at = datetime.utcnow()
+                step.completed_at = datetime.now()
             
             return step
         return None
@@ -302,7 +300,7 @@ class StepInstanceRepository(BaseRepository):
         step = self.get_step_by_id(step_id)
         if step:
             step.data = data
-            step.updated_at = datetime.utcnow()
+            step.updated_at = datetime.now()
             return step
         return None
     
@@ -312,7 +310,7 @@ class StepInstanceRepository(BaseRepository):
         if step:
             step.error_details = error_details
             step.status = StepStatus.COMPLETED_ERROR
-            step.updated_at = datetime.utcnow()
-            step.completed_at = datetime.utcnow()
+            step.updated_at = datetime.now()
+            step.completed_at = datetime.now()
             return step
         return None 

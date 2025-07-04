@@ -48,7 +48,7 @@ class CrossPageDataCache:
             cache_data = {
                 "workflow_id": workflow_id,
                 "step_key": step_key,
-                "processed_at": datetime.utcnow().isoformat(),
+                "processed_at": datetime.now().isoformat(),
                 "page_data": page_data,
                 "extracted_info": self._extract_key_info(page_data, step_key)
             }
@@ -365,7 +365,7 @@ class CrossPageDataCache:
         try:
             processed_at = datetime.fromisoformat(cache_data.get("processed_at", ""))
             expiry_time = processed_at + timedelta(seconds=self.cache_ttl)
-            return datetime.utcnow() < expiry_time
+            return datetime.now() < expiry_time
         except:
             return False
     

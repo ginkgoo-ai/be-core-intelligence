@@ -261,14 +261,14 @@ class StepAnalyzer:
                 if current_step:
                     # 1. Complete current step
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
-                    current_step.completed_at = datetime.utcnow()
+                    current_step.completed_at = datetime.now()
                     print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
 
                     # 2. Activate next step
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
-                        next_step.started_at = datetime.utcnow()
+                        next_step.started_at = datetime.now()
                         print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
 
                         # 3. Update workflow instance's current step
@@ -1790,14 +1790,14 @@ class StepAnalyzer:
                 if current_step:
                     # 1. 完成当前步骤
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
-                    current_step.completed_at = datetime.utcnow()
+                    current_step.completed_at = datetime.now()
                     print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
 
                     # 2. 激活下一个步骤
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
-                        next_step.started_at = datetime.utcnow()
+                        next_step.started_at = datetime.now()
                         print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
 
                         # 3. 更新工作流实例的当前步骤
@@ -5980,7 +5980,7 @@ For each field, check:
 
             # Create new operation record for history
             new_operation = {
-                "processed_at": datetime.utcnow().isoformat(),
+                "processed_at": datetime.now().isoformat(),
                 "workflow_id": state["workflow_id"],
                 "step_key": state["step_key"],
                 "success": not bool(state.get("error_details")),
@@ -6005,7 +6005,7 @@ For each field, check:
                 "questions": state.get("field_questions", []),  # 原始问题数据
                 "dummy_data_usage": state.get("dummy_data_usage", []),  # 虚拟数据使用记录
                 "metadata": {
-                    "processed_at": datetime.utcnow().isoformat(),
+                    "processed_at": datetime.now().isoformat(),
                     "workflow_id": state["workflow_id"],
                     "step_key": state["step_key"],
                     "success": not bool(state.get("error_details")),
@@ -6045,7 +6045,7 @@ For each field, check:
                         simple_records = []
                         for usage in dummy_usage:
                             simple_record = {
-                                "processed_at": datetime.utcnow().isoformat(),
+                                "processed_at": datetime.now().isoformat(),
                                 "step_key": state["step_key"],
                                 "question": usage.get("question", ""),
                                 "answer": usage.get("answer", ""),
@@ -6120,7 +6120,7 @@ For each field, check:
 
             # Create error operation record for history
             error_operation = {
-                "processed_at": datetime.utcnow().isoformat(),
+                "processed_at": datetime.now().isoformat(),
                 "workflow_id": state["workflow_id"],
                 "step_key": state["step_key"],
                 "success": False,
@@ -6200,7 +6200,7 @@ For each field, check:
                 "actions": [],  # 错误情况下没有动作
                 "questions": state.get("field_questions", []),  # 原始问题数据（如果有的话）
                 "metadata": {
-                    "processed_at": datetime.utcnow().isoformat(),
+                    "processed_at": datetime.now().isoformat(),
                     "workflow_id": state["workflow_id"],
                     "step_key": state["step_key"],
                     "success": False,
@@ -6247,7 +6247,7 @@ For each field, check:
             # (provided dummy data from profile_dummy_data is not stored as it's already known)
             if usage.get("dummy_data_source") == "ai_generated":
                 workflow_record = {
-                    "processed_at": datetime.utcnow().isoformat(),
+                    "processed_at": datetime.now().isoformat(),
                     "step_key": step_key,
                     "question": usage.get("question", ""),
                     "answer": usage.get("answer", ""),
