@@ -751,6 +751,9 @@ class StepAnalyzer:
             field_label = self._find_field_label(element)
             
             # Enhanced required detection: check HTML attribute OR label text OR aria-required OR fieldset legend
+            # 🚀 CRITICAL FIX: Check for "(optional)" in label to override other required indicators
+            label_optional = field_label and "(optional)" in field_label.lower()
+            
             html_required = element.get("required") is not None
             aria_required = element.get("aria-required") == "true"
             label_required = (field_label and "(Required)" in field_label) or \
@@ -767,7 +770,12 @@ class StepAnalyzer:
                     if "(Required)" in legend_text or "Required" in legend_text:
                         fieldset_required = True
             
-            is_required = html_required or aria_required or label_required or fieldset_required
+            # 🚀 CRITICAL FIX: If label explicitly says "(optional)", override all other required indicators
+            if label_optional:
+                is_required = False
+                print(f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as OPTIONAL due to label text: '{field_label}'")
+            else:
+                is_required = html_required or aria_required or label_required or fieldset_required
             
             if is_required:
                 print(f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as REQUIRED: html_required={html_required}, aria_required={aria_required}, label_required={label_required}, fieldset_required={fieldset_required}, label='{field_label}'")
@@ -3548,46 +3556,148 @@ class LangGraphFormProcessor:
             # Apply semantic filtering rules
             excluded_question_indices = set()
             
-            # 🚀 STEP 1: Process AI-generated semantic groups (if available)
+            # 🚀 STEP 1: Process AI-generated semantic groups (if available) - FIXED INDEX MATCHING
             if semantic_groups:
                 print(f"[workflow_id:{workflow_id}] DEBUG: Processing {len(semantic_groups)} AI-generated semantic groups")
                 
                 for group in semantic_groups:
                     if group["group_type"] == "mutually_exclusive":
-                        trigger_idx = group.get("trigger_question_index")
-                        excluded_indices = group.get("excluded_question_indices", [])
+                        group_name = group.get("group_name", "")
                         exclusion_logic = group.get("exclusion_logic", "if_yes_then_exclude")
                         
-                        if trigger_idx is not None and trigger_idx < len(field_questions):
-                            trigger_question = field_questions[trigger_idx]
-                            trigger_field_name = trigger_question.get("field_name", "")
-                            trigger_answer = answer_lookup.get(trigger_field_name, "")
+                        print(f"[workflow_id:{workflow_id}] DEBUG: Processing mutually exclusive group: {group_name}")
+                        
+                        # 🚀 CRITICAL FIX: Use field name matching instead of index matching
+                        # Find trigger field by checking if it exists in answer_lookup
+                        trigger_field_name = None
+                        trigger_answer = None
+                        
+                        # For income/savings mutual exclusion, look for the trigger field
+                        if "income" in group_name.lower() and "savings" in group_name.lower():
+                            # Look for hasNoOtherIncome field
+                            for field_name, answer in answer_lookup.items():
+                                if "hasnootherincome" in field_name.lower():
+                                    trigger_field_name = field_name
+                                    trigger_answer = answer
+                                    break
+                        
+                        if trigger_field_name and trigger_answer is not None:
+                            print(f"[workflow_id:{workflow_id}] DEBUG: Found trigger field: {trigger_field_name}, Answer: {trigger_answer}")
                             
-                            print(f"[workflow_id:{workflow_id}] DEBUG: Checking trigger - Field: {trigger_field_name}, Answer: {trigger_answer}")
-                            
-                            # Check if exclusion condition is met
+                            # 🚀 CRITICAL FIX: Enhanced exclusion logic for income/savings mutual exclusion
                             should_exclude = False
-                            if exclusion_logic == "if_yes_then_exclude":
-                                should_exclude = any(word in trigger_answer for word in ["yes", "true", "是", "有", "don't have", "没有"])
-                            elif exclusion_logic == "if_no_then_exclude":
-                                should_exclude = any(word in trigger_answer for word in ["no", "false", "否", "don't", "not", "没有"])
+                            
+                            # Special handling for income/savings mutual exclusion
+                            if "hasnootherincome" in trigger_field_name.lower() or "no_other_income" in trigger_field_name.lower():
+                                # For "hasNoOtherIncome" field, if the answer indicates "no other income", exclude other income fields
+                                # Handle both boolean values and text responses
+                                if (trigger_answer == "true" or 
+                                    trigger_answer == "yes" or 
+                                    any(phrase in trigger_answer for phrase in [
+                                        "do not have", "don't have", "no other", "no additional", 
+                                        "no income", "no savings", "none", "没有", "无"
+                                    ])):
+                                    should_exclude = True
+                                    print(f"[workflow_id:{workflow_id}] DEBUG: 🎯 Income/Savings exclusion triggered by: {trigger_answer}")
+                            else:
+                                # Original logic for other exclusion types
+                                if exclusion_logic == "if_yes_then_exclude":
+                                    should_exclude = any(word in trigger_answer for word in ["yes", "true", "是", "有"])
+                                elif exclusion_logic == "if_no_then_exclude":
+                                    should_exclude = any(word in trigger_answer for word in ["no", "false", "否", "don't", "not", "没有"])
                             
                             if should_exclude:
-                                excluded_question_indices.update(excluded_indices)
-                                print(f"[workflow_id:{workflow_id}] DEBUG: ✅ Excluded {len(excluded_indices)} questions due to trigger: {trigger_answer}")
+                                # 🚀 CRITICAL FIX: Use field name matching to find questions to exclude
+                                pattern_excluded_count = 0
+                                for i, question in enumerate(field_questions):
+                                    question_field_name = question.get("field_name", "")
+                                    
+                                    # Check if this is an income/savings field that should be excluded
+                                    income_savings_patterns = [
+                                        "typeofincome", "sourceof", "sourceref", "amount", "savings", "income",
+                                        "howmuch", "monthly", "weekly", "annual", "currency", "moneyinbank",
+                                        "regularincome", "moneyinbankamount", "currencyref"
+                                    ]
+                                    
+                                    # Don't exclude the trigger field itself
+                                    if question_field_name == trigger_field_name:
+                                        continue
+                                        
+                                    # Check if this field should be excluded
+                                    # Remove array indices and dots for better pattern matching
+                                    clean_field_name = question_field_name.lower().replace('[', '').replace(']', '').replace('.', '').replace('_', '')
+                                    
+                                    for pattern in income_savings_patterns:
+                                        if pattern.lower() in clean_field_name:
+                                            if i not in excluded_question_indices:
+                                                excluded_question_indices.add(i)
+                                                pattern_excluded_count += 1
+                                                print(f"[workflow_id:{workflow_id}] DEBUG: AI Group excluded income/savings question {i}: {question_field_name} (matched: {pattern})")
+                                            break
+                                
+                                print(f"[workflow_id:{workflow_id}] DEBUG: ✅ AI Group excluded {pattern_excluded_count} questions due to trigger: {trigger_answer}")
                             else:
                                 print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No exclusion triggered for: {trigger_answer}")
+                        else:
+                            print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No trigger field found for group: {group_name}")
             
             # 🚀 STEP 2: Apply explicit pattern-based fallback filtering (ENHANCED)
             print(f"[workflow_id:{workflow_id}] DEBUG: Applying explicit pattern-based filtering as fallback")
             
+            # Enhanced income/savings mutual exclusion fallback
+            income_savings_exclusion_triggered = False
+            for field_name, answer in answer_lookup.items():
+                # Check for income/savings mutual exclusion patterns
+                if any(pattern in field_name.lower() for pattern in ["hasnootherincome", "no_other_income", "noadditionincome"]):
+                    # Handle both boolean values and text responses
+                    if (answer == "true" or 
+                        answer == "yes" or 
+                        any(phrase in answer for phrase in [
+                            "do not have", "don't have", "no other", "no additional", 
+                            "no income", "no savings", "none", "没有", "无"
+                        ])):
+                        print(f"[workflow_id:{workflow_id}] DEBUG: Found income/savings exclusion trigger: {field_name} = {answer}")
+                        income_savings_exclusion_triggered = True
+                        
+                        # Exclude all other income/savings related questions
+                        pattern_excluded_count = 0
+                        for i, question in enumerate(field_questions):
+                            question_field_name = question.get("field_name", "")
+                            
+                            # Check if this is an income/savings field that should be excluded
+                            income_savings_patterns = [
+                                "typeofincome", "sourceof", "sourceref", "amount", "savings", "income",
+                                "howmuch", "monthly", "weekly", "annual", "currency", "moneyinbank",
+                                "regularincome", "moneyinbankamount", "currencyref"
+                            ]
+                            
+                            # Don't exclude the trigger field itself
+                            if question_field_name == field_name:
+                                continue
+                                
+                            # Check if this field should be excluded
+                            # Remove array indices and dots for better pattern matching
+                            clean_field_name = question_field_name.lower().replace('[', '').replace(']', '').replace('.', '').replace('_', '')
+                            
+                            for pattern in income_savings_patterns:
+                                if pattern.lower() in clean_field_name:
+                                    if i not in excluded_question_indices:
+                                        excluded_question_indices.add(i)
+                                        pattern_excluded_count += 1
+                                        print(f"[workflow_id:{workflow_id}] DEBUG: Pattern excluded income/savings question {i}: {question_field_name} (matched: {pattern})")
+                                    break
+                        
+                        print(f"[workflow_id:{workflow_id}] DEBUG: ✅ Income/Savings exclusion pattern excluded {pattern_excluded_count} questions")
+                        break
+            
             # Find trigger field for parent exclusion
             parent_trigger_found = False
-            for field_name, answer in answer_lookup.items():
-                if "parentIsUnknown" in field_name or "parent" in field_name.lower() and "unknown" in field_name.lower():
-                    if answer == "true" or "don't have" in answer or "do not have" in answer:
-                        print(f"[workflow_id:{workflow_id}] DEBUG: Found parent exclusion trigger: {field_name} = {answer}")
-                        parent_trigger_found = True
+            if not income_savings_exclusion_triggered:  # Only check parent exclusion if income/savings wasn't triggered
+                for field_name, answer in answer_lookup.items():
+                    if "parentIsUnknown" in field_name or "parent" in field_name.lower() and "unknown" in field_name.lower():
+                        if answer == "true" or "don't have" in answer or "do not have" in answer:
+                            print(f"[workflow_id:{workflow_id}] DEBUG: Found parent exclusion trigger: {field_name} = {answer}")
+                            parent_trigger_found = True
                         
                         # Exclude all parent-related questions
                         pattern_excluded_count = 0
@@ -3614,8 +3724,8 @@ class LangGraphFormProcessor:
                         print(f"[workflow_id:{workflow_id}] DEBUG: ✅ Parent exclusion pattern excluded {pattern_excluded_count} questions")
                         break
             
-            if not parent_trigger_found:
-                print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No parent exclusion trigger found")
+            if not parent_trigger_found and not income_savings_exclusion_triggered:
+                print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No parent or income/savings exclusion triggers found")
             
             # Filter out excluded questions
             filtered_questions = []
@@ -4270,14 +4380,20 @@ For each field, check:
                         # 1. No AI answer at all
                         # 2. AI explicitly marked as needing intervention
                         # 3. Low confidence (< 50)
-                        # 4. ENHANCED: ANY field with empty answer (regardless of required status)
+                        # 🚀 CRITICAL FIX: Only force intervention for empty answers if field is required
+                        # For optional fields, empty answers are acceptable and should not trigger intervention
+                        empty_answer_intervention = not ai_answer_value and is_required
+                        
                         needs_intervention = (not ai_answer or
                                               ai_answer.get("needs_intervention", False) or
                                               ai_answer.get("confidence", 0) < 50 or
-                                              not ai_answer_value)  # Check empty answer for ALL fields
+                                              empty_answer_intervention)  # Only check empty answer for REQUIRED fields
                         
                         if not ai_answer_value:
-                            print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required})")
+                            if is_required:
+                                print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                            else:
+                                print(f"DEBUG: Q&A Merger - Optional field '{question.get('field_name')}' has empty answer, no intervention needed (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
                         elif needs_intervention:
                             print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
 
