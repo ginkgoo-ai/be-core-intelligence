@@ -747,13 +747,38 @@ class StepAnalyzer:
             # Generate unique ID for field tracking
             field_id = element.get("id", "") or element.get("name", "") or self._generate_selector(element)
 
+            # Get the label first so we can use it for required detection
+            field_label = self._find_field_label(element)
+            
+            # Enhanced required detection: check HTML attribute OR label text OR aria-required OR fieldset legend
+            html_required = element.get("required") is not None
+            aria_required = element.get("aria-required") == "true"
+            label_required = (field_label and "(Required)" in field_label) or \
+                           (field_label and "Required" in field_label and 
+                            ("*" in field_label or field_label.strip().endswith("Required")))
+            
+            # Check fieldset legend for Required indication
+            fieldset_required = False
+            fieldset_parent = element.find_parent("fieldset")
+            if fieldset_parent:
+                legend = fieldset_parent.find("legend")
+                if legend:
+                    legend_text = legend.get_text(strip=True)
+                    if "(Required)" in legend_text or "Required" in legend_text:
+                        fieldset_required = True
+            
+            is_required = html_required or aria_required or label_required or fieldset_required
+            
+            if is_required:
+                print(f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as REQUIRED: html_required={html_required}, aria_required={aria_required}, label_required={label_required}, fieldset_required={fieldset_required}, label='{field_label}'")
+            
             field_info = {
                 "id": field_id,  # Add unique ID for tracking
                 "name": element.get("name", ""),
                 "type": field_type,
                 "selector": self._generate_selector(element),
-                "required": element.get("required") is not None,
-                "label": self._find_field_label(element),
+                "required": is_required,  # Enhanced required detection
+                "label": field_label,
                 "placeholder": element.get("placeholder", ""),
                 "value": element.get("value", ""),
                 "options": []
@@ -1480,20 +1505,16 @@ class StepAnalyzer:
                 if id_match:
                     base_element_id = id_match.group(1)
             
-            # 🚀 FIXED: Generate correct ID based on option_value for radio/checkbox
+            # 🚀 CRITICAL FIX: For radio/checkbox, use the original base ID directly
+            # Each radio option has its own unique ID in the HTML, don't generate new ones
             element_id = ""
             if field_type in ["radio", "checkbox"] and option_value:
                 if base_element_id:
-                    # If we have a base ID like "value_true", extract the pattern and use actual option_value
-                    if "_" in base_element_id:
-                        # Extract pattern: "value_true" -> "value" + "_" + actual_option_value
-                        base_pattern = base_element_id.rsplit("_", 1)[0]  # "value"
-                        element_id = f"{base_pattern}_{option_value}"  # "value_false"
-                    else:
-                        # No pattern, use base + option_value
-                        element_id = f"{base_element_id}_{option_value}"
+                    # For radio/checkbox fields, the base_element_id IS the correct ID for this specific option
+                    # Don't modify it by adding option_value - each option has its own unique ID
+                    element_id = base_element_id
                 else:
-                    # No base ID, generate from field_name
+                    # Only generate ID if no base ID exists
                     if option_value in ["true", "false"]:
                         element_id = f"{field_name}_{option_value}"
                     elif field_name.endswith("[0]"):
@@ -1562,7 +1583,8 @@ class StepAnalyzer:
             f"DEBUG: _create_answer_data - AI reasoning: {ai_answer.get('reasoning', 'No reasoning') if ai_answer else 'No AI answer'}")
 
         if field_type in ["radio", "checkbox", "select", "autocomplete"] and options:
-            if has_ai_answer:  # AI provided an answer (real or dummy)
+            # 🚀 CRITICAL FIX: Consider needs_intervention parameter for option-based fields
+            if has_ai_answer and not needs_intervention:  # AI provided an answer and no intervention needed
                 # AI已回答：找到匹配的选项并使用选项文本
                 matched_option = None
 
@@ -1698,7 +1720,8 @@ class StepAnalyzer:
                             "selector": self._generate_enhanced_selector(question)
                         }]
             else:
-                # 没有答案：存储完整选项列表供用户选择
+                # 没有答案或需要intervention：存储完整选项列表供用户选择
+                print(f"DEBUG: _create_answer_data - Option-based field '{question.get('field_name', 'unknown')}' returning option list (needs_intervention={needs_intervention}, has_ai_answer={has_ai_answer})")
                 answer_data = []
 
                 for option in options:
@@ -1732,8 +1755,9 @@ class StepAnalyzer:
                 return answer_data
         else:
             # For text inputs, textarea, etc.
-            # If AI provided an answer (including dummy data), use it and mark as filled
-            if has_ai_answer:
+            # 🚀 CRITICAL FIX: Consider needs_intervention parameter
+            if has_ai_answer and not needs_intervention:
+                # AI provided a valid answer and no intervention needed
                 return [{
                     "name": ai_answer_value,
                     "value": ai_answer_value,
@@ -1741,10 +1765,12 @@ class StepAnalyzer:
                     "selector": self._generate_enhanced_selector(question)
                 }]
             else:
-                # No answer from AI - show empty field for user input
+                # No answer from AI OR needs intervention - show empty field for user input
+                display_value = ai_answer_value if has_ai_answer else ""
+                print(f"DEBUG: _create_answer_data - Text field '{question.get('field_name', 'unknown')}' set to check=0 (needs_intervention={needs_intervention}, has_ai_answer={has_ai_answer})")
                 return [{
-                    "name": "",
-                    "value": "",
+                    "name": display_value,
+                    "value": display_value,
                     "check": 0,  # Empty field - waiting for user input
                     "selector": self._generate_enhanced_selector(question)
                 }]
@@ -4260,9 +4286,24 @@ For each field, check:
                         needs_intervention = False
                         print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' is conditionally hidden, skipping intervention")
                     else:
+                        # 🚀 CRITICAL FIX: Enhanced intervention logic for required fields
+                        ai_answer_value = ai_answer.get("answer", "").strip() if ai_answer else ""
+                        is_required = question.get("required", False)
+                        
+                        # Always need intervention if:
+                        # 1. No AI answer at all
+                        # 2. AI explicitly marked as needing intervention
+                        # 3. Low confidence (< 50)
+                        # 4. NEW: Required field with empty answer (regardless of confidence)
                         needs_intervention = (not ai_answer or
                                               ai_answer.get("needs_intervention", False) or
-                                              ai_answer.get("confidence", 0) < 50)
+                                              ai_answer.get("confidence", 0) < 50 or
+                                              (is_required and not ai_answer_value))
+                        
+                        if is_required and not ai_answer_value:
+                            print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                        elif needs_intervention:
+                            print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
 
                     all_needs_intervention.append(needs_intervention)
                     all_confidences.append(ai_answer.get("confidence", 0) if ai_answer else 0)
@@ -5252,75 +5293,52 @@ For each field, check:
                 else:
                     print("DEBUG: Action Generator - No submit button found in HTML")
 
-            # 🚀 IMPROVED: Sort actions by HTML element position order with better detection
+            # 🚀 IMPROVED: Sort actions by merged_data order (page question order)
             def get_element_position_in_html(action):
-                """Get the position of element in HTML to maintain visual order"""
+                """Get the position of element based on question order in merged_data"""
                 try:
-                    from bs4 import BeautifulSoup
-
-                    # Parse HTML to find element positions
-                    soup = BeautifulSoup(state["form_html"], 'html.parser')
                     selector = action.get("selector", "")
-                    element = None
-
-                    # Enhanced selector parsing
-                    if selector.startswith("#"):
-                        # ID selector like "#parent_givenName"
-                        element_id = selector[1:]
-                        element = soup.find(attrs={"id": element_id})
-                    elif selector.startswith("input[") and "name=" in selector:
-                        # Name-based selector like "input[name='parent.givenName']"
-                        name_start = selector.find("name='") + 6
-                        name_end = selector.find("'", name_start)
-                        if name_start > 5 and name_end > name_start:
-                            field_name = selector[name_start:name_end]
-                            element = soup.find("input", {"name": field_name})
-                    elif selector.startswith("select[") and "name=" in selector:
-                        # Select name-based selector
-                        name_start = selector.find("name='") + 6
-                        name_end = selector.find("'", name_start)
-                        if name_start > 5 and name_end > name_start:
-                            field_name = selector[name_start:name_end]
-                            element = soup.find("select", {"name": field_name})
-                    elif selector.startswith("textarea[") and "name=" in selector:
-                        # Textarea name-based selector
-                        name_start = selector.find("name='") + 6
-                        name_end = selector.find("'", name_start)
-                        if name_start > 5 and name_end > name_start:
-                            field_name = selector[name_start:name_end]
-                            element = soup.find("textarea", {"name": field_name})
-                    elif "submit" in selector.lower():
-                        # Submit button selectors
-                        element = soup.find("input", {"type": "submit"}) or soup.find("button", {"type": "submit"})
-                    else:
-                        # Try CSS selector as fallback
-                        try:
-                            element = soup.select_one(selector)
-                        except Exception:
-                            print(f"DEBUG: Failed to parse CSS selector: {selector}")
-
-                    if element:
-                        # Create ordered list of all form elements
-                        all_form_elements = []
-                        for tag in soup.find_all(["input", "select", "textarea", "button", "fieldset"]):
-                            all_form_elements.append(tag)
+                    
+                    # First try to find the action in merged_data order
+                    for index, merged_item in enumerate(merged_data):
+                        # Check if this action matches any data in this merged_item
+                        answer_data = merged_item.get("data", {})
+                        data_array = answer_data.get("data", [])
                         
-                        try:
-                            position = all_form_elements.index(element)
-                            print(f"DEBUG: Element {selector} found at position {position}")
-                            return position
-                        except ValueError:
-                            print(f"DEBUG: Element {selector} not found in form elements list")
-                            # Try to get a rough position by text content search
-                            html_text = state["form_html"]
-                            if element.get("name"):
-                                name_pos = html_text.find(f'name="{element.get("name")}"')
-                                if name_pos > 0:
-                                    return name_pos // 100  # Rough position estimate
-                            return 9999
-                    else:
-                        print(f"DEBUG: Element {selector} not found in HTML")
-                        return 9999
+                        # Check if selector matches any data item in this merged question
+                        for data_item in data_array:
+                            item_selector = data_item.get("selector", "")
+                            if item_selector == selector:
+                                print(f"DEBUG: Found action {selector} at merged_data position {index}")
+                                return index
+                    
+                    # Fallback: try to extract field name and find in merged_data
+                    field_name = ""
+                    if selector.startswith("input[") and "name=" in selector:
+                        # Extract field name from selector like "input[name='crownDependency']"
+                        name_start = selector.find("name=") + 5
+                        name_end = selector.find("]", name_start)
+                        if name_start > 4 and name_end > name_start:
+                            field_name = selector[name_start:name_end].strip('\'"')
+                    elif selector.startswith("input[") and "id=" in selector:
+                        # Extract field name from selector like "input[id='out-of-crown-dependency']"
+                        id_start = selector.find("id=") + 3
+                        id_end = selector.find("]", id_start)
+                        if id_start > 2 and id_end > id_start:
+                            field_name = selector[id_start:id_end].strip('\'"')
+                    
+                    if field_name:
+                        # Find question with matching field name
+                        for index, merged_item in enumerate(merged_data):
+                            question = merged_item.get("question", {})
+                            if (question.get("field_name") == field_name or 
+                                field_name in question.get("field_name", "") or
+                                field_name in question.get("field_selector", "")):
+                                print(f"DEBUG: Found action {selector} by field name match at position {index}")
+                                return index
+                    
+                    print(f"DEBUG: Element {selector} not found in merged_data, using fallback position 9999")
+                    return 9999
 
                 except Exception as e:
                     print(f"DEBUG: Error getting element position for {selector}: {str(e)}")
@@ -7647,7 +7665,7 @@ For each field, check:
             return "checkbox"  
         elif 'select' in field_types:
             return "select"
-        elif any(ft in ['text', 'email', 'tel', 'url'] for ft in field_types):
+        elif any(ft in ['text', 'email', 'tel', 'url', 'number', 'password', 'date', 'time', 'datetime-local'] for ft in field_types):
             return "input"
         else:
             return "unknown"
