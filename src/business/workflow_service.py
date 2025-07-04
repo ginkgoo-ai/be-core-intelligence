@@ -128,6 +128,7 @@ class WorkflowService:
                 workflow_definition_id=instance.workflow_definition_id,
                 current_step_key=instance.current_step_key,
                 status=instance.status,
+                progress_percentage=0.0,  # New workflow starts at 0% progress
                 created_at=instance.created_at,
                 updated_at=instance.updated_at,
                 progress_file_id=instance.progress_file_id,
@@ -166,12 +167,16 @@ class WorkflowService:
             )
             step_details.append(step_detail)
         
+        # Calculate progress percentage
+        progress_percentage = self._calculate_workflow_progress(workflow_id)
+        
         return WorkflowInstanceDetail(
             workflow_instance_id=instance.workflow_instance_id,
             user_id=instance.user_id,
             case_id=instance.case_id,
             status=instance.status,
             current_step_key=instance.current_step_key,
+            progress_percentage=progress_percentage,
             created_at=instance.created_at,
             updated_at=instance.updated_at,
             completed_at=instance.completed_at,
@@ -296,12 +301,16 @@ class WorkflowService:
             # Convert to WorkflowInstanceSummary list
             workflow_summaries = []
             for instance in instances:
+                # Calculate progress percentage
+                progress_percentage = self._calculate_workflow_progress(instance.workflow_instance_id)
+                
                 summary = WorkflowInstanceSummary(
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
                     case_id=instance.case_id,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
+                    progress_percentage=progress_percentage,
                     created_at=instance.created_at,
                     updated_at=instance.updated_at,
                     completed_at=instance.completed_at,
@@ -323,12 +332,16 @@ class WorkflowService:
             # Convert to WorkflowInstanceSummary list
             workflow_summaries = []
             for instance in instances:
+                # Calculate progress percentage
+                progress_percentage = self._calculate_workflow_progress(instance.workflow_instance_id)
+                
                 summary = WorkflowInstanceSummary(
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
                     case_id=instance.case_id,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
+                    progress_percentage=progress_percentage,
                     created_at=instance.created_at,
                     updated_at=instance.updated_at,
                     completed_at=instance.completed_at,
@@ -350,12 +363,16 @@ class WorkflowService:
             # Convert to WorkflowInstanceSummary list
             workflow_summaries = []
             for instance in instances:
+                # Calculate progress percentage
+                progress_percentage = self._calculate_workflow_progress(instance.workflow_instance_id)
+                
                 summary = WorkflowInstanceSummary(
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
                     case_id=instance.case_id,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
+                    progress_percentage=progress_percentage,
                     created_at=instance.created_at,
                     updated_at=instance.updated_at,
                     completed_at=instance.completed_at,
@@ -368,6 +385,34 @@ class WorkflowService:
             
         except Exception as e:
             raise e
+
+    def _calculate_workflow_progress(self, workflow_id: str) -> float:
+        """Calculate workflow progress percentage based on completed steps"""
+        try:
+            # Get all steps for this workflow
+            steps = self.step_repo.get_workflow_steps(workflow_id)
+            
+            if not steps:
+                return 0.0
+            
+            # Get total number of steps
+            total_steps = len(steps)
+            
+            # Count completed steps (COMPLETED_SUCCESS status)
+            completed_steps = sum(
+                1 for step in steps 
+                if step.status == StepStatus.COMPLETED_SUCCESS
+            )
+            
+            # Calculate percentage
+            progress_percentage = (completed_steps / total_steps) * 100 if total_steps > 0 else 0.0
+            
+            # Round to 2 decimal places
+            return round(progress_percentage, 2)
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate progress for workflow {workflow_id}: {str(e)}")
+            return 0.0
 
 class StepService:
     """Step management service"""
@@ -520,8 +565,9 @@ class StepService:
             if not step:
                 step = self.step_repo.create_step(workflow_id, step_key)
             
-            # Update step data and mark as completed
-            self.step_repo.update_step_data(step.step_instance_id, data.model_dump())
+            # Update step data and mark as completed - handle serialization safely
+            step_data = data.model_dump() if hasattr(data, 'model_dump') else data
+            self.step_repo.update_step_data(step.step_instance_id, step_data)
             self.step_repo.update_step_status(step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
             
             # Update workflow current step
@@ -604,8 +650,9 @@ class StepService:
             if not step:
                 step = self.step_repo.create_step(workflow_id, step_key)
             
-            # Update step data without changing status
-            self.step_repo.update_step_data(step.step_instance_id, data.model_dump())
+            # Update step data without changing status - handle serialization safely
+            step_data = data.model_dump() if hasattr(data, 'model_dump') else data
+            self.step_repo.update_step_data(step.step_instance_id, step_data)
             
             self.db.commit()
             

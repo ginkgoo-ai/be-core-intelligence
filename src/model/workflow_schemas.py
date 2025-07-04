@@ -46,6 +46,7 @@ class WorkflowInstanceSummary(BaseModel):
     case_id: Optional[str] = Field(None, description="案例ID")
     status: WorkflowStatusEnum = Field(..., description="状态")
     current_step_key: Optional[str] = Field(None, description="当前步骤键")
+    progress_percentage: float = Field(default=0.0, description="工作流进度百分比 (0-100)")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
