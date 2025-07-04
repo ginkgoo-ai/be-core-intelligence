@@ -897,37 +897,33 @@ class StepAnalyzer:
                 selectors.append(f'[type="{input_type}"]')
             return "".join(selectors)
 
-        # Strategy 3: Use combination of attributes for uniqueness
-        # Add type for input elements
-        if element_type == "input":
-            input_type = element.get("type", "text").lower()
-            selectors.append(f'[type="{input_type}"]')
+        # Strategy 3: Use combination of attributes for uniqueness (only when no ID or name)
+        # This strategy should only be used as fallback
+        if not element_id and not element_name:
+            # Add type for input elements
+            if element_type == "input":
+                input_type = element.get("type", "text").lower()
+                selectors.append(f'[type="{input_type}"]')
 
-        # Add class as attribute selector (no shortcuts)
-        class_attr = element.get("class")
-        if class_attr:
-            if isinstance(class_attr, list):
-                # Use the first class as attribute selector
-                first_class = class_attr[0].strip()
-                if first_class:
-                    selectors.append(f'[class*="{first_class}"]')
-            else:
-                class_name = class_attr.strip()
-                if class_name:
-                    selectors.append(f'[class*="{class_name}"]')
+            # Add class as attribute selector (no shortcuts)
+            class_attr = element.get("class")
+            if class_attr:
+                if isinstance(class_attr, list):
+                    # Use the first class as attribute selector
+                    first_class = class_attr[0].strip()
+                    if first_class:
+                        selectors.append(f'[class*="{first_class}"]')
+                else:
+                    class_name = class_attr.strip()
+                    if class_name:
+                        selectors.append(f'[class*="{class_name}"]')
 
-        # Add placeholder as attribute selector if unique enough
-        placeholder = element.get("placeholder", "").strip()
-        if placeholder and len(placeholder) > 5:  # Only use meaningful placeholders
-            selectors.append(f'[placeholder="{placeholder}"]')
+            # Add placeholder as attribute selector if unique enough
+            placeholder = element.get("placeholder", "").strip()
+            if placeholder and len(placeholder) > 5:  # Only use meaningful placeholders
+                selectors.append(f'[placeholder="{placeholder}"]')
 
-        # Add value for radio/checkbox to make it specific
-        if element_type == "input":
-            input_type = element.get("type", "").lower()
-            if input_type in ["radio", "checkbox"]:
-                value = element.get("value", "").strip()
-                if value:
-                    selectors.append(f'[value="{value}"]')
+            # Skip value attribute - not needed for selector uniqueness
 
         selector = "".join(selectors)
 
@@ -1290,85 +1286,38 @@ class StepAnalyzer:
 
         # Determine action type and value based on field type
         if field_type == "radio":
-            # For radio buttons, generate click action
+            # For radio buttons, generate click action - use selector as-is
             if answer:
-                # Update selector to include the specific value
-                if "[value='" not in selector and options:
-                    # Find the matching option
-                    for option in options:
-                        if option.get("value") == answer or option.get("text") == answer:
-                            updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
-                            actions.append({
-                                "selector": updated_selector,
-                                "type": "click",
-                                "value": option.get('value', answer)
-                            })
-                            break
-                else:
-                    actions.append({
-                        "selector": selector,
-                        "type": "click",
-                        "value": answer
-                    })
+                actions.append({
+                    "selector": selector,
+                    "type": "click",
+                    "value": answer
+                })
             else:
-                # No answer - generate base action for first option or default
-                if options:
-                    first_option = options[0]
-                    updated_selector = selector.replace("]", f"][value='{first_option.get('value')}']")
-                    actions.append({
-                        "selector": updated_selector,
-                        "type": "click",
-                        "value": ""  # Empty value indicates no selection yet
-                    })
-                else:
-                    actions.append({
-                        "selector": selector,
-                        "type": "click",
-                        "value": ""
-                    })
+                # No answer - generate base action 
+                actions.append({
+                    "selector": selector,
+                    "type": "click",
+                    "value": ""
+                })
 
         elif field_type == "checkbox":
-            # For checkboxes, handle multiple values separated by commas
+            # For checkboxes, handle multiple values separated by commas - use selector as-is
             if answer:
                 values = [v.strip() for v in answer.split(",") if v.strip()]
-
                 for value in values:
-                    # Create selector for this specific checkbox value
-                    if "[value='" not in selector and options:
-                        # Find the matching option
-                        for option in options:
-                            if option.get("value") == value or option.get("text") == value:
-                                # Build selector with specific value
-                                updated_selector = selector.replace("]", f"][value='{option.get('value')}']")
-                                actions.append({
-                                    "selector": updated_selector,
-                                    "type": "click",
-                                    "value": option.get('value', value)
-                                })
-                                break
-                    else:
-                        # Use the selector as-is if it already includes value
-                        actions.append({
-                            "selector": selector,
-                            "type": "click",
-                            "value": value
-                        })
-            else:
-                # No answer - generate base action for first option or default
-                if options:
-                    first_option = options[0]
-                    updated_selector = selector.replace("]", f"][value='{first_option.get('value')}']")
-                    actions.append({
-                        "selector": updated_selector,
-                        "type": "click",
-                        "value": ""  # Empty value indicates no selection yet
-                    })
-                else:
                     actions.append({
                         "selector": selector,
                         "type": "click",
-                        "value": ""
+                        "value": value
                     })
+            else:
+                # No answer - generate base action 
+                actions.append({
+                    "selector": selector,
+                    "type": "click",
+                    "value": ""
+                })
 
         elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local"]:
             # For input fields, use input action with value (even if empty)
@@ -1561,11 +1510,8 @@ class StepAnalyzer:
             if element_id:
                 # Use ID-based selector with element type
                 enhanced_selector = f'{element_type}[id="{element_id}"]'
-            elif field_name and option_value:
-                # Generate attribute-based selector for radio/checkbox with specific value
-                enhanced_selector = f'{element_type}[type="{field_type}"][name="{field_name}"][value="{option_value}"]'
             elif field_name:
-                # Generate attribute-based selector for the field
+                # Generate attribute-based selector for radio/checkbox without value
                 if field_type in ["radio", "checkbox"]:
                     enhanced_selector = f'{element_type}[type="{field_type}"][name="{field_name}"]'
                 else:
@@ -5135,19 +5081,19 @@ For each field, check:
                 print(f"DEBUG: Action Generator - Hidden items: {len(hidden_items)}")
                 print(f"DEBUG: Action Generator - Is conditionally hidden: {is_conditionally_hidden}")
 
-                # 🚀 CRITICAL FIX: For checkbox/radio groups, check individual data items instead of group-level intervention
+                # 🚀 CRITICAL FIX: For checkbox/radio fields, ALWAYS process individual data items using stored selectors
                 is_conditionally_skipped = metadata.get('conditional_skip', False)
                 field_type = metadata.get("field_type", "")
                 
-                # For checkbox/radio fields, we need to process individual data items even if group needs intervention
-                if field_type in ["checkbox", "radio"] and needs_intervention and has_valid_answer:
+                # For checkbox/radio fields, we need to process individual data items using stored selectors
+                if field_type in ["checkbox", "radio"]:
                     # Check if there are any checked items in the data array
                     data_array = answer_data.get("data", [])
                     checked_items = [item for item in data_array if item.get("check") == 1]
                     
                     if checked_items:
-                        print(f"DEBUG: Action Generator - Group needs intervention but has {len(checked_items)} checked items, processing individual items")
-                        # Process individual checkbox/radio items
+                        print(f"DEBUG: Action Generator - Processing {field_type} field with {len(checked_items)} checked items")
+                        # Process individual checkbox/radio items using stored selectors
                         for data_item in checked_items:
                             action = {
                                 "selector": data_item.get("selector", metadata.get("field_selector", "")),
@@ -5159,7 +5105,7 @@ For each field, check:
                         
                         skip_stats["processed"] += 1
                         continue  # Move to next field
-                    else:
+                    elif needs_intervention:
                         print(f"DEBUG: Action Generator - Group needs intervention and no checked items, skipping")
                         skip_stats["intervention_needed"] += 1
                         continue
@@ -6861,26 +6807,15 @@ For each field, check:
                 else:
                     print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
 
-            # 🚀 OPTIMIZATION: Validate actions before storing
-            validated_actions = []
+            # 🚀 DISABLED: Skip action validation as it's causing selector corruption
+            # The validation process was generating corrupted selectors with duplicate attributes
+            # Instead, trust the selectors generated during field detection and Q&A merger
+            validated_actions = final_actions
             validation_errors = []
-            form_html = state["form_html"]  # Get HTML from state
+            
+            print(f"DEBUG: LLM Action Generator Async - Skipping validation to prevent selector corruption, using {len(validated_actions)} actions directly")
 
-            for action in final_actions:
-                is_valid, error_msg = self._validate_action_selector(action, form_html)
-                if is_valid:
-                    validated_actions.append(action)
-                else:
-                    validation_errors.append(f"Action validation failed: {error_msg}")
-                    # Try to recover the action
-                    recovered_action = self._recover_failed_action(action, form_html)
-                    if recovered_action:
-                        validated_actions.append(recovered_action)
-                        print(f"DEBUG: Recovered action: {recovered_action}")
-                    else:
-                        print(f"DEBUG: Could not recover action: {action}")
-
-            # Store the validated actions
+            # Store the actions without validation
             state["llm_generated_actions"] = validated_actions
             state["action_validation_errors"] = validation_errors
 
