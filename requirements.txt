@@ -56,3 +56,7 @@ tiktoken==0.9.0
 anyio==4.9.0
 langchain-community==0.3.22
 unstructured-client==0.25.9
+
+# Serialization support for LangGraph
+msgpack==1.1.0
+orjson==3.10.10

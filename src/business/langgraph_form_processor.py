@@ -2417,10 +2417,13 @@ class LangGraphFormProcessor:
 
 
 
-    def _analyze_proximity_grouping(self, detected_fields: List[Dict[str, Any]], soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    def _analyze_proximity_grouping(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[Dict[str, Any]]:
         """🚀 ENHANCED: Advanced HTML structure analysis with AI-powered grouping reasoning"""
         
         groups = []
+        
+        # Re-create BeautifulSoup object from HTML content to avoid serialization issues
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # 🚀 STEP 1: Analyze semantic HTML containers with enhanced reasoning
         semantic_containers = soup.find_all(['div', 'section', 'article', 'fieldset', 'details'], class_=True)
@@ -2624,9 +2627,12 @@ class LangGraphFormProcessor:
         
         return relationships
     
-    def _analyze_html_hierarchy_patterns(self, detected_fields: List[Dict[str, Any]], soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    def _analyze_html_hierarchy_patterns(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[Dict[str, Any]]:
         """🚀 NEW: Analyze HTML hierarchy for logical grouping"""
         groups = []
+        
+        # Re-create BeautifulSoup object from HTML content to avoid serialization issues
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # Find parent elements that contain multiple fields
         for field in detected_fields:
@@ -2679,9 +2685,12 @@ class LangGraphFormProcessor:
         
         return groups
     
-    def _analyze_visual_layout_patterns(self, detected_fields: List[Dict[str, Any]], soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    def _analyze_visual_layout_patterns(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[Dict[str, Any]]:
         """🚀 NEW: Analyze visual layout patterns for grouping"""
         groups = []
+        
+        # Re-create BeautifulSoup object from HTML content to avoid serialization issues
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # Look for fields in the same row/column based on CSS classes
         layout_indicators = ['row', 'column', 'flex', 'grid', 'inline', 'horizontal', 'vertical']
@@ -4392,7 +4401,7 @@ For each field, check:
             soup = BeautifulSoup(form_html, 'html.parser')
             
             # Extract all conditional rules from HTML
-            conditional_rules = self._extract_universal_conditional_rules(soup, detected_fields)
+            conditional_rules = self._extract_universal_conditional_rules(form_html, detected_fields)
             
             # Build field state map from current answers
             field_states = self._build_field_state_map(answers)
@@ -4418,10 +4427,13 @@ For each field, check:
                 "html_soup": None
             }
 
-    def _extract_universal_conditional_rules(self, soup: BeautifulSoup, 
+    def _extract_universal_conditional_rules(self, html_content: str, 
                                            detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract conditional rules from HTML in a universal way"""
         rules = []
+        
+        # Re-create BeautifulSoup object from HTML content to avoid serialization issues
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # Find all elements with conditional attributes
         conditional_patterns = [
@@ -4444,11 +4456,11 @@ For each field, check:
                     rules.append(rule)
         
         # Also check for JavaScript-based conditionals in script tags
-        script_rules = self._extract_script_conditionals(soup, detected_fields)
+        script_rules = self._extract_script_conditionals(html_content, detected_fields)
         rules.extend(script_rules)
         
         # Look for form-specific conditional patterns
-        form_rules = self._extract_form_specific_conditionals(soup, detected_fields)
+        form_rules = self._extract_form_specific_conditionals(html_content, detected_fields)
         rules.extend(form_rules)
         
         print(f"DEBUG: Universal Rules - Extracted {len(rules)} conditional rules")
@@ -4552,10 +4564,13 @@ For each field, check:
         
         return conditions
 
-    def _extract_script_conditionals(self, soup: BeautifulSoup, 
+    def _extract_script_conditionals(self, html_content: str, 
                                    detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract conditional logic from JavaScript code"""
         rules = []
+        
+        # Re-create BeautifulSoup object from HTML content to avoid serialization issues
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # Find script tags with conditional logic
         scripts = soup.find_all("script")
@@ -4586,10 +4601,13 @@ For each field, check:
         
         return rules
 
-    def _extract_form_specific_conditionals(self, soup: BeautifulSoup, 
+    def _extract_form_specific_conditionals(self, html_content: str, 
                                           detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract form-specific conditional patterns"""
         rules = []
+        
+        # Re-create BeautifulSoup object from HTML content to avoid serialization issues
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # Look for fieldsets with conditional behavior
         fieldsets = soup.find_all("fieldset")
