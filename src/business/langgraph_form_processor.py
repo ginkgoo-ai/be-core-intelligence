@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import traceback
 import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Literal, TypedDict, Tuple
@@ -6379,7 +6380,9 @@ For each field, check:
             }
 
         except Exception as workflow_error:
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Workflow error: {str(workflow_error)}")
+            error_trace = traceback.format_exc()
+
+            print(f"[workflow_id:{workflow_id}] DEBUG: Workflow error trace:\n{error_trace}")
             return {
                 "success": False,
                 "error": f"LangGraph workflow failed: {str(workflow_error)}",
