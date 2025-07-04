@@ -5998,12 +5998,70 @@ For each field, check:
             # Append new operation to history (newest at end)
             updated_history = existing_history + [new_operation]
 
+            # 🚀 CRITICAL FIX: Deep clean data to remove circular references
+            def clean_circular_references(obj, seen=None, max_depth=10, current_depth=0):
+                """Clean circular references from data structure"""
+                if seen is None:
+                    seen = set()
+                
+                # Recursion depth protection
+                if current_depth > max_depth:
+                    return f"<max_depth_reached_at_{max_depth}>"
+                
+                # Handle different types
+                if obj is None or isinstance(obj, (str, int, float, bool)):
+                    return obj
+                
+                # Check for circular reference using object id
+                obj_id = id(obj)
+                if obj_id in seen:
+                    return f"<circular_reference_detected>"
+                
+                seen.add(obj_id)
+                
+                try:
+                    if isinstance(obj, dict):
+                        cleaned = {}
+                        for k, v in obj.items():
+                            # Skip potentially problematic keys that could have circular refs
+                            if k in ['parsed_form', 'cross_page_analysis'] and isinstance(v, dict):
+                                # Only keep essential data from these fields
+                                if k == 'parsed_form':
+                                    cleaned[k] = {
+                                        "action": v.get("action", ""),
+                                        "method": v.get("method", "post")
+                                        # Skip html_content to avoid potential BeautifulSoup objects
+                                    }
+                                else:
+                                    cleaned[k] = f"<complex_object_cleaned>"
+                            else:
+                                cleaned[k] = clean_circular_references(v, seen.copy(), max_depth, current_depth + 1)
+                        return cleaned
+                    elif isinstance(obj, (list, tuple)):
+                        cleaned = []
+                        for item in obj:
+                            cleaned.append(clean_circular_references(item, seen.copy(), max_depth, current_depth + 1))
+                        return cleaned
+                    else:
+                        # For other objects, try to convert to string representation
+                        return str(obj)
+                except Exception as e:
+                    return f"<serialization_error: {str(e)}>"
+                finally:
+                    seen.discard(obj_id)
+
+            # Clean the state data before saving
+            clean_merged_qa_data = clean_circular_references(state.get("merged_qa_data", []))
+            clean_llm_actions = clean_circular_references(state.get("llm_generated_actions", []))
+            clean_field_questions = clean_circular_references(state.get("field_questions", []))
+            clean_dummy_usage = clean_circular_references(state.get("dummy_data_usage", []))
+
             # Prepare the main data structure in the expected format
             save_data = {
-                "form_data": state.get("merged_qa_data", []),  # 合并的问答数据
-                "actions": state.get("llm_generated_actions", []),  # LLM生成的动作
-                "questions": state.get("field_questions", []),  # 原始问题数据
-                "dummy_data_usage": state.get("dummy_data_usage", []),  # 虚拟数据使用记录
+                "form_data": clean_merged_qa_data,  # 合并的问答数据 - cleaned
+                "actions": clean_llm_actions,  # LLM生成的动作 - cleaned
+                "questions": clean_field_questions,  # 原始问题数据 - cleaned
+                "dummy_data_usage": clean_dummy_usage,  # 虚拟数据使用记录 - cleaned
                 "metadata": {
                     "processed_at": datetime.utcnow().isoformat(),
                     "workflow_id": state["workflow_id"],
@@ -6013,7 +6071,9 @@ For each field, check:
                     "question_count": len(state.get("field_questions", [])),
                     "answer_count": len(state.get("ai_answers", [])),
                     "action_count": len(state.get("llm_generated_actions", [])),
-                    "dummy_data_used_count": len(state.get("dummy_data_usage", []))
+                    "dummy_data_used_count": len(state.get("dummy_data_usage", [])),
+                    "data_cleaned": True,  # Mark that data was cleaned for debugging
+                    "circular_ref_protection": True
                 },
                 "history": updated_history  # 完整的历史记录
             }
@@ -6047,9 +6107,9 @@ For each field, check:
                             simple_record = {
                                 "processed_at": datetime.utcnow().isoformat(),
                                 "step_key": state["step_key"],
-                                "question": usage.get("question", ""),
-                                "answer": usage.get("answer", ""),
-                                "source": usage.get("dummy_data_source", "unknown")
+                                "question": str(usage.get("question", ""))[:500],  # Limit length
+                                "answer": str(usage.get("answer", ""))[:500],     # Limit length
+                                "source": str(usage.get("dummy_data_source", "unknown"))[:100]  # Limit length
                             }
                             simple_records.append(simple_record)
 
@@ -6073,7 +6133,7 @@ For each field, check:
                     print(f"DEBUG: Result Saver - Error updating WorkflowInstance dummy data usage: {str(e)}")
                     # Don't fail the whole operation if this update fails
 
-            # Store saved data in state for reference
+            # Store saved data in state for reference (cleaned version)
             state["saved_step_data"] = save_data
 
             print(
@@ -6081,10 +6141,16 @@ For each field, check:
 
             # 🚀 NEW: Cache current page data for cross-page relationships
             try:
+                # Use cleaned data for caching to avoid circular references
+                cache_data = {
+                    "form_data": clean_merged_qa_data,
+                    "actions": clean_llm_actions,
+                    "metadata": save_data["metadata"]
+                }
                 cache_success = self.cross_page_cache.cache_page_data(
                     state["workflow_id"], 
                     state["step_key"], 
-                    save_data
+                    cache_data
                 )
                 if cache_success:
                     print(f"DEBUG: Result Saver - Successfully cached page data for cross-page relationships")
@@ -6277,28 +6343,55 @@ For each field, check:
 
     async def process_form_async(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """🚀 FIXED: True async version using LangGraph workflow with ainvoke"""
-        try:
-            # Reset details expansion tracking for new form
-            self._expanded_details = set()
-            
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Starting TRUE LangGraph async execution")
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - HTML length: {len(form_html)}")
-            print(
-                f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
-            print(
-                f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
+        """🚀 FIXED: True async version using LangGraph workflow with ainvoke + recursion protection"""
+        
+        # 🚀 CRITICAL FIX: Add recursion protection and retry mechanism
+        max_retries = 3
+        current_retry = 0
+        
+        while current_retry < max_retries:
+            try:
+                # Reset details expansion tracking for new form
+                self._expanded_details = set()
+                
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Starting TRUE LangGraph async execution (retry {current_retry + 1}/{max_retries})")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - HTML length: {len(form_html)}")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile dummy data keys: {list(profile_dummy_data.keys()) if profile_dummy_data else 'None'}")
 
-            # Set workflow_id for thread isolation
-            self.set_workflow_id(workflow_id)
+                # Set workflow_id for thread isolation
+                self.set_workflow_id(workflow_id)
 
-            # Create initial state
-            initial_state = FormAnalysisState(
-                workflow_id=workflow_id,
-                step_key=step_key,
-                form_html=form_html,
-                profile_data=profile_data or {},
-                profile_dummy_data=profile_dummy_data or {},
+                # Create initial state with circular reference protection
+                def clean_input_data(data):
+                    """Clean input data to prevent circular references from the start"""
+                    if not isinstance(data, dict):
+                        return data
+                    
+                    cleaned = {}
+                    for key, value in data.items():
+                        if isinstance(value, dict):
+                            # Recursively clean nested dictionaries 
+                            cleaned[key] = clean_input_data(value)
+                        elif isinstance(value, list):
+                            # Clean list items
+                            cleaned[key] = [clean_input_data(item) if isinstance(item, dict) else item for item in value]
+                        else:
+                            cleaned[key] = value
+                    return cleaned
+                
+                # 🚀 CRITICAL FIX: Clean input data before state creation
+                clean_profile_data = clean_input_data(profile_data or {})
+                clean_profile_dummy_data = clean_input_data(profile_dummy_data or {})
+                
+                initial_state = FormAnalysisState(
+                    workflow_id=workflow_id,
+                    step_key=step_key,
+                    form_html=form_html,
+                    profile_data=clean_profile_data,
+                    profile_dummy_data=clean_profile_dummy_data,
                 parsed_form=None,
                 detected_fields=[],
                 field_questions=[],
@@ -6323,69 +6416,103 @@ For each field, check:
                 messages=[]
             )
 
-            # 🚀 FIXED: Use true LangGraph async execution with proper config
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Running LangGraph workflow with ainvoke")
-            
-            # Provide config for checkpointer - required for async execution
-            import uuid
-            thread_id = str(uuid.uuid4())
-            config = {
-                "configurable": {
-                    "thread_id": thread_id  # Use UUID for thread isolation
+                # 🚀 FIXED: Use true LangGraph async execution with proper config
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Running LangGraph workflow with ainvoke")
+                
+                # Provide config for checkpointer - required for async execution
+                import uuid
+                thread_id = str(uuid.uuid4())
+                config = {
+                    "configurable": {
+                        "thread_id": thread_id  # Use UUID for thread isolation
+                    }
                 }
-            }
-            
-            print(f"[workflow_id:{workflow_id}] DEBUG: Using thread_id: {thread_id}")
-            result = await self.app.ainvoke(initial_state, config=config)
+                
+                print(f"[workflow_id:{workflow_id}] DEBUG: Using thread_id: {thread_id}")
+                result = await self.app.ainvoke(initial_state, config=config)
 
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - LangGraph async workflow completed")
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Result keys: {list(result.keys())}")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - LangGraph async workflow completed")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Result keys: {list(result.keys())}")
 
-            # 🚀 SUCCESS PATH: Process successful workflow result
-            # Check for errors
-            if result.get("error_details"):
+                # 🚀 SUCCESS PATH: Process successful workflow result
+                # Check for errors
+                if result.get("error_details"):
+                    return {
+                        "success": False,
+                        "error": result["error_details"],
+                        "data": [],
+                        "actions": []
+                    }
+
+                # 🚀 CRITICAL FIX: Prioritize precise form_actions over LLM-generated actions
+                precise_actions = result.get("form_actions", [])
+                llm_actions = result.get("llm_generated_actions", [])
+                final_actions = precise_actions if precise_actions else llm_actions
+
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Using {'precise' if precise_actions else 'LLM'} actions: {len(final_actions)} total")
+
+                # Return successful result with merged Q&A data
+                return {
+                    "success": True,
+                    "data": result.get("merged_qa_data", []),  # 返回合并的问答数据
+                    "actions": final_actions,  # 🚀 优先使用精确动作
+                    "messages": result.get("messages", []),
+                    "processing_metadata": {
+                        "fields_detected": len(result.get("detected_fields", [])),
+                        "questions_generated": len(result.get("field_questions", [])),
+                        "answers_generated": len(result.get("ai_answers", [])),
+                        "actions_generated": len(final_actions),
+                        "action_source": "precise" if precise_actions else "llm",
+                        "precise_actions_count": len(precise_actions),
+                        "llm_actions_count": len(llm_actions),
+                        "workflow_id": workflow_id,
+                        "step_key": step_key
+                    }
+                }
+
+            except Exception as workflow_error:
+                current_retry += 1
+                error_message = str(workflow_error)
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Retry {current_retry}/{max_retries} - Error: {error_message}")
+                
+                # 🚀 CRITICAL: Check for specific recursion/circular reference errors
+                if "recursion" in error_message.lower() or "circular" in error_message.lower():
+                    print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Detected recursion/circular reference error")
+                    # Force a clean slate for the next retry
+                    import gc
+                    gc.collect()
+                    
+                    # If this is the last retry, return graceful failure
+                    if current_retry >= max_retries:
+                        print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Max retries reached for recursion error")
+                        return {
+                            "success": False,
+                            "error": f"LangGraph workflow failed after {max_retries} retries due to recursion/circular reference: {error_message}",
+                            "data": [],
+                            "actions": []
+                        }
+                    
+                    # Continue to next retry
+                    continue
+                
+                # For other errors, fail fast
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Non-recursion error, failing fast")
                 return {
                     "success": False,
-                    "error": result["error_details"],
+                    "error": f"LangGraph workflow failed: {error_message}",
                     "data": [],
                     "actions": []
                 }
-
-            # 🚀 CRITICAL FIX: Prioritize precise form_actions over LLM-generated actions
-            precise_actions = result.get("form_actions", [])
-            llm_actions = result.get("llm_generated_actions", [])
-            final_actions = precise_actions if precise_actions else llm_actions
-
-            print(
-                f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Using {'precise' if precise_actions else 'LLM'} actions: {len(final_actions)} total")
-
-            # Return successful result with merged Q&A data
-            return {
-                "success": True,
-                "data": result.get("merged_qa_data", []),  # 返回合并的问答数据
-                "actions": final_actions,  # 🚀 优先使用精确动作
-                "messages": result.get("messages", []),
-                "processing_metadata": {
-                    "fields_detected": len(result.get("detected_fields", [])),
-                    "questions_generated": len(result.get("field_questions", [])),
-                    "answers_generated": len(result.get("ai_answers", [])),
-                    "actions_generated": len(final_actions),
-                    "action_source": "precise" if precise_actions else "llm",
-                    "precise_actions_count": len(precise_actions),
-                    "llm_actions_count": len(llm_actions),
-                    "workflow_id": workflow_id,
-                    "step_key": step_key
-                }
-            }
-
-        except Exception as workflow_error:
-            print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Workflow error: {str(workflow_error)}")
-            return {
-                "success": False,
-                "error": f"LangGraph workflow failed: {str(workflow_error)}",
-                "data": [],
-                "actions": []
-            }
+        
+        # If we exit the while loop without returning, all retries failed
+        print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - All retries exhausted")
+        return {
+            "success": False,
+            "error": f"LangGraph workflow failed after {max_retries} retries",
+            "data": [],
+            "actions": []
+        }
 
     async def _ai_answerer_node_async(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Generate AI answers for questions (OPTIMIZED async version with parallel processing)"""

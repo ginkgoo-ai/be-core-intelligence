@@ -296,10 +296,62 @@ class StepInstanceRepository(BaseRepository):
         return None
     
     def update_step_data(self, step_id: str, data: Dict[str, Any]) -> Optional[StepInstance]:
-        """Update step data"""
+        """Update step data with circular reference protection"""
         step = self.get_step_by_id(step_id)
         if step:
-            step.data = data
+            # 🚀 CRITICAL FIX: Clean circular references before database save
+            def clean_circular_references_for_db(obj, seen=None, max_depth=8, current_depth=0):
+                """Clean circular references with strict limits for database storage"""
+                if seen is None:
+                    seen = set()
+                
+                # Strict recursion depth protection for database
+                if current_depth > max_depth:
+                    return f"<max_depth_{max_depth}>"
+                
+                # Handle primitive types
+                if obj is None or isinstance(obj, (str, int, float, bool)):
+                    return obj
+                
+                # Check for circular reference using object id
+                obj_id = id(obj)
+                if obj_id in seen:
+                    return "<circular_ref>"
+                
+                seen.add(obj_id)
+                
+                try:
+                    if isinstance(obj, dict):
+                        cleaned = {}
+                        for k, v in obj.items():
+                            # Limit key length to prevent oversized data
+                            key = str(k)[:100] if k else "unknown_key"
+                            
+                            # Skip problematic keys that commonly cause circular refs
+                            if key in ['parsed_form', 'cross_page_analysis', 'workflow_instance']:
+                                cleaned[key] = "<object_excluded_for_safety>"
+                            elif key.startswith('_'):  # Skip private attributes
+                                continue
+                            else:
+                                cleaned[key] = clean_circular_references_for_db(v, seen.copy(), max_depth, current_depth + 1)
+                        return cleaned
+                    elif isinstance(obj, (list, tuple)):
+                        # Limit list size to prevent memory issues
+                        cleaned = []
+                        for i, item in enumerate(obj[:100]):  # Max 100 items
+                            cleaned.append(clean_circular_references_for_db(item, seen.copy(), max_depth, current_depth + 1))
+                        return cleaned
+                    else:
+                        # For complex objects, convert to safe string representation
+                        return str(obj)[:500]  # Limit string length
+                except Exception as e:
+                    return f"<cleanup_error: {str(e)[:100]}>"
+                finally:
+                    seen.discard(obj_id)
+            
+            # Clean the data before assigning to database field
+            cleaned_data = clean_circular_references_for_db(data)
+            step.data = cleaned_data
             step.updated_at = datetime.now()
             return step
         return None
