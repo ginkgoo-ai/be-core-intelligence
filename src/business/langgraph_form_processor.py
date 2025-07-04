@@ -5135,9 +5135,38 @@ For each field, check:
                 print(f"DEBUG: Action Generator - Hidden items: {len(hidden_items)}")
                 print(f"DEBUG: Action Generator - Is conditionally hidden: {is_conditionally_hidden}")
 
-                # Skip fields that need intervention, are interrupt fields, or are conditionally skipped/hidden
+                # 🚀 CRITICAL FIX: For checkbox/radio groups, check individual data items instead of group-level intervention
                 is_conditionally_skipped = metadata.get('conditional_skip', False)
-                if needs_intervention or is_interrupt or not has_valid_answer or is_conditionally_skipped or is_conditionally_hidden:
+                field_type = metadata.get("field_type", "")
+                
+                # For checkbox/radio fields, we need to process individual data items even if group needs intervention
+                if field_type in ["checkbox", "radio"] and needs_intervention and has_valid_answer:
+                    # Check if there are any checked items in the data array
+                    data_array = answer_data.get("data", [])
+                    checked_items = [item for item in data_array if item.get("check") == 1]
+                    
+                    if checked_items:
+                        print(f"DEBUG: Action Generator - Group needs intervention but has {len(checked_items)} checked items, processing individual items")
+                        # Process individual checkbox/radio items
+                        for data_item in checked_items:
+                            action = {
+                                "selector": data_item.get("selector", metadata.get("field_selector", "")),
+                                "type": "click",
+                                "value": data_item.get("value", "")
+                            }
+                            actions.append(action)
+                            print(f"DEBUG: Action Generator - Generated {field_type} action for checked item: {action}")
+                        
+                        skip_stats["processed"] += 1
+                        continue  # Move to next field
+                    else:
+                        print(f"DEBUG: Action Generator - Group needs intervention and no checked items, skipping")
+                        skip_stats["intervention_needed"] += 1
+                        continue
+                
+                # For non-checkbox/radio fields or when intervention is not the only issue
+                if (is_interrupt or not has_valid_answer or is_conditionally_skipped or is_conditionally_hidden) or \
+                   (needs_intervention and field_type not in ["checkbox", "radio"]):
                     skip_reason = "intervention needed" if needs_intervention else \
                                 "interrupt field" if is_interrupt else \
                                 "no valid answer" if not has_valid_answer else \
@@ -5186,28 +5215,8 @@ For each field, check:
                 print(
                     f"DEBUG: Action Generator - Processing field {metadata.get('field_name', 'unknown')} - answer: '{answer_value}'")
 
-                # For checkbox and radio fields, we need to generate actions for each checked item
-                if metadata.get("field_type") in ["checkbox", "radio"]:
-                    data_array = answer_data.get("data", [])
-                    precise_actions_generated = False
-                    print(f"DEBUG: Action Generator - Processing {metadata.get('field_type')} field with {len(data_array)} options")
-                    for data_item in data_array:
-                        if data_item.get("check") == 1:
-                            # Generate action for this specific checked item
-                            action = {
-                                "selector": data_item.get("selector", metadata.get("field_selector", "")),
-                                "type": "click",
-                                "value": data_item.get("value", "")
-                            }
-                            actions.append(action)
-                            precise_actions_generated = True
-                            print(f"DEBUG: Action Generator - Generated {metadata.get('field_type')} action: {action}")
-                    
-                    if precise_actions_generated:
-                        print(f"DEBUG: Action Generator - Skipping traditional generation for {metadata.get('field_name')} - precise actions generated")
-                        continue  # Skip the traditional action generation only if we generated precise actions
-                    else:
-                        print(f"DEBUG: Action Generator - No checked items found for {metadata.get('field_name')}, continuing to traditional generation")
+                # 🚀 CLEANUP: Checkbox/radio processing is now handled at the top of the loop
+                # This legacy section is no longer needed since we process checkbox/radio items earlier
 
                 # For non-checkbox fields or checkboxes without checked items, use traditional generation
                 # Generate action for input fields and other field types
