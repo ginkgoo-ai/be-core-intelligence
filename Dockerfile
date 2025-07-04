@@ -28,4 +28,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["hypercorn", "main:app", "--bind", "[::]:8000"]
+CMD ["hypercorn", "main:app", "--bind", "[::]:8080"]
