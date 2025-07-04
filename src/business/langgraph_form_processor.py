@@ -819,10 +819,13 @@ class StepAnalyzer:
                     for radio in related_radios:
                         label_text = self._find_field_label(radio)
                         radio_value = radio.get("value", "")
+                        # 🚀 CRITICAL FIX: Generate selector for each radio option
+                        radio_selector = self._generate_selector(radio)
                         if radio_value or label_text:  # Only include if has value or label
                             options.append({
                                 "value": radio_value or label_text,
-                                "text": label_text or radio_value
+                                "text": label_text or radio_value,
+                                "selector": radio_selector  # 🚀 NEW: Store each option's selector
                             })
 
                     field_info["options"] = options
@@ -839,9 +842,12 @@ class StepAnalyzer:
                     for cb in related_checkboxes:
                         label_text = self._find_field_label(cb)
                         cb_value = cb.get("value", "")
+                        # 🚀 CRITICAL FIX: Generate selector for each checkbox option
+                        cb_selector = self._generate_selector(cb)
                         options.append({
                             "value": cb_value or label_text,
-                            "text": label_text or cb_value
+                            "text": label_text or cb_value,
+                            "selector": cb_selector  # 🚀 NEW: Store each option's selector
                         })
                     field_info["options"] = options
                     print(f"DEBUG: _extract_field_info - Checkbox options: {options}")
@@ -866,48 +872,54 @@ class StepAnalyzer:
             return None
 
     def _generate_selector(self, element) -> str:
-        """Generate unique CSS selector for element"""
-        # Strategy 1: Use ID selector (most unique)
+        """Generate complete CSS selector for element - NO SHORTCUTS"""
+        element_type = element.name.lower()
+        
+        # 🚀 CRITICAL FIX: Always start with element type for complete selector
+        selectors = [element_type]
+
+        # Strategy 1: Use ID attribute (most unique) - but include element type
         element_id = element.get("id", "").strip()
         if element_id:
-            return f"#{element_id}"
+            selectors.append(f'[id="{element_id}"]')
+            # Add type for input elements for specificity
+            if element_type == "input":
+                input_type = element.get("type", "text").lower()
+                selectors.append(f'[type="{input_type}"]')
+            return "".join(selectors)
 
         # Strategy 2: Use name attribute with element type for uniqueness
         element_name = element.get("name", "").strip()
         if element_name:
-            element_type = element.name.lower()
+            selectors.append(f'[name="{element_name}"]')
             if element_type == "input":
                 input_type = element.get("type", "text").lower()
-                return f"input[type='{input_type}'][name='{element_name}']"
-            else:
-                return f"{element_type}[name='{element_name}']"
+                selectors.append(f'[type="{input_type}"]')
+            return "".join(selectors)
 
         # Strategy 3: Use combination of attributes for uniqueness
-        element_type = element.name.lower()
-        selectors = [element_type]
-
         # Add type for input elements
         if element_type == "input":
             input_type = element.get("type", "text").lower()
-            selectors.append(f"[type='{input_type}']")
+            selectors.append(f'[type="{input_type}"]')
 
-        # Add class if available
+        # Add class as attribute selector (no shortcuts)
         class_attr = element.get("class")
         if class_attr:
             if isinstance(class_attr, list):
-                # Use the first class for selector
+                # Use the first class as attribute selector
                 first_class = class_attr[0].strip()
                 if first_class:
-                    selectors.append(f".{first_class}")
+                    selectors.append(f'[class*="{first_class}"]')
             else:
                 class_name = class_attr.strip()
                 if class_name:
-                    selectors.append(f".{class_name}")
+                    selectors.append(f'[class*="{class_name}"]')
 
         # Add placeholder as attribute selector if unique enough
         placeholder = element.get("placeholder", "").strip()
         if placeholder and len(placeholder) > 5:  # Only use meaningful placeholders
-            selectors.append(f"[placeholder='{placeholder}']")
+            selectors.append(f'[placeholder="{placeholder}"]')
 
         # Add value for radio/checkbox to make it specific
         if element_type == "input":
@@ -915,7 +927,7 @@ class StepAnalyzer:
             if input_type in ["radio", "checkbox"]:
                 value = element.get("value", "").strip()
                 if value:
-                    selectors.append(f"[value='{value}']")
+                    selectors.append(f'[value="{value}"]')
 
         selector = "".join(selectors)
 
@@ -1505,16 +1517,33 @@ class StepAnalyzer:
                 if id_match:
                     base_element_id = id_match.group(1)
             
-            # 🚀 CRITICAL FIX: For radio/checkbox, use the original base ID directly
-            # Each radio option has its own unique ID in the HTML, don't generate new ones
+            # 🚀 CRITICAL FIX: For radio/checkbox, intelligently determine ID pattern
             element_id = ""
             if field_type in ["radio", "checkbox"] and option_value:
                 if base_element_id:
-                    # For radio/checkbox fields, the base_element_id IS the correct ID for this specific option
-                    # Don't modify it by adding option_value - each option has its own unique ID
-                    element_id = base_element_id
+                    # Check if the base_element_id contains a pattern that matches the option values
+                    # Common patterns: "fieldName_true", "fieldName_false", "fieldName_yes", "fieldName_no"
+                    if "_" in base_element_id:
+                        parts = base_element_id.rsplit("_", 1)
+                        base_pattern = parts[0]
+                        current_suffix = parts[1].lower()
+                        
+                        # Check if current suffix looks like an option value (boolean/yes-no pattern)
+                        boolean_suffixes = ["true", "false", "yes", "no", "1", "0"]
+                        if current_suffix in boolean_suffixes:
+                            # This looks like a pattern-based ID, generate new ID with correct option
+                            element_id = f"{base_pattern}_{option_value}"
+                            print(f"DEBUG: Radio ID pattern detected - base: '{base_pattern}', current: '{current_suffix}', option: '{option_value}' -> '{element_id}'")
+                        else:
+                            # This is likely a complete ID name (like "out-of-crown-dependency"), use as-is
+                            element_id = base_element_id
+                            print(f"DEBUG: Radio ID complete name detected - using as-is: '{element_id}' (option: '{option_value}')")
+                    else:
+                        # No underscore, assume complete ID name and use as-is
+                        element_id = base_element_id
+                        print(f"DEBUG: Radio ID no pattern - using as-is: '{element_id}' (option: '{option_value}')")
                 else:
-                    # Only generate ID if no base ID exists
+                    # No base ID, generate from field_name
                     if option_value in ["true", "false"]:
                         element_id = f"{field_name}_{option_value}"
                     elif field_name.endswith("[0]"):
@@ -1630,25 +1659,23 @@ class StepAnalyzer:
                             break
 
                 if matched_option:
-                    # 为radio/checkbox字段生成正确的选择器
+                    # 🚀 CRITICAL FIX: Use stored selector from matched option, not generated one
                     if field_type in ["radio", "checkbox"]:
-                        # 生成指向特定选项值的选择器
-                        field_name = question.get("field_name", "")
-                        option_value = matched_option.get("value", "")
-                        original_selector = question.get("field_selector", "")
-
-                        # 🚀 ENHANCED: Use enhanced selector generation
-                        if field_type == "checkbox" and len(options) == 1:
-                            # Single checkbox uses original selector enhanced
-                            correct_selector = self._generate_enhanced_selector(question)
-                        else:
-                            # Multi-option radio/checkbox with specific value
-                            correct_selector = self._generate_enhanced_selector(question, option_value)
+                        # Use the selector stored with the option during field detection
+                        correct_selector = matched_option.get("selector", "")
+                        if not correct_selector:
+                            # Fallback to enhanced selector generation if no stored selector
+                            field_name = question.get("field_name", "")
+                            option_value = matched_option.get("value", "")
+                            if field_type == "checkbox" and len(options) == 1:
+                                correct_selector = self._generate_enhanced_selector(question)
+                            else:
+                                correct_selector = self._generate_enhanced_selector(question, option_value)
                     else:
                         correct_selector = self._generate_enhanced_selector(question)
 
                     print(
-                        f"DEBUG: _create_answer_data - Generated correct selector: '{correct_selector}' for option '{matched_option.get('text', '')}'")
+                        f"DEBUG: _create_answer_data - Using stored selector: '{correct_selector}' for option '{matched_option.get('text', '')}'")
 
                     # 🚀 FIXED: Different handling for select vs autocomplete fields
                     if field_type == "autocomplete":
@@ -1677,17 +1704,18 @@ class StepAnalyzer:
                     if options:
                         default_option = options[0]
 
-                        # 为默认选项生成正确的选择器
+                        # 🚀 CRITICAL FIX: Use stored selector from default option, not generated one
                         if field_type in ["radio", "checkbox"]:
-                            field_name = question.get("field_name", "")
-                            option_value = default_option.get("value", "")
-                            original_selector = question.get("field_selector", "")
-
-                            # 🚀 ENHANCED: Use enhanced selector generation for default option
-                            if field_type == "checkbox" and len(options) == 1:
-                                default_selector = self._generate_enhanced_selector(question)
-                            else:
-                                default_selector = self._generate_enhanced_selector(question, option_value)
+                            # Use the selector stored with the default option during field detection
+                            default_selector = default_option.get("selector", "")
+                            if not default_selector:
+                                # Fallback to enhanced selector generation if no stored selector
+                                field_name = question.get("field_name", "")
+                                option_value = default_option.get("value", "")
+                                if field_type == "checkbox" and len(options) == 1:
+                                    default_selector = self._generate_enhanced_selector(question)
+                                else:
+                                    default_selector = self._generate_enhanced_selector(question, option_value)
                         else:
                             default_selector = self._generate_enhanced_selector(question)
 
@@ -1725,7 +1753,7 @@ class StepAnalyzer:
                 answer_data = []
 
                 for option in options:
-                    # 构建选择器
+                    # 🚀 CRITICAL FIX: Use stored selector from option, not generated one
                     if field_type == "autocomplete":
                         selector = self._generate_enhanced_selector(question)
                         # For autocomplete fields, use text as value in option list
@@ -1735,15 +1763,17 @@ class StepAnalyzer:
                         # For regular select fields, use value in option list
                         option_value_to_use = option.get("value", "")
                     else:
-                        # 🚀 ENHANCED: Generate enhanced selector for option list
-                        option_value = option.get("value", "")
-                        option_value_to_use = option_value  # Keep original value for radio/checkbox
-
-                        # Use enhanced selector generation for each option
-                        if field_type == "checkbox" and len(options) == 1:
-                            selector = self._generate_enhanced_selector(question)
-                        else:
-                            selector = self._generate_enhanced_selector(question, option_value)
+                        # Use the selector stored with the option during field detection
+                        selector = option.get("selector", "")
+                        option_value_to_use = option.get("value", "")  # Keep original value for radio/checkbox
+                        
+                        if not selector:
+                            # Fallback to enhanced selector generation if no stored selector
+                            option_value = option.get("value", "")
+                            if field_type == "checkbox" and len(options) == 1:
+                                selector = self._generate_enhanced_selector(question)
+                            else:
+                                selector = self._generate_enhanced_selector(question, option_value)
 
                     answer_data.append({
                         "name": option.get("text", option.get("value", "")),  # 使用选项文本，不是问题文本
