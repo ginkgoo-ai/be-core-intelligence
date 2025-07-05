@@ -5034,69 +5034,223 @@ For each field, check:
             
             # Extract trigger field name and expected value
             # Format: "fieldName_expectedValue" (e.g., "warCrimesInvolvement_true")
-            # Support multiple conditions: "field1_value1,field2_value2" or single condition
+            # Support multiple conditions: 
+            # - "field1_value1,field2_value2" (comma-separated = AND logic)
+            # - "field1_value1 field2_value2" (space-separated = OR logic)
             conditions = []
+            condition_logic = "AND"  # Default logic
+            
             if "," in toggled_by:
-                # Multiple conditions (AND logic)
+                # Multiple conditions with AND logic (comma-separated)
                 condition_parts = [part.strip() for part in toggled_by.split(",")]
-                for part in condition_parts:
-                    if "_" in part:
-                        field_name = part.rsplit("_", 1)[0]
-                        expected_val = part.rsplit("_", 1)[1]
-                    else:
-                        field_name = part
-                        expected_val = "true"
-                    conditions.append((field_name, expected_val))
+                condition_logic = "AND"
+            elif " " in toggled_by and "_" in toggled_by and not any(word in toggled_by.lower() for word in ["data-", "class", "style", "http"]):
+                # Multiple conditions with OR logic (space-separated)
+                # Only if it contains underscores (field_value pattern) and doesn't look like attributes
+                condition_parts = [part.strip() for part in toggled_by.split(" ") if part.strip() and "_" in part]
+                if len(condition_parts) > 1:  # Only use OR logic if we have multiple valid parts
+                    condition_logic = "OR"
+                else:
+                    # Fallback to single condition
+                    condition_parts = [toggled_by.strip()]
+                    condition_logic = "SINGLE"
             else:
                 # Single condition
-                if "_" in toggled_by:
-                    trigger_field_name = toggled_by.rsplit("_", 1)[0]
-                    expected_value = toggled_by.rsplit("_", 1)[1]
+                condition_parts = [toggled_by.strip()]
+                condition_logic = "SINGLE"
+            
+            # Parse each condition part
+            for part in condition_parts:
+                if "_" in part:
+                    field_name = part.rsplit("_", 1)[0]
+                    expected_val = part.rsplit("_", 1)[1]
                 else:
-                    trigger_field_name = toggled_by
-                    expected_value = "true"
-                conditions.append((trigger_field_name, expected_value))
+                    field_name = part
+                    expected_val = "true"
+                conditions.append((field_name, expected_val))
+                print(f"DEBUG: Conditional Field - Parsed condition: field='{field_name}', expected='{expected_val}'")
                 
-            print(f"DEBUG: Conditional Field - Found {len(conditions)} condition(s) to check")
+            print(f"DEBUG: Conditional Field - Found {len(conditions)} condition(s) with {condition_logic} logic")
             
-            # Check all conditions (AND logic - all must be satisfied)
-            all_conditions_satisfied = True
-            condition_results = []
-            
-            for trigger_field_name, expected_value in conditions:
-                print(f"DEBUG: Conditional Field - Checking: '{trigger_field_name}' should be '{expected_value}'")
+            # Check conditions based on logic type
+            if condition_logic == "OR":
+                # OR logic - at least one condition must be satisfied
+                any_condition_satisfied = False
+                condition_results = []
                 
-                # Find the trigger field's answer
-                trigger_answer = None
-                for answer in answers:
-                    answer_field_name = answer.get("field_name", "")
-                    if trigger_field_name in answer_field_name or answer_field_name in trigger_field_name:
-                        trigger_answer = answer
-                        break
+                for trigger_field_name, expected_value in conditions:
+                    print(f"DEBUG: Conditional Field - Checking OR condition: '{trigger_field_name}' should be '{expected_value}'")
+                    
+                    # Find the trigger field's answer
+                    trigger_answer = None
+                    for answer in answers:
+                        answer_field_name = answer.get("field_name", "")
                         
-                if not trigger_answer:
-                    print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
-                    all_conditions_satisfied = False
-                    condition_results.append(f"{trigger_field_name}: NOT_FOUND")
-                    continue
+                        # Try multiple matching strategies
+                        # 1. Exact match
+                        if answer_field_name == trigger_field_name:
+                            trigger_answer = answer
+                            break
+                        # 2. Partial match (trigger_field_name contains answer_field_name)
+                        elif trigger_field_name.startswith(answer_field_name) and len(answer_field_name) > 3:
+                            trigger_answer = answer
+                            break
+                        # 3. Reverse partial match (answer_field_name contains trigger_field_name)
+                        elif answer_field_name.startswith(trigger_field_name) and len(trigger_field_name) > 3:
+                            trigger_answer = answer
+                            break
+                        # 4. Fallback: original logic
+                        elif trigger_field_name in answer_field_name or answer_field_name in trigger_field_name:
+                            trigger_answer = answer
+                            break
                     
-                # Get the actual value from the trigger field
-                actual_value = trigger_answer.get("answer", "").lower()
-                expected_value_lower = expected_value.lower()
-                
-                condition_met = actual_value == expected_value_lower
-                condition_results.append(f"{trigger_field_name}: {actual_value}=={expected_value_lower} -> {condition_met}")
-                
-                if not condition_met:
-                    all_conditions_satisfied = False
+                    if trigger_answer:
+                        print(f"DEBUG: Conditional Field - Found trigger answer: field='{trigger_answer.get('field_name', 'unknown')}', answer='{trigger_answer.get('answer', 'unknown')}'")
+                            
+                    if not trigger_answer:
+                        print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
+                        condition_results.append(f"{trigger_field_name}: NOT_FOUND")
+                        continue
+                        
+                    # Get the actual value from the trigger field
+                    actual_value = trigger_answer.get("answer", "").lower()
+                    expected_value_lower = expected_value.lower()
                     
-                print(f"DEBUG: Conditional Field - '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}', met={condition_met}")
+                    # Use safe matching approaches only
+                    condition_met = False
+                    match_reason = ""
+                    
+                    # 1. Direct text match (most reliable)
+                    if actual_value == expected_value_lower:
+                        condition_met = True
+                        match_reason = "exact_match"
+                    
+                    # 2. Safe partial matching only for specific patterns
+                    elif len(expected_value_lower) >= 5 and expected_value_lower in actual_value and actual_value.count(expected_value_lower) == 1:
+                        # Only allow partial matching for longer strings (5+ chars) that appear exactly once
+                        condition_met = True
+                        match_reason = "safe_contains_match"
+                    
+                    # 3. Normalized text matching for compound words (e.g., "someoneIKnow" vs "someone i know")
+                    elif len(expected_value_lower) >= 5:
+                        # Normalize both strings by removing spaces, punctuation, and common words
+                        import re
+                        normalized_actual = re.sub(r'[^\w]', '', actual_value).lower()
+                        normalized_expected = re.sub(r'[^\w]', '', expected_value_lower).lower()
+                        
+                        # Check if normalized versions match or contain each other
+                        if normalized_actual == normalized_expected:
+                            condition_met = True
+                            match_reason = "normalized_exact_match"
+                        elif len(normalized_expected) >= 8 and normalized_expected in normalized_actual:
+                            condition_met = True
+                            match_reason = "normalized_contains_match"
+                        elif len(normalized_actual) >= 8 and normalized_actual in normalized_expected:
+                            condition_met = True
+                            match_reason = "normalized_reverse_contains_match"
+                    
+                    condition_results.append(f"{trigger_field_name}: {actual_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
+                    
+                    if condition_met:
+                        any_condition_satisfied = True
+                        print(f"DEBUG: Conditional Field - OR condition met: '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}' ({match_reason})")
+                        break  # For OR logic, one satisfied condition is enough
+                    else:
+                        print(f"DEBUG: Conditional Field - OR condition not met: '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}'")
+                
+                condition_satisfied = any_condition_satisfied
+                print(f"DEBUG: Conditional Field - OR condition results: {'; '.join(condition_results)}")
+                print(f"DEBUG: Conditional Field - Any OR condition satisfied: {condition_satisfied}")
+                
+            else:
+                # AND logic (default) - all conditions must be satisfied
+                all_conditions_satisfied = True
+                condition_results = []
+                
+                for trigger_field_name, expected_value in conditions:
+                    print(f"DEBUG: Conditional Field - Checking AND condition: '{trigger_field_name}' should be '{expected_value}'")
+                    
+                    # Find the trigger field's answer
+                    trigger_answer = None
+                    for answer in answers:
+                        answer_field_name = answer.get("field_name", "")
+                        
+                        # Try multiple matching strategies
+                        # 1. Exact match
+                        if answer_field_name == trigger_field_name:
+                            trigger_answer = answer
+                            break
+                        # 2. Partial match (trigger_field_name contains answer_field_name)
+                        elif trigger_field_name.startswith(answer_field_name) and len(answer_field_name) > 3:
+                            trigger_answer = answer
+                            break
+                        # 3. Reverse partial match (answer_field_name contains trigger_field_name)
+                        elif answer_field_name.startswith(trigger_field_name) and len(trigger_field_name) > 3:
+                            trigger_answer = answer
+                            break
+                        # 4. Fallback: original logic
+                        elif trigger_field_name in answer_field_name or answer_field_name in trigger_field_name:
+                            trigger_answer = answer
+                            break
+                    
+                    if trigger_answer:
+                        print(f"DEBUG: Conditional Field - Found trigger answer: field='{trigger_answer.get('field_name', 'unknown')}', answer='{trigger_answer.get('answer', 'unknown')}'")
+                            
+                    if not trigger_answer:
+                        print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
+                        all_conditions_satisfied = False
+                        condition_results.append(f"{trigger_field_name}: NOT_FOUND")
+                        continue
+                        
+                    # Get the actual value from the trigger field
+                    actual_value = trigger_answer.get("answer", "").lower()
+                    expected_value_lower = expected_value.lower()
+                     
+                    # Use safe matching approaches only
+                    condition_met = False
+                    match_reason = ""
+                     
+                    # 1. Direct text match (most reliable)
+                    if actual_value == expected_value_lower:
+                        condition_met = True
+                        match_reason = "exact_match"
+                     
+                    # 2. Safe partial matching only for specific patterns
+                    elif len(expected_value_lower) >= 5 and expected_value_lower in actual_value and actual_value.count(expected_value_lower) == 1:
+                        # Only allow partial matching for longer strings (5+ chars) that appear exactly once
+                        condition_met = True
+                        match_reason = "safe_contains_match"
+                     
+                    # 3. Normalized text matching for compound words (e.g., "someoneIKnow" vs "someone i know")
+                    elif len(expected_value_lower) >= 5:
+                        # Normalize both strings by removing spaces, punctuation, and common words
+                        import re
+                        normalized_actual = re.sub(r'[^\w]', '', actual_value).lower()
+                        normalized_expected = re.sub(r'[^\w]', '', expected_value_lower).lower()
+                        
+                        # Check if normalized versions match or contain each other
+                        if normalized_actual == normalized_expected:
+                            condition_met = True
+                            match_reason = "normalized_exact_match"
+                        elif len(normalized_expected) >= 8 and normalized_expected in normalized_actual:
+                            condition_met = True
+                            match_reason = "normalized_contains_match"
+                        elif len(normalized_actual) >= 8 and normalized_actual in normalized_expected:
+                            condition_met = True
+                            match_reason = "normalized_reverse_contains_match"
+                     
+                    condition_results.append(f"{trigger_field_name}: {actual_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
+                     
+                    if not condition_met:
+                        all_conditions_satisfied = False
+                         
+                    print(f"DEBUG: Conditional Field - AND condition: '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}', met={condition_met} ({match_reason})")
+                
+                condition_satisfied = all_conditions_satisfied
+                print(f"DEBUG: Conditional Field - AND condition results: {'; '.join(condition_results)}")
+                print(f"DEBUG: Conditional Field - All AND conditions satisfied: {condition_satisfied}")
             
-            print(f"DEBUG: Conditional Field - Condition results: {'; '.join(condition_results)}")
-            print(f"DEBUG: Conditional Field - All conditions satisfied: {all_conditions_satisfied}")
-            
-            # Check if condition is satisfied (all conditions must be satisfied)
-            condition_satisfied = all_conditions_satisfied
+            # condition_satisfied is already set in the logic above
             
             # Apply reverse logic if needed
             if is_reverse_logic:
@@ -7174,11 +7328,10 @@ For each field, check:
 
             print(f"DEBUG: Batch Analysis - Processing {len(questions)} fields in single LLM call (cache miss)")
 
-            # 🚀 NEW: Enhanced contextual reasoning
+            # 🚀 NEW: Enhanced contextual reasoning (no confidence boost)
             enhanced_reasoning = self._enhanced_contextual_reasoning(questions, profile_data, profile_dummy_data)
-            confidence_boost = enhanced_reasoning["confidence_boost"]["overall_boost"]
             
-            print(f"DEBUG: Enhanced Reasoning - Confidence boost: {confidence_boost}")
+            print(f"DEBUG: Enhanced Reasoning - Analysis completed")
             print(f"DEBUG: Enhanced Reasoning - Confident answers: {enhanced_reasoning['confidence_boost']['confident_answers']}/{enhanced_reasoning['confidence_boost']['total_questions']}")
 
             # Create batch analysis prompt with enhanced context
@@ -7320,17 +7473,16 @@ For each field, check:
                                                "dummy" in result.get("reasoning", "").lower() or
                                                result.get("confidence", 0) >= 70 and result.get("answer", ""))
 
-                            # Apply confidence boost and enhanced reasoning
+                            # 🚀 FIXED: Use ONLY original AI confidence assessment - no artificial boost
                             original_confidence = result.get("confidence", 0)
-                            boosted_confidence = min(95, original_confidence + confidence_boost)
                             
-                            # Check if this field had strong pre-reasoning
+                            # Check if this field had pre-reasoning (for context only, not confidence boost)
                             field_data = fields_data[index] if index < len(fields_data) else {}
                             pre_reasoning = field_data.get("pre_reasoning", {})
-                            pre_confidence = pre_reasoning.get("confidence", 0)
+                            pre_confidence = pre_reasoning.get("confidence", 0) if pre_reasoning else 0
                             
-                            # Use the higher of LLM confidence or pre-reasoning confidence
-                            final_confidence = max(boosted_confidence, pre_confidence)
+                            # Use ONLY the original AI confidence - no pre-reasoning boost
+                            final_confidence = original_confidence
                             
                             # 🚀 AGGRESSIVE: Significantly lower intervention threshold for better UX
                             needs_intervention = result.get("needs_intervention", True)
@@ -7342,14 +7494,13 @@ For each field, check:
                             is_semantic_match = "semantic" in reasoning or "match" in reasoning
                             has_answer = bool(result.get("answer", "").strip())
                             
-                            # 🚀 AGGRESSIVE THRESHOLDS - Much lower intervention requirements
-                            if (final_confidence >= 60 and has_answer) or \
-                               (final_confidence >= 50 and is_geographical) or \
-                               (final_confidence >= 50 and has_dummy_data) or \
-                               (final_confidence >= 45 and is_semantic_match and has_answer):
-                                needs_intervention = False
-                                print(f"DEBUG: 🚀 AGGRESSIVE BOOST - Field '{question['field_name']}' confidence: {final_confidence}, geographical: {is_geographical}, dummy: {has_dummy_data}, semantic: {is_semantic_match}, intervention: False")
-                            else:
+                            # 🚀 REMOVED: No more artificial intervention threshold adjustments
+                            # Use AI's original needs_intervention assessment without modification
+                            # final_confidence and other factors should not override AI's judgment
+                            print(f"DEBUG: 🚀 PURE AI ASSESSMENT - Field '{question['field_name']}' confidence: {final_confidence}, needs_intervention: {needs_intervention} (AI decision preserved)")
+                            
+                            # Only log additional context for debugging, but don't change intervention decision
+                            if is_geographical or has_dummy_data or is_semantic_match:
                                 print(f"DEBUG: Field '{question['field_name']}' confidence: {final_confidence}, still needs intervention")
                             
                             formatted_result = {
@@ -7466,7 +7617,7 @@ For each field, check:
                         "field_selector": question["field_selector"],
                         "field_name": question["field_name"],
                         "answer": str(exact_match_value),
-                        "confidence": 95,  # High confidence for exact matches
+                        "confidence": 90,  # High confidence for exact matches (reduced from 95)
                         "reasoning": f"Exact match found at {exact_match_path}",
                         "needs_intervention": False,
                         "data_source_path": exact_match_path,
@@ -7605,44 +7756,35 @@ For each field, check:
             "decision_path": []
         }
         
-        # Step 1: Direct data matching
+        # Step 1: Direct data matching (no confidence assignment)
         direct_matches = self._find_direct_matches(question, enhanced_context["direct_data"])
         if direct_matches:
             reasoning_chain["steps"].append({
                 "type": "direct_match",
                 "data": direct_matches,
-                "confidence": 95
+                "note": "Found direct data match - context only"
             })
-            reasoning_chain["confidence_factors"].append(95)
         
-        # Step 2: Semantic inference
+        # Step 2: Semantic inference (no confidence assignment)
         semantic_matches = self._find_semantic_matches(question, enhanced_context)
         if semantic_matches:
             reasoning_chain["steps"].append({
                 "type": "semantic_inference", 
                 "data": semantic_matches,
-                "confidence": 85
+                "note": "Found semantic match - context only"
             })
-            reasoning_chain["confidence_factors"].append(85)
         
-        # Step 3: Knowledge-based reasoning
+        # Step 3: Knowledge-based reasoning (no confidence assignment)
         knowledge_matches = self._apply_knowledge_reasoning(question, enhanced_context, knowledge_base)
         if knowledge_matches:
             reasoning_chain["steps"].append({
                 "type": "knowledge_reasoning",
                 "data": knowledge_matches,
-                "confidence": 90
+                "note": "Applied knowledge reasoning - context only"
             })
-            reasoning_chain["confidence_factors"].append(90)
         
-        # Calculate final confidence
-        if reasoning_chain["confidence_factors"]:
-            # Use highest confidence if multiple sources agree
-            reasoning_chain["final_confidence"] = max(reasoning_chain["confidence_factors"])
-            
-            # Boost confidence if multiple sources agree
-            if len(reasoning_chain["confidence_factors"]) > 1:
-                reasoning_chain["final_confidence"] = min(95, reasoning_chain["final_confidence"] + 10)
+        # Don't assign artificial confidence - let AI decide
+        reasoning_chain["final_confidence"] = 0  # Will be set by AI, not by pre-reasoning
         
         return reasoning_chain
 
@@ -7860,7 +8002,7 @@ For each field, check:
                             successful_geographical_inferences.append({
                                 'question': question,
                                 'pattern': f'Country {value} maps to European region',
-                                'confidence': 85
+                                'note': 'Geographic pattern identified (no confidence boost)'
                             })
             
             # Duration comparison pattern learning
@@ -7872,7 +8014,7 @@ For each field, check:
                         successful_duration_comparisons.append({
                             'question': question,
                             'pattern': 'Duration values need range comparison',
-                            'confidence': 80
+                            'note': 'Duration pattern identified (no confidence boost)'
                         })
             
             return {
@@ -7891,29 +8033,26 @@ For each field, check:
 
     def _contextual_confidence_adjustment(self, questions: List[Dict[str, Any]], results: List[Dict[str, Any]], 
                                          profile_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Adjust confidence based on contextual factors"""
+        """Preserve original AI confidence assessment without artificial adjustments"""
         try:
+            # 🚀 FIXED: Preserve original AI confidence - no artificial boosts
             adjusted_results = []
             
             for result in results:
                 adjusted_result = result.copy()
-                current_confidence = result.get('confidence', 0)
+                # Keep original confidence as-is
+                original_confidence = result.get('confidence', 0)
                 
-                # Boost confidence for geographic matches
+                # Add context information to reasoning but don't change confidence
                 reasoning = result.get('reasoning', '').lower()
                 if any(keyword in reasoning for keyword in ['italy', 'europe', 'geographical', 'country']):
-                    adjusted_result['confidence'] = min(95, current_confidence + 10)
-                    adjusted_result['reasoning'] += " [Geographic confidence boost]"
+                    adjusted_result['reasoning'] += " [Geographic context]"
                 
-                # Boost confidence for exact matches
                 if 'exact match' in reasoning:
-                    adjusted_result['confidence'] = min(98, current_confidence + 5)
-                    adjusted_result['reasoning'] += " [Exact match boost]"
+                    adjusted_result['reasoning'] += " [Exact match]"
                 
-                # Boost confidence for semantic matches
                 if 'semantic' in reasoning:
-                    adjusted_result['confidence'] = min(90, current_confidence + 8)
-                    adjusted_result['reasoning'] += " [Semantic match boost]"
+                    adjusted_result['reasoning'] += " [Semantic match]"
                 
                 adjusted_results.append(adjusted_result)
             
