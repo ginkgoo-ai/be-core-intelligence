@@ -3336,65 +3336,60 @@ class LangGraphFormProcessor:
         return state
 
     def _semantic_question_analyzer_node(self, state: FormAnalysisState) -> FormAnalysisState:
-        """🚀 NEW: AI-powered semantic analysis of questions to identify logical relationships"""
+        """🚀 ENHANCED: 智能问题分组 - 分层策略节省token提高准确性"""
         try:
             workflow_id = state.get("workflow_id", "unknown")
-            print(f"[workflow_id:{workflow_id}] DEBUG: Semantic Question Analyzer - Starting AI-driven question analysis")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Smart Question Grouping - Starting")
             
-            field_questions = state.get("field_questions", [])
+            questions = state.get("field_questions", [])
+            detected_fields = state.get("detected_fields", [])
+            form_html = state.get("form_html", "")
             
-            if not field_questions:
-                print(f"[workflow_id:{workflow_id}] DEBUG: Semantic Question Analyzer - No questions to analyze")
+            if not questions:
+                print(f"[workflow_id:{workflow_id}] DEBUG: No questions for grouping")
                 state["semantic_question_groups"] = []
-                state["question_semantic_analysis"] = {}
+                state["question_semantic_analysis"] = {"error": "No questions to analyze"}
                 return state
             
-            # 🚀 STEP 1: Extract question texts for AI analysis
-            question_texts = []
-            for i, question in enumerate(field_questions):
-                question_data = {
-                    "index": i,
-                    "question": question.get("question", ""),
-                    "field_name": question.get("field_name", ""),
-                    "field_type": question.get("field_type", ""),
-                    "options": question.get("options", []),
-                    "required": question.get("required", False)
-                }
-                question_texts.append(question_data)
+            # 🎯 第一层：结构化分组（无需AI）
+            structural_groups = self._create_structural_groups(questions, detected_fields, form_html, workflow_id)
             
-            # 🚀 STEP 2: Use AI to analyze semantic relationships
-            semantic_analysis = self._analyze_question_semantics_with_ai(question_texts, workflow_id)
+            # 🎯 第二层：AI增强分组（仅复杂场景）
+            ai_enhanced_groups = self._create_ai_enhanced_groups(questions, detected_fields, structural_groups, workflow_id)
             
-            # 🚀 STEP 3: Create semantic groups based on AI analysis
-            semantic_groups = self._create_semantic_question_groups(
-                field_questions, 
-                semantic_analysis, 
-                workflow_id
-            )
+            # 合并所有分组
+            final_groups = self._merge_question_groups(structural_groups, ai_enhanced_groups, workflow_id)
             
-            # 🚀 STEP 4: Store results
-            state["semantic_question_groups"] = semantic_groups
-            state["question_semantic_analysis"] = semantic_analysis
+            # 保存分组结果到正确的字段
+            state["semantic_question_groups"] = final_groups
+            state["question_semantic_analysis"] = {"groups_created": len(final_groups)}
             
-            print(f"[workflow_id:{workflow_id}] DEBUG: Semantic Question Analyzer - Created {len(semantic_groups)} semantic groups")
+            print(f"[workflow_id:{workflow_id}] DEBUG: Smart grouping complete - {len(final_groups)} groups created")
             
         except Exception as e:
-            print(f"[workflow_id:{workflow_id}] DEBUG: Semantic Question Analyzer - Error: {str(e)}")
-            state["error_details"] = f"Semantic question analysis failed: {str(e)}"
+            print(f"[workflow_id:{workflow_id}] ERROR: Smart question grouping failed: {str(e)}")
+            # 回退到简单分组
+            state["semantic_question_groups"] = self._create_simple_fallback_groups(state.get("field_questions", []))
+            state["question_semantic_analysis"] = {"error": str(e)}
             
         return state
     
     def _analyze_question_semantics_with_ai(self, questions: List[Dict], workflow_id: str) -> Dict[str, Any]:
-        """🚀 NEW: Use AI to analyze semantic relationships between questions"""
+        """🚀 OPTIMIZED: 小批量AI语义分析 - 仅对复杂/不确定的字段使用AI"""
+        
+        # 只对复杂问题使用AI，减少token消耗
+        if len(questions) > 10:
+            print(f"[workflow_id:{workflow_id}] DEBUG: Too many questions ({len(questions)}), skipping AI analysis")
+            return {"error": "Too many questions for AI analysis"}
         
         # Create prompt for AI semantic analysis
         prompt = f"""
-                # Task: 分析表单问题之间的语义关系
+                # Task: 分析少量复杂表单问题之间的语义关系
                 
-                你正在分析签证申请表单，识别问题之间的逻辑关系。
+                你正在分析签证申请表单中的复杂问题，识别问题之间的逻辑关系。
                 重点识别**互斥问题**和**条件依赖关系**。
                 
-                ## 待分析问题:
+                ## 待分析问题 ({len(questions)}个):
                 {json.dumps(questions, indent=2, ensure_ascii=False)}
                 
                 ## 任务:
@@ -3528,6 +3523,667 @@ class LangGraphFormProcessor:
             print(f"[workflow_id:{workflow_id}] DEBUG: Created semantic category: {category.get('category')}")
         
         return semantic_groups
+    
+    def _create_structural_groups(self, questions: List[Dict], detected_fields: List[Dict], 
+                                form_html: str, workflow_id: str) -> List[Dict]:
+        """🎯 第一层：基于HTML结构的分组"""
+        print(f"[workflow_id:{workflow_id}] DEBUG: Creating structural groups")
+        
+        # 🚀 SIMPLIFIED: 只使用条件逻辑分组 - 最直接有效
+        
+        structural_groups = self._group_by_conditional_logic(questions, detected_fields, form_html)
+        print(f"[workflow_id:{workflow_id}] DEBUG: Conditional logic groups: {len(structural_groups)}")
+        
+        # 如果条件逻辑分组没有找到任何组，则每个问题单独成组
+        if not structural_groups:
+            print(f"[workflow_id:{workflow_id}] DEBUG: No conditional groups found, creating individual groups")
+            structural_groups = []
+            for i, question in enumerate(questions):
+                structural_groups.append({
+                    "group_type": "individual",
+                    "group_name": f"Individual Question {i+1}",
+                    "questions": [question],
+                    "priority": 10,
+                    "reasoning": "No conditional dependencies found"
+                })
+        
+        print(f"[workflow_id:{workflow_id}] DEBUG: Created {len(structural_groups)} structural groups")
+        return structural_groups
+
+    
+    def _create_ai_enhanced_groups(self, questions: List[Dict], detected_fields: List[Dict], 
+                                 existing_groups: List[Dict], workflow_id: str) -> List[Dict]:
+        """🎯 第三层：AI增强分组（仅复杂场景）"""
+        print(f"[workflow_id:{workflow_id}] DEBUG: Creating AI-enhanced groups")
+        
+        ai_enhanced_groups = []
+        
+        # 找出未分组的复杂字段
+        ungrouped_questions = self._find_ungrouped_questions(questions, existing_groups)
+        
+        if len(ungrouped_questions) > 0:
+            # 只对复杂/不确定的字段使用AI
+            complex_questions = self._filter_complex_questions(ungrouped_questions)
+            
+            if len(complex_questions) > 0:
+                # 小批量处理，每次最多5-10个字段
+                batch_size = 8
+                for i in range(0, len(complex_questions), batch_size):
+                    batch = complex_questions[i:i + batch_size]
+                    batch_groups = self._analyze_question_batch_with_ai(batch, existing_groups, workflow_id)
+                    ai_enhanced_groups.extend(batch_groups)
+        
+        print(f"[workflow_id:{workflow_id}] DEBUG: Created {len(ai_enhanced_groups)} AI-enhanced groups")
+        return ai_enhanced_groups
+    
+    def _group_by_html_containers(self, questions: List[Dict], form_html: str) -> List[Dict]:
+        """基于HTML容器分组 - 增强层级结构识别"""
+        from bs4 import BeautifulSoup
+        
+        try:
+            soup = BeautifulSoup(form_html, 'html.parser')
+            groups = []
+            grouped_questions = set()  # 跟踪已分组的问题
+            
+            # 1. 查找fieldset容器（最高优先级）
+            fieldsets = soup.find_all('fieldset')
+            for i, fieldset in enumerate(fieldsets):
+                legend = fieldset.find('legend')
+                group_name = legend.get_text(strip=True) if legend else f"Field Group {i+1}"
+                
+                # 找出在这个fieldset中的问题
+                group_questions = []
+                for question in questions:
+                    field_name = question.get('field_name', '')
+                    if field_name in grouped_questions:
+                        continue
+                        
+                    selector = question.get('field_selector', '')
+                    if selector:
+                        # 检查字段是否在这个fieldset中
+                        field_element = soup.select_one(selector)
+                        if field_element and fieldset in field_element.parents:
+                            group_questions.append(question)
+                            grouped_questions.add(field_name)
+                
+                if group_questions:
+                    groups.append({
+                        "group_type": "html_container",
+                        "group_name": group_name,
+                        "questions": group_questions,
+                        "priority": 1,
+                        "reasoning": f"Questions grouped by HTML fieldset: {group_name}"
+                    })
+            
+            # 2. 查找嵌套容器（父子关系，如父亲1、父亲2）
+            nested_containers = soup.find_all('div', class_=lambda x: x and any(cls in x for cls in ['parent', 'person', 'individual', 'member']))
+            for i, container in enumerate(nested_containers):
+                # 尝试获取容器的标题或标识
+                title_element = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'label', 'legend'])
+                if title_element:
+                    group_name = title_element.get_text(strip=True)
+                else:
+                    container_class = ' '.join(container.get('class', []))
+                    group_name = f"Person {i+1} ({container_class})"
+                
+                group_questions = []
+                for question in questions:
+                    field_name = question.get('field_name', '')
+                    if field_name in grouped_questions:
+                        continue
+                        
+                    selector = question.get('field_selector', '')
+                    if selector:
+                        field_element = soup.select_one(selector)
+                        if field_element and container in field_element.parents:
+                            group_questions.append(question)
+                            grouped_questions.add(field_name)
+                
+                if group_questions:
+                    groups.append({
+                        "group_type": "html_nested_container",
+                        "group_name": group_name,
+                        "questions": group_questions,
+                        "priority": 1,
+                        "reasoning": f"Questions grouped by nested HTML container: {group_name}"
+                    })
+            
+            # 3. 查找一般容器（section, group, panel等）
+            general_containers = soup.find_all('div', class_=lambda x: x and any(cls in x for cls in ['section', 'group', 'panel', 'block']))
+            for i, container in enumerate(general_containers):
+                container_class = ' '.join(container.get('class', []))
+                
+                # 尝试获取更好的组名
+                title_element = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                if title_element:
+                    group_name = title_element.get_text(strip=True)
+                else:
+                    group_name = f"Section {i+1} ({container_class})"
+                
+                group_questions = []
+                for question in questions:
+                    field_name = question.get('field_name', '')
+                    if field_name in grouped_questions:
+                        continue
+                        
+                    selector = question.get('field_selector', '')
+                    if selector:
+                        field_element = soup.select_one(selector)
+                        if field_element and container in field_element.parents:
+                            # 确保不是嵌套在更小的容器中
+                            is_direct_child = True
+                            for other_container in nested_containers:
+                                if (other_container != container and 
+                                    other_container in field_element.parents and
+                                    container in other_container.parents):
+                                    is_direct_child = False
+                                    break
+                            
+                            if is_direct_child:
+                                group_questions.append(question)
+                                grouped_questions.add(field_name)
+                
+                if group_questions:
+                    groups.append({
+                        "group_type": "html_container",
+                        "group_name": group_name,
+                        "questions": group_questions,
+                        "priority": 2,
+                        "reasoning": f"Questions grouped by HTML container: {container_class}"
+                    })
+            
+            # 4. 基于字段名模式识别层级关系（如father1_name, father2_name）
+            pattern_groups = self._group_by_field_name_patterns(questions, grouped_questions)
+            groups.extend(pattern_groups)
+            
+            return groups
+            
+        except Exception as e:
+            print(f"DEBUG: HTML container grouping failed: {str(e)}")
+            return []
+    
+    def _group_by_field_name_patterns(self, questions: List[Dict], grouped_questions: set) -> List[Dict]:
+        """基于字段名模式识别层级关系"""
+        groups = []
+        
+        # 识别字段名模式，如 father1_name, father1_birth, father2_name, father2_birth
+        pattern_map = {}
+        
+        for question in questions:
+            field_name = question.get('field_name', '')
+            if field_name in grouped_questions:
+                continue
+                
+            # 分析字段名模式
+            import re
+            # 匹配模式如：father1_name, parent2_birth, person3_address
+            match = re.match(r'([a-zA-Z]+)(\d+)_(.+)', field_name)
+            if match:
+                prefix, number, suffix = match.groups()
+                pattern_key = f"{prefix}{number}"
+                
+                if pattern_key not in pattern_map:
+                    pattern_map[pattern_key] = []
+                pattern_map[pattern_key].append(question)
+        
+        # 为每个模式创建分组
+        for pattern_key, pattern_questions in pattern_map.items():
+            if len(pattern_questions) > 1:  # 至少2个字段才分组
+                groups.append({
+                    "group_type": "field_name_pattern",
+                    "group_name": f"{pattern_key.title()} Information",
+                    "questions": pattern_questions,
+                    "priority": 1,
+                    "reasoning": f"Questions grouped by field name pattern: {pattern_key}"
+                })
+                
+                # 标记为已分组
+                for question in pattern_questions:
+                    grouped_questions.add(question.get('field_name', ''))
+        
+        return groups
+    
+    def _group_by_conditional_logic(self, questions: List[Dict], detected_fields: List[Dict], form_html: str) -> List[Dict]:
+        """基于条件逻辑分组"""
+        groups = []
+        
+        # 查找条件逻辑模式
+        conditional_patterns = [
+            r'data-conditional[^>]*=["\'](.*?)["\']',
+            r'data-show-if[^>]*=["\'](.*?)["\']',
+            r'data-hide-if[^>]*=["\'](.*?)["\']',
+            r'data-toggled-by[^>]*=["\'](.*?)["\']',  # 🚀 NEW: Support data-toggled-by
+            r'data-toggled-by-not[^>]*=["\'](.*?)["\']'  # 🚀 NEW: Support data-toggled-by-not
+        ]
+        
+        import re
+        from bs4 import BeautifulSoup
+        
+        # 🚀 NEW: Enhanced conditional logic grouping
+        conditional_relationships = {}  # trigger_field -> [dependent_fields]
+        all_conditional_fields = set()
+        
+        print(f"DEBUG: Conditional Logic Grouping - Starting analysis for {len(questions)} questions")
+        
+        try:
+            soup = BeautifulSoup(form_html, 'html.parser')
+            
+            # Find all elements with conditional attributes (any of these attributes)
+            conditional_elements = set()
+            
+            # Search for each attribute separately and combine results
+            conditional_elements.update(soup.find_all(attrs={'data-toggled-by': True}))
+            conditional_elements.update(soup.find_all(attrs={'data-toggled-by-not': True}))
+            conditional_elements.update(soup.find_all(attrs={'data-conditional': True}))
+            conditional_elements.update(soup.find_all(attrs={'data-show-if': True}))
+            conditional_elements.update(soup.find_all(attrs={'data-hide-if': True}))
+            
+            print(f"DEBUG: Conditional Logic Grouping - Found {len(conditional_elements)} elements with conditional attributes")
+            
+            for element in conditional_elements:
+                # Get the field name for this element
+                dependent_field = element.get('name') or element.get('id', '')
+                
+                # If element doesn't have name/id, look for form fields inside it
+                if not dependent_field:
+                    # Look for input, select, textarea elements inside this container
+                    form_fields = element.find_all(['input', 'select', 'textarea'])
+                    for field in form_fields:
+                        field_name = field.get('name') or field.get('id', '')
+                        if field_name:
+                            dependent_field = field_name
+                            print(f"DEBUG: Conditional Logic Grouping - Found field '{dependent_field}' inside conditional container")
+                            break
+                
+                if not dependent_field:
+                    print(f"DEBUG: Conditional Logic Grouping - Skipping element with no field name: {element.name} {element.get('class', '')}")
+                    continue
+                    
+                # Find the trigger condition
+                trigger_condition = (element.get('data-toggled-by') or 
+                                   element.get('data-toggled-by-not') or
+                                   element.get('data-conditional') or
+                                   element.get('data-show-if') or
+                                   element.get('data-hide-if'))
+                
+                if trigger_condition:
+                    # Parse trigger field from condition (e.g., "hasCertificate_true" -> "hasCertificate")
+                    trigger_field = trigger_condition.split('_')[0] if '_' in trigger_condition else trigger_condition
+                    
+                    # Track the relationship
+                    if trigger_field not in conditional_relationships:
+                        conditional_relationships[trigger_field] = []
+                    conditional_relationships[trigger_field].append(dependent_field)
+                    
+                    # Add both fields to conditional fields set
+                    all_conditional_fields.add(trigger_field)
+                    all_conditional_fields.add(dependent_field)
+                    
+                    print(f"DEBUG: Conditional Logic Grouping - Found dependency: {trigger_field} -> {dependent_field}")
+        
+        except Exception as e:
+            print(f"DEBUG: Conditional Logic Grouping - Error parsing HTML: {e}")
+            # Fallback to original pattern matching
+            conditional_fields = set()
+            
+            for pattern in conditional_patterns:
+                matches = re.findall(pattern, form_html, re.IGNORECASE)
+                for match in matches:
+                    # 解析条件逻辑中涉及的字段
+                    field_names = re.findall(r'(\w+)', match)
+                    conditional_fields.update(field_names)
+            
+            all_conditional_fields = conditional_fields
+        
+        # Create groups for each conditional relationship
+        created_groups = []
+        processed_fields = set()
+        
+        for trigger_field, dependent_fields in conditional_relationships.items():
+            # Find questions for trigger field and dependent fields
+            group_questions = []
+            
+            # Add trigger field question
+            for question in questions:
+                field_name = question.get('field_name', '')
+                if field_name == trigger_field:
+                    group_questions.append(question)
+                    processed_fields.add(field_name)
+                    break
+            
+            # Add dependent field questions
+            for dependent_field in dependent_fields:
+                for question in questions:
+                    field_name = question.get('field_name', '')
+                    if field_name == dependent_field:
+                        group_questions.append(question)
+                        processed_fields.add(field_name)
+                        break
+            
+            if len(group_questions) > 1:  # Only create group if we have multiple related fields
+                created_groups.append({
+                    "group_type": "conditional_logic",
+                    "group_name": f"Conditional Group: {trigger_field}",
+                    "questions": group_questions,
+                    "priority": 1,
+                    "reasoning": f"Questions grouped by conditional dependency: {trigger_field} controls {', '.join(dependent_fields)}"
+                })
+                print(f"DEBUG: Conditional Logic Grouping - Created group for {trigger_field} with {len(group_questions)} questions")
+        
+        # Handle any remaining conditional fields that weren't part of relationships
+        remaining_conditional_questions = []
+        for question in questions:
+            field_name = question.get('field_name', '')
+            if field_name in all_conditional_fields and field_name not in processed_fields:
+                remaining_conditional_questions.append(question)
+        
+        if remaining_conditional_questions:
+            created_groups.append({
+                "group_type": "conditional_logic",
+                "group_name": "Other Conditional Fields",
+                "questions": remaining_conditional_questions,
+                "priority": 2,
+                "reasoning": "Questions with conditional logic that don't have clear dependencies"
+            })
+        
+        print(f"DEBUG: Conditional Logic Grouping - Final result: {len(created_groups)} groups created")
+        for group in created_groups:
+            group_questions = group.get("questions", [])
+            field_names = [q.get("field_name", "") for q in group_questions]
+            print(f"DEBUG: Conditional Logic Grouping - Group '{group.get('group_name', '')}': {field_names}")
+        
+        return created_groups
+    
+    def _group_by_field_patterns(self, questions: List[Dict]) -> List[Dict]:
+        """基于字段名规律分组"""
+        groups = []
+        
+        # 定义字段模式
+        field_patterns = {
+            "address": ["address", "street", "city", "state", "zip", "country", "postal"],
+            "personal": ["name", "firstname", "lastname", "fullname", "title", "gender"],
+            "contact": ["phone", "email", "mobile", "telephone", "fax"],
+            "date": ["date", "birth", "born", "year", "month", "day"],
+            "employment": ["job", "work", "employer", "occupation", "profession", "salary"],
+            "family": ["spouse", "partner", "parent", "father", "mother", "child", "family"],
+            "travel": ["travel", "trip", "visit", "destination", "purpose", "duration"],
+            "financial": ["income", "savings", "money", "amount", "currency", "bank"]
+        }
+        
+        # 按模式分组
+        for pattern_name, keywords in field_patterns.items():
+            pattern_questions = []
+            
+            for question in questions:
+                field_name = question.get('field_name', '').lower()
+                field_label = question.get('field_label', '').lower()
+                question_text = question.get('question', '').lower()
+                
+                # 检查字段是否匹配模式
+                if any(keyword in field_name or keyword in field_label or keyword in question_text 
+                       for keyword in keywords):
+                    pattern_questions.append(question)
+            
+            if pattern_questions:
+                groups.append({
+                    "group_type": "field_pattern",
+                    "group_name": f"{pattern_name.title()} Information",
+                    "questions": pattern_questions,
+                    "priority": 3,
+                    "reasoning": f"Questions grouped by field pattern: {pattern_name}"
+                })
+        
+        return groups
+    
+    def _find_ungrouped_questions(self, questions: List[Dict], existing_groups: List[Dict]) -> List[Dict]:
+        """找出未分组的问题"""
+        grouped_questions = set()
+        
+        for group in existing_groups:
+            for question in group.get('questions', []):
+                question_id = question.get('field_name', '')
+                if question_id:
+                    grouped_questions.add(question_id)
+        
+        ungrouped = []
+        for question in questions:
+            question_id = question.get('field_name', '')
+            if question_id not in grouped_questions:
+                ungrouped.append(question)
+        
+        return ungrouped
+    
+    def _filter_complex_questions(self, questions: List[Dict]) -> List[Dict]:
+        """过滤出复杂/不确定的问题"""
+        complex_questions = []
+        
+        for question in questions:
+            # 判断是否为复杂问题
+            is_complex = False
+            
+            # 检查是否有复杂的选项
+            options = question.get('options', [])
+            if len(options) > 5:  # 选项过多
+                is_complex = True
+            
+            # 检查是否有复杂的问题描述
+            question_text = question.get('question', '')
+            if len(question_text) > 100:  # 问题描述过长
+                is_complex = True
+            
+            # 检查是否有复杂的字段名
+            field_name = question.get('field_name', '')
+            if len(field_name) > 50 or field_name.count('_') > 3:  # 字段名复杂
+                is_complex = True
+            
+            if is_complex:
+                complex_questions.append(question)
+        
+        return complex_questions
+    
+    def _analyze_question_batch_with_ai(self, questions: List[Dict], existing_groups: List[Dict], 
+                                      workflow_id: str) -> List[Dict]:
+        """小批量AI分析问题 - 包含HTML层级结构信息"""
+        if len(questions) == 0:
+            return []
+        
+        # 构建增强的上下文信息 - 包含HTML层级结构
+        enhanced_questions = []
+        for i, question in enumerate(questions):
+            # 获取HTML层级结构信息
+            hierarchy_info = self._extract_question_hierarchy(question)
+            
+            enhanced_questions.append({
+                "index": i,
+                "field_name": question.get("field_name", ""),
+                "question": question.get("question", ""),
+                "field_type": question.get("field_type", ""),
+                "field_label": question.get("field_label", ""),
+                "html_container": hierarchy_info.get("container", ""),
+                "html_section": hierarchy_info.get("section", ""),
+                "html_parent": hierarchy_info.get("parent", ""),
+                "html_depth": hierarchy_info.get("depth", 0),
+                "nearby_labels": hierarchy_info.get("nearby_labels", [])
+            })
+        
+        context = {
+            "existing_groups": [{"name": g.get("group_name", ""), "type": g.get("group_type", "")} 
+                              for g in existing_groups],
+            "questions": enhanced_questions
+        }
+        
+        prompt = f"""
+        请分析以下{len(questions)}个表单字段的语义关系和层级结构。
+        
+        现有分组：{json.dumps(context['existing_groups'], ensure_ascii=False)}
+        
+        待分析字段（包含HTML层级结构）：{json.dumps(context['questions'], indent=2, ensure_ascii=False)}
+        
+        ## 重要提示：
+        你需要特别关注HTML层级结构信息来正确分组。例如：
+        - 如果两个"名字"字段在不同的html_container中，它们应该分到不同组
+        - 如果一个"父亲"字段和"名字"字段在同一个html_container中，它们应该分到同一组
+        - html_depth表示嵌套层级，相同层级的字段更可能相关
+        - nearby_labels提供了周围的标签信息，有助于理解语义关系
+        
+        ## 分组策略：
+        1. **层级优先**：优先基于HTML层级结构分组
+        2. **语义相关**：在同一层级内按语义相关性分组
+        3. **避免跨层级**：避免将不同层级的字段分到同一组
+        
+        请返回JSON格式：
+        {{
+            "groups": [
+                {{
+                    "group_name": "分组名称（如：父亲1信息、父亲2信息）",
+                    "questions": [字段索引列表],
+                    "reasoning": "分组理由（说明基于什么HTML结构或语义关系）"
+                }}
+            ]
+        }}
+        
+        要求：
+        1. 每组最多5个字段
+        2. 优先考虑HTML层级结构
+        3. 避免重复现有分组
+        4. 确保相关字段在同一组中
+        """
+        
+        try:
+            messages = [
+                {"role": "system", "content": "你是表单字段分析专家，特别擅长基于HTML层级结构进行智能分组。"},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = self._invoke_llm(messages, workflow_id)
+            if response and response.content:
+                result = robust_json_parse(response.content)
+                
+                # 转换AI结果为标准格式
+                ai_groups = []
+                for group in result.get("groups", []):
+                    group_questions = []
+                    for idx in group.get("questions", []):
+                        if 0 <= idx < len(questions):
+                            group_questions.append(questions[idx])
+                    
+                    if group_questions:
+                        ai_groups.append({
+                            "group_type": "ai_enhanced",
+                            "group_name": group.get("group_name", ""),
+                            "questions": group_questions,
+                            "priority": 4,
+                            "reasoning": group.get("reasoning", "")
+                        })
+                
+                return ai_groups
+                
+        except Exception as e:
+            print(f"[workflow_id:{workflow_id}] DEBUG: AI batch analysis failed: {str(e)}")
+        
+        return []
+    
+    def _extract_question_hierarchy(self, question: Dict) -> Dict:
+        """提取问题的HTML层级结构信息"""
+        hierarchy_info = {
+            "container": "",
+            "section": "",
+            "parent": "",
+            "depth": 0,
+            "nearby_labels": []
+        }
+        
+        try:
+            # 从question中获取HTML相关信息
+            field_selector = question.get("field_selector", "")
+            if not field_selector:
+                return hierarchy_info
+            
+            # 分析field_selector来推断层级结构
+            # 例如: "#container1 .section2 input[name='father1_name']"
+            selector_parts = field_selector.split()
+            hierarchy_info["depth"] = len(selector_parts)
+            
+            # 提取容器信息
+            for part in selector_parts:
+                if part.startswith("#"):
+                    hierarchy_info["container"] = part[1:]  # 去掉#
+                elif part.startswith("."):
+                    hierarchy_info["section"] = part[1:]   # 去掉.
+                elif "[" in part and "]" in part:
+                    # 这是最终的字段选择器
+                    hierarchy_info["parent"] = part.split("[")[0]
+            
+            # 从field_name中提取层级信息
+            field_name = question.get("field_name", "")
+            if field_name:
+                # 分析field_name的模式，如 "father1_name", "father2_birth"
+                name_parts = field_name.split("_")
+                if len(name_parts) > 1:
+                    hierarchy_info["nearby_labels"] = name_parts[:-1]  # 除了最后一个部分
+            
+            # 从field_label中提取附近标签信息
+            field_label = question.get("field_label", "")
+            if field_label:
+                hierarchy_info["nearby_labels"].append(field_label)
+            
+        except Exception as e:
+            print(f"DEBUG: Failed to extract hierarchy info: {str(e)}")
+        
+        return hierarchy_info
+    
+    def _merge_question_groups(self, structural_groups: List[Dict],
+                             ai_enhanced_groups: List[Dict], workflow_id: str) -> List[Dict]:
+        """合并所有分组"""
+        all_groups = []
+        
+        # 按优先级合并
+        all_groups.extend(structural_groups)
+        all_groups.extend(ai_enhanced_groups)
+        
+        # 去重并排序
+        final_groups = []
+        seen_questions = set()
+        
+        # 按优先级排序
+        all_groups.sort(key=lambda x: x.get("priority", 5))
+        
+        for group in all_groups:
+            # 移除已经分组的问题
+            unique_questions = []
+            for question in group.get("questions", []):
+                question_id = question.get("field_name", "")
+                if question_id not in seen_questions:
+                    unique_questions.append(question)
+                    seen_questions.add(question_id)
+            
+            if unique_questions:
+                group["questions"] = unique_questions
+                final_groups.append(group)
+        
+        print(f"[workflow_id:{workflow_id}] DEBUG: Final groups: {len(final_groups)}")
+        return final_groups
+    
+    def _create_simple_fallback_groups(self, questions: List[Dict]) -> List[Dict]:
+        """简单回退分组"""
+        if not questions:
+            return []
+        
+        # 简单按数量分组
+        batch_size = 10
+        groups = []
+        
+        for i in range(0, len(questions), batch_size):
+            batch = questions[i:i + batch_size]
+            groups.append({
+                "group_type": "simple_batch",
+                "group_name": f"Question Group {i//batch_size + 1}",
+                "questions": batch,
+                "priority": 5,
+                "reasoning": "Simple fallback grouping"
+            })
+        
+        return groups
     
     def _semantic_question_filter_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """🚀 ENHANCED: Apply semantic-based question filtering with explicit pattern fallbacks"""
@@ -4292,24 +4948,70 @@ For each field, check:
                 state["merged_qa_data"] = []
                 return state
 
-            # Group questions by question text to merge related fields
-            question_groups = {}
-            for i, question in enumerate(questions):
-                # Validate question structure
-                if not isinstance(question, dict):
-                    print(f"DEBUG: Q&A Merger - Skipping invalid question at index {i}: not a dict")
-                    continue
+            # 🚀 NEW: Use intelligent question grouping from semantic analysis
+            intelligent_groups = state.get("semantic_question_groups", [])
+            
+            if intelligent_groups:
+                print(f"DEBUG: Q&A Merger - Using {len(intelligent_groups)} intelligent groups from semantic analysis")
+                
+                # Convert intelligent groups to question groups format
+                question_groups = {}
+                grouped_question_ids = set()
+                
+                for group in intelligent_groups:
+                    group_questions = group.get("questions", [])
+                    if not group_questions:
+                        continue
+                        
+                    # Use the group name as the key
+                    group_name = group.get("group_name", f"Group_{len(question_groups)}")
+                    question_groups[group_name] = []
+                    
+                    for group_question in group_questions:
+                        # Find the actual question object
+                        field_name = group_question.get("field_name", "")
+                        for question in questions:
+                            if question.get("field_name") == field_name:
+                                question_groups[group_name].append(question)
+                                grouped_question_ids.add(question.get("id", ""))
+                                break
+                    
+                    print(f"DEBUG: Q&A Merger - Intelligent group '{group_name}': {len(question_groups[group_name])} questions")
+                
+                # Add ungrouped questions as individual groups
+                for i, question in enumerate(questions):
+                    if not isinstance(question, dict) or "question" not in question:
+                        continue
+                        
+                    question_id = question.get("id", "")
+                    if question_id not in grouped_question_ids:
+                        question_text = question["question"]
+                        if question_text not in question_groups:
+                            question_groups[question_text] = []
+                        question_groups[question_text].append(question)
+                        print(f"DEBUG: Q&A Merger - Added ungrouped question: '{question_text}'")
+                
+            else:
+                print("DEBUG: Q&A Merger - No intelligent groups found, falling back to question text grouping")
+                
+                # Fallback: Group questions by question text to merge related fields
+                question_groups = {}
+                for i, question in enumerate(questions):
+                    # Validate question structure
+                    if not isinstance(question, dict):
+                        print(f"DEBUG: Q&A Merger - Skipping invalid question at index {i}: not a dict")
+                        continue
 
-                if "question" not in question:
-                    print(f"DEBUG: Q&A Merger - Skipping question at index {i}: missing 'question' field")
-                    continue
+                    if "question" not in question:
+                        print(f"DEBUG: Q&A Merger - Skipping question at index {i}: missing 'question' field")
+                        continue
 
-                question_text = question["question"]
-                if question_text not in question_groups:
-                    question_groups[question_text] = []
-                question_groups[question_text].append(question)
+                    question_text = question["question"]
+                    if question_text not in question_groups:
+                        question_groups[question_text] = []
+                    question_groups[question_text].append(question)
 
-            print(f"DEBUG: Q&A Merger - Created {len(question_groups)} question groups")
+            print(f"DEBUG: Q&A Merger - Created {len(question_groups)} question groups total")
 
             merged_data = []
 
@@ -4362,8 +5064,9 @@ For each field, check:
                     ai_answer = self.step_analyzer._find_answer_for_question(question, answers)
 
                     # 🚀 NEW: Check if this field is conditionally hidden
+                    # 🚀 CRITICAL FIX: Pass complete question list instead of just current group questions
                     is_conditionally_hidden = self._check_conditional_field_visibility(
-                        question, valid_questions, answers, state.get("form_html", "")
+                        question, questions, answers, state.get("form_html", "")
                     )
                     
                     # Determine if intervention is needed for this field
@@ -5112,21 +5815,46 @@ For each field, check:
                         condition_results.append(f"{trigger_field_name}: NOT_FOUND")
                         continue
                         
-                    # Get the actual value from the trigger field
+                    # 🚀 CRITICAL FIX: Get the actual value from the trigger field with proper mapping
                     actual_value = trigger_answer.get("answer", "").lower()
                     expected_value_lower = expected_value.lower()
+                    
+                    # 🚀 NEW: Map AI answer text to value if needed (for radio/checkbox fields)
+                    # Get field options from all_questions since answer may not contain options
+                    trigger_field_options = []
+                    for q in all_questions:
+                        if q.get("field_name", "") == trigger_answer.get("field_name", ""):
+                            trigger_field_options = q.get("options", [])  # Use 'options' instead of 'field_options'
+                            break
+                    
+                    mapped_value = None
+                    
+                    if trigger_field_options:
+                        # Try to find the option that matches the AI answer text
+                        for option in trigger_field_options:
+                            option_text = option.get("text", "").lower()
+                            option_value = option.get("value", "").lower()
+                            
+                            # If AI answer matches option text, use the option value
+                            if actual_value == option_text:
+                                mapped_value = option_value
+                                print(f"DEBUG: Conditional Field - Mapped AI answer '{actual_value}' to value '{mapped_value}'")
+                                break
+                    
+                    # Use mapped value if available, otherwise use original value
+                    comparison_value = mapped_value if mapped_value else actual_value
                     
                     # Use safe matching approaches only
                     condition_met = False
                     match_reason = ""
                     
                     # 1. Direct text match (most reliable)
-                    if actual_value == expected_value_lower:
+                    if comparison_value == expected_value_lower:
                         condition_met = True
                         match_reason = "exact_match"
                     
                     # 2. Safe partial matching only for specific patterns
-                    elif len(expected_value_lower) >= 5 and expected_value_lower in actual_value and actual_value.count(expected_value_lower) == 1:
+                    elif len(expected_value_lower) >= 5 and expected_value_lower in comparison_value and comparison_value.count(expected_value_lower) == 1:
                         # Only allow partial matching for longer strings (5+ chars) that appear exactly once
                         condition_met = True
                         match_reason = "safe_contains_match"
@@ -5135,28 +5863,28 @@ For each field, check:
                     elif len(expected_value_lower) >= 5:
                         # Normalize both strings by removing spaces, punctuation, and common words
                         import re
-                        normalized_actual = re.sub(r'[^\w]', '', actual_value).lower()
+                        normalized_comparison = re.sub(r'[^\w]', '', comparison_value).lower()
                         normalized_expected = re.sub(r'[^\w]', '', expected_value_lower).lower()
                         
                         # Check if normalized versions match or contain each other
-                        if normalized_actual == normalized_expected:
+                        if normalized_comparison == normalized_expected:
                             condition_met = True
                             match_reason = "normalized_exact_match"
-                        elif len(normalized_expected) >= 8 and normalized_expected in normalized_actual:
+                        elif len(normalized_expected) >= 8 and normalized_expected in normalized_comparison:
                             condition_met = True
                             match_reason = "normalized_contains_match"
-                        elif len(normalized_actual) >= 8 and normalized_actual in normalized_expected:
+                        elif len(normalized_comparison) >= 8 and normalized_comparison in normalized_expected:
                             condition_met = True
                             match_reason = "normalized_reverse_contains_match"
                     
-                    condition_results.append(f"{trigger_field_name}: {actual_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
+                    condition_results.append(f"{trigger_field_name}: {comparison_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
                     
                     if condition_met:
                         any_condition_satisfied = True
-                        print(f"DEBUG: Conditional Field - OR condition met: '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}' ({match_reason})")
+                        print(f"DEBUG: Conditional Field - OR condition met: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}' ({match_reason})")
                         break  # For OR logic, one satisfied condition is enough
                     else:
-                        print(f"DEBUG: Conditional Field - OR condition not met: '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}'")
+                        print(f"DEBUG: Conditional Field - OR condition not met: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}'")
                 
                 condition_satisfied = any_condition_satisfied
                 print(f"DEBUG: Conditional Field - OR condition results: {'; '.join(condition_results)}")
@@ -5198,53 +5926,91 @@ For each field, check:
                             
                     if not trigger_answer:
                         print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
-                        all_conditions_satisfied = False
-                        condition_results.append(f"{trigger_field_name}: NOT_FOUND")
                         continue
                         
-                    # Get the actual value from the trigger field
+                    # 🚀 CRITICAL FIX: Get the actual value from the trigger field with proper mapping
+                    actual_value = trigger_answer.get("answer", "").lower()
+                    # Get the actual value from the trigger field with proper mapping
                     actual_value = trigger_answer.get("answer", "").lower()
                     expected_value_lower = expected_value.lower()
-                     
+                    
+                    # Map AI answer text to value if needed (for radio/checkbox fields)
+                    # Get field options from all_questions since answer may not contain options
+                    trigger_field_options = []
+                    print(f"DEBUG: Conditional Field - Looking for options for field '{trigger_answer.get('field_name', '')}'")
+                    
+                    for q in all_questions:
+                        q_field_name = q.get("field_name", "")
+                        q_field_options = q.get("options", [])  # Use 'options' instead of 'field_options'
+                        print(f"DEBUG: Conditional Field - Checking question field '{q_field_name}' with {len(q_field_options)} options")
+                        
+                        if q_field_name == trigger_answer.get("field_name", ""):
+                            trigger_field_options = q_field_options
+                            print(f"DEBUG: Conditional Field - Found matching field! Options: {trigger_field_options}")
+                            break
+                    
+                    print(f"DEBUG: Conditional Field - Final trigger_field_options: {trigger_field_options}")
+                    
+                    mapped_value = None
+                    
+                    if trigger_field_options:
+                        # Try to find the option that matches the AI answer text
+                        for option in trigger_field_options:
+                            option_text = option.get("text", "").lower()
+                            option_value = option.get("value", "").lower()
+                            
+                            print(f"DEBUG: Conditional Field - Checking option: text='{option_text}', value='{option_value}' against AI answer '{actual_value}'")
+                            
+                            # If AI answer matches option text, use the option value
+                            if actual_value == option_text:
+                                mapped_value = option_value
+                                print(f"DEBUG: Conditional Field - Mapped AI answer '{actual_value}' to value '{mapped_value}'")
+                                break
+                    else:
+                        print(f"DEBUG: Conditional Field - No trigger_field_options found, using original value")
+                    
+                    # Use mapped value if available, otherwise use original value
+                    comparison_value = mapped_value if mapped_value else actual_value
+                    
                     # Use safe matching approaches only
                     condition_met = False
                     match_reason = ""
-                     
+                    
                     # 1. Direct text match (most reliable)
-                    if actual_value == expected_value_lower:
+                    if comparison_value == expected_value_lower:
                         condition_met = True
                         match_reason = "exact_match"
-                     
+                    
                     # 2. Safe partial matching only for specific patterns
-                    elif len(expected_value_lower) >= 5 and expected_value_lower in actual_value and actual_value.count(expected_value_lower) == 1:
+                    elif len(expected_value_lower) >= 5 and expected_value_lower in comparison_value and comparison_value.count(expected_value_lower) == 1:
                         # Only allow partial matching for longer strings (5+ chars) that appear exactly once
                         condition_met = True
                         match_reason = "safe_contains_match"
-                     
+                    
                     # 3. Normalized text matching for compound words (e.g., "someoneIKnow" vs "someone i know")
                     elif len(expected_value_lower) >= 5:
                         # Normalize both strings by removing spaces, punctuation, and common words
                         import re
-                        normalized_actual = re.sub(r'[^\w]', '', actual_value).lower()
+                        normalized_comparison = re.sub(r'[^\w]', '', comparison_value).lower()
                         normalized_expected = re.sub(r'[^\w]', '', expected_value_lower).lower()
                         
                         # Check if normalized versions match or contain each other
-                        if normalized_actual == normalized_expected:
+                        if normalized_comparison == normalized_expected:
                             condition_met = True
                             match_reason = "normalized_exact_match"
-                        elif len(normalized_expected) >= 8 and normalized_expected in normalized_actual:
+                        elif len(normalized_expected) >= 8 and normalized_expected in normalized_comparison:
                             condition_met = True
                             match_reason = "normalized_contains_match"
-                        elif len(normalized_actual) >= 8 and normalized_actual in normalized_expected:
+                        elif len(normalized_comparison) >= 8 and normalized_comparison in normalized_expected:
                             condition_met = True
                             match_reason = "normalized_reverse_contains_match"
-                     
-                    condition_results.append(f"{trigger_field_name}: {actual_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
-                     
+                    
+                    condition_results.append(f"{trigger_field_name}: {comparison_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
+                    
                     if not condition_met:
                         all_conditions_satisfied = False
-                         
-                    print(f"DEBUG: Conditional Field - AND condition: '{trigger_field_name}': actual='{actual_value}', expected='{expected_value_lower}', met={condition_met} ({match_reason})")
+                        
+                    print(f"DEBUG: Conditional Field - AND condition: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}', met={condition_met} ({match_reason})")
                 
                 condition_satisfied = all_conditions_satisfied
                 print(f"DEBUG: Conditional Field - AND condition results: {'; '.join(condition_results)}")
