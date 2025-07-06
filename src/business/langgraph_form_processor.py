@@ -7806,7 +7806,7 @@ For each field, check:
 
                         if not selector:
                             print(f"DEBUG: Skipping item without selector: {data_item}")
-                        continue
+                            continue
 
                         # Determine action type based on field type
                         if field_type in ["radio", "checkbox"]:
