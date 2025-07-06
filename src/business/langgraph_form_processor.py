@@ -140,6 +140,7 @@ class FormAnalysisState(TypedDict):
     profile_dummy_data: Dict[str, Any]  # Add dummy data field
     parsed_form: Optional[Dict[str, Any]]
     detected_fields: List[Dict[str, Any]]
+    field_groups_info: Optional[Dict[str, Any]]  # 🚀 NEW: Field grouping information
     field_questions: List[Dict[str, Any]]
     ai_answers: List[Dict[str, Any]]
     merged_qa_data: List[Dict[str, Any]]  # New field for merged question-answer data
@@ -2163,6 +2164,7 @@ class LangGraphFormProcessor:
                 profile_dummy_data=profile_dummy_data or {},
                 parsed_form=None,
                 detected_fields=[],
+                field_groups_info=None,  # 🚀 FIXED: Initialize basic radio/checkbox field grouping
                 field_questions=[],
                 ai_answers=[],
                 merged_qa_data=[],
@@ -3083,12 +3085,11 @@ class LangGraphFormProcessor:
             
             print(f"[workflow_id:{workflow_id}] DEBUG: Question Generator - Filtered {len(detected_fields)} fields to {len(filtered_fields)} after decision tree and conditional filtering")
 
-            # 🚀 OPTIMIZATION: Use field groups to generate better questions
+            # 🚀 OPTIMIZATION: Use field groups for optimization, but generate individual questions
             field_groups_info = state.get("field_groups_info", {})
             detected_fields = filtered_fields  # Use filtered fields instead of all detected fields
 
             questions = []
-            processed_fields = set()
 
             # 🔧 NEW: Create a helper function to get element position in HTML
             def get_question_position_in_html(question):
@@ -3133,33 +3134,12 @@ class LangGraphFormProcessor:
                     print(f"DEBUG: Question Generator - Error getting position for question: {str(e)}")
                     return 999
 
-            # Process grouped fields first (but collect them for later sorting)
-            grouped_questions = []
-            for base_name, group_fields in field_groups_info.items():
-                if len(group_fields) > 1:
-                    # Generate grouped question for radio/checkbox groups
-                    grouped_question = self._generate_grouped_question(group_fields, base_name)
-                    grouped_questions.append(grouped_question)
+            # 🚀 FIXED: Generate individual questions for all fields - no more grouped questions
+            # field_groups_info is used for optimization only, not for question generation
+            print(f"DEBUG: Question Generator - field_groups_info available with {len(field_groups_info)} groups, but generating individual questions for all fields")
 
-                    # Mark fields as processed
-                    for field in group_fields:
-                        field_id = field.get("id", "")
-                        # Ensure field_id is not empty (fallback to name or selector)
-                        if not field_id:
-                            field_id = field.get("name", "") or field.get("selector", "")
-
-                        if field_id:
-                            processed_fields.add(field_id)
-                            print(f"DEBUG: Question Generator - Marked field {field_id} as processed (grouped)")
-
-                    print(
-                        f"DEBUG: Question Generator - Generated grouped question for {base_name}: {grouped_question['question']}")
-                else:
-                    # Single field in group - treat as individual field
-                    print(f"DEBUG: Question Generator - Single field in group {base_name}, will process individually")
-
-            # Process remaining individual fields
-            individual_questions = []
+            # Process all fields individually - generate one question per field
+            all_questions = []
             for field in detected_fields:
                 field_id = field.get("id", "")
                 field_name = field.get("name", "")
@@ -3168,21 +3148,14 @@ class LangGraphFormProcessor:
                 if not field_id:
                     field_id = field_name or field.get("selector", "")
 
-                if field_id not in processed_fields:
-                    question = self.step_analyzer._generate_field_question(field)
-                    if question:  # Only add valid questions
-                        individual_questions.append(question)
-                        print(
-                            f"DEBUG: Question Generator - Generated individual question for {field_name} (ID: {field_id}): {question['question']}")
-                    else:
-                        print(
-                            f"DEBUG: Question Generator - Failed to generate question for {field_name} (ID: {field_id})")
+                question = self.step_analyzer._generate_field_question(field)
+                if question:  # Only add valid questions
+                    all_questions.append(question)
+                    print(
+                        f"DEBUG: Question Generator - Generated individual question for {field_name} (ID: {field_id}): {question['question']}")
                 else:
                     print(
-                        f"DEBUG: Question Generator - Skipping field {field_name} (ID: {field_id}) - already processed in group")
-
-            # 🚀 NEW: Combine and sort all questions by HTML position
-            all_questions = grouped_questions + individual_questions
+                        f"DEBUG: Question Generator - Failed to generate question for {field_name} (ID: {field_id})")
 
             # 🚀 NEW: Apply conditional filtering to generated questions (TEMPORARILY DISABLED)
             # DISABLED: all_questions = self._filter_questions_by_conditions(all_questions, conditional_context)
@@ -3209,7 +3182,7 @@ class LangGraphFormProcessor:
             state["conditional_context"] = conditional_context
             state["field_questions"] = questions
             print(
-                f"DEBUG: Question Generator - Generated {len(questions)} questions ({len(field_groups_info)} grouped) after conditional filtering, sorted by HTML position")
+                f"DEBUG: Question Generator - Generated {len(questions)} individual questions (field_groups_info contains {len(field_groups_info)} groups) after conditional filtering, sorted by HTML position")
 
         except Exception as e:
             print(f"DEBUG: Question Generator - Error: {str(e)}")
@@ -4948,13 +4921,13 @@ For each field, check:
                 state["merged_qa_data"] = []
                 return state
 
-            # 🚀 NEW: Use intelligent question grouping from semantic analysis
+            # 🚀 HYBRID APPROACH: Use intelligent grouping for answering, but generate individual questions for output
             intelligent_groups = state.get("semantic_question_groups", [])
             
             if intelligent_groups:
-                print(f"DEBUG: Q&A Merger - Using {len(intelligent_groups)} intelligent groups from semantic analysis")
+                print(f"DEBUG: Q&A Merger - Using {len(intelligent_groups)} intelligent groups for answering, but will generate individual questions for output")
                 
-                # Convert intelligent groups to question groups format
+                # Convert intelligent groups to question groups format for processing
                 question_groups = {}
                 grouped_question_ids = set()
                 
@@ -4963,7 +4936,7 @@ For each field, check:
                     if not group_questions:
                         continue
                         
-                    # Use the group name as the key
+                    # Use the group name as the key for processing
                     group_name = group.get("group_name", f"Group_{len(question_groups)}")
                     question_groups[group_name] = []
                     
@@ -4985,16 +4958,16 @@ For each field, check:
                         
                     question_id = question.get("id", "")
                     if question_id not in grouped_question_ids:
+                        field_name = question.get("field_name", f"question_{i}")
                         question_text = question["question"]
-                        if question_text not in question_groups:
-                            question_groups[question_text] = []
-                        question_groups[question_text].append(question)
+                        unique_key = f"{field_name}_{question_text}"
+                        question_groups[unique_key] = [question]
                         print(f"DEBUG: Q&A Merger - Added ungrouped question: '{question_text}'")
                 
             else:
-                print("DEBUG: Q&A Merger - No intelligent groups found, falling back to question text grouping")
+                print("DEBUG: Q&A Merger - No intelligent groups found, creating individual questions")
                 
-                # Fallback: Group questions by question text to merge related fields
+                # Create individual groups for each question
                 question_groups = {}
                 for i, question in enumerate(questions):
                     # Validate question structure
@@ -5006,10 +4979,15 @@ For each field, check:
                         print(f"DEBUG: Q&A Merger - Skipping question at index {i}: missing 'question' field")
                         continue
 
+                    # Use field_name as key to ensure each field gets its own question
+                    field_name = question.get("field_name", f"question_{i}")
                     question_text = question["question"]
-                    if question_text not in question_groups:
-                        question_groups[question_text] = []
-                    question_groups[question_text].append(question)
+                    
+                    # Create unique key for each question to prevent grouping
+                    unique_key = f"{field_name}_{question_text}"
+                    question_groups[unique_key] = [question]
+                    
+                    print(f"DEBUG: Q&A Merger - Created individual question for '{field_name}': '{question_text}'")
 
             print(f"DEBUG: Q&A Merger - Created {len(question_groups)} question groups total")
 
@@ -5150,45 +5128,135 @@ For each field, check:
                     if first_field_selector:
                         correct_selector = first_field_selector
 
-                # Create merged data structure
-                merged_item = {
-                    "question": {
-                        "data": {
-                            "name": question_text  # Always use question text for question.data.name
-                        },
-                        "answer": {
-                            "type": answer_type,
-                            "selector": correct_selector,  # Use the corrected selector
-                            "data": all_field_data  # Combined data from all related fields
+                # 🚀 CRITICAL FIX: Generate individual merged_item for each field in the group
+                if len(valid_questions) > 1:
+                    # Multi-field group: create separate merged_item for each field
+                    print(f"DEBUG: Q&A Merger - Creating individual questions for {len(valid_questions)} fields in group")
+                    
+                    for field_question in valid_questions:
+                        # Find the answer data for this specific field
+                        field_answer_data = []
+                        field_selector = field_question.get("field_selector", "")
+                        field_name = field_question.get("field_name", "")
+                        
+                        for data_item in all_field_data:
+                            item_selector = data_item.get("selector", "")
+                            
+                            # 🚀 CRITICAL FIX: More precise matching logic
+                            # 1. Exact selector match
+                            if field_selector and field_selector == item_selector:
+                                field_answer_data.append(data_item)
+                            # 2. Field name match (for cases where selectors differ slightly)
+                            elif field_name and field_name in item_selector:
+                                field_answer_data.append(data_item)
+                            # 3. Partial selector match (fallback)
+                            elif field_selector and field_selector in item_selector:
+                                field_answer_data.append(data_item)
+                        
+                        # If no specific data found, use empty data
+                        if not field_answer_data:
+                            field_answer_data = [{
+                                "selector": field_question.get("field_selector", ""),
+                                "value": "",
+                                "check": 0
+                            }]
+                            print(f"DEBUG: Q&A Merger - No answer data found for field '{field_name}', using empty data")
+                        else:
+                            print(f"DEBUG: Q&A Merger - Found {len(field_answer_data)} answer data items for field '{field_name}'")
+                        
+                        # Create individual merged_item for this field
+                        # 🚀 CRITICAL FIX: For radio/checkbox, use question text; for others use field_label
+                        field_type = field_question.get("field_type", "")
+                        if field_type in ["radio", "checkbox"]:
+                            question_name = field_question.get("question", field_question.get("field_label", ""))
+                        else:
+                            question_name = field_question.get("field_label", field_question.get("question", ""))
+                        
+                        field_merged_item = {
+                            "question": {
+                                "data": {
+                                    "name": question_name
+                                },
+                                "answer": {
+                                    "type": self._map_field_type_to_answer_type(field_question.get("field_type", "text")),
+                                    "selector": field_question.get("field_selector", ""),
+                                    "data": field_answer_data
+                                }
+                            },
+                            "_metadata": {
+                                "id": field_question.get("id", ""),
+                                "field_selector": field_question.get("field_selector", ""),
+                                "field_name": field_question.get("field_name", ""),
+                                "field_type": field_question.get("field_type", ""),
+                                "field_label": field_question.get("field_label", ""),
+                                "required": field_question.get("required", False),
+                                "options": field_question.get("options", []),
+                                "confidence": avg_confidence,
+                                "reasoning": combined_reasoning,
+                                "needs_intervention": overall_needs_intervention,
+                                "has_valid_answer": has_valid_answer,
+                                "grouped_fields": [q.get("field_name", "") for q in valid_questions]
+                            }
                         }
-                    },
-                    # Keep metadata for internal use (using primary question's metadata)
-                    "_metadata": {
-                        "id": primary_question.get("id", ""),
-                        "field_selector": primary_question.get("field_selector", ""),
-                        "field_name": primary_question.get("field_name", ""),
-                        "field_type": primary_question.get("field_type", ""),
-                        "field_label": primary_question.get("field_label", ""),
-                        "required": primary_question.get("required", False),
-                        "options": self._combine_all_options(valid_questions),  # Combined options from all fields
-                        "confidence": avg_confidence,
-                        "reasoning": combined_reasoning,
-                        "needs_intervention": overall_needs_intervention,
-                        "has_valid_answer": has_valid_answer,  # Track if answer exists
-                        "grouped_fields": [q.get("field_name", "") for q in valid_questions]  # Track all grouped fields
-                    }
-                }
-
-                # Add interrupt field at question level ONLY if should_interrupt is True
-                if should_interrupt:
-                    merged_item["question"]["type"] = "interrupt"
-                    interrupt_status = "interrupt"
+                        
+                        # Add interrupt field at question level ONLY if should_interrupt is True
+                        if should_interrupt:
+                            field_merged_item["question"]["type"] = "interrupt"
+                        
+                        merged_data.append(field_merged_item)
+                        print(f"DEBUG: Q&A Merger - Created individual question for field '{field_question.get('field_name')}'")
+                    
+                    interrupt_status = "multi_field_group"
                 else:
-                    interrupt_status = "normal" if has_valid_answer else "no_answer_but_no_interrupt"
+                    # Single field: create merged_item as before
+                    # 🚀 CRITICAL FIX: For radio/checkbox, use question text; for others use field_label  
+                    primary_field_type = primary_question.get("field_type", "")
+                    if primary_field_type in ["radio", "checkbox"]:
+                        single_question_name = primary_question.get("question", primary_question.get("field_label", ""))
+                    else:
+                        single_question_name = primary_question.get("field_label", question_text)
+                        
+                    merged_item = {
+                        "question": {
+                            "data": {
+                                "name": single_question_name
+                            },
+                            "answer": {
+                                "type": answer_type,
+                                "selector": correct_selector,
+                                "data": all_field_data
+                            }
+                        },
+                        "_metadata": {
+                            "id": primary_question.get("id", ""),
+                            "field_selector": primary_question.get("field_selector", ""),
+                            "field_name": primary_question.get("field_name", ""),
+                            "field_type": primary_question.get("field_type", ""),
+                            "field_label": primary_question.get("field_label", ""),
+                            "required": primary_question.get("required", False),
+                            "options": self._combine_all_options(valid_questions),
+                            "confidence": avg_confidence,
+                            "reasoning": combined_reasoning,
+                            "needs_intervention": overall_needs_intervention,
+                            "has_valid_answer": has_valid_answer,
+                            "grouped_fields": [q.get("field_name", "") for q in valid_questions]
+                        }
+                    }
 
-                merged_data.append(merged_item)
-                print(
-                    f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(valid_questions)}, status={interrupt_status}")
+                    # Add interrupt field at question level ONLY if should_interrupt is True
+                    if should_interrupt:
+                        merged_item["question"]["type"] = "interrupt"
+                        interrupt_status = "interrupt"
+                    else:
+                        interrupt_status = "normal" if has_valid_answer else "no_answer_but_no_interrupt"
+
+                    merged_data.append(merged_item)
+                if len(valid_questions) > 1:
+                    print(
+                        f"DEBUG: Q&A Merger - Split grouped question '{question_text}' into {len(valid_questions)} individual questions, status={interrupt_status}")
+                else:
+                    print(
+                        f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(valid_questions)}, status={interrupt_status}")
 
             state["merged_qa_data"] = merged_data
 
@@ -6136,6 +6204,8 @@ For each field, check:
                                 "type": "click",
                                 "value": data_item.get("value", "")
                             }
+                            # 🚀 NEW: Validate action type
+                            action = self._validate_action_type(action, field_type)
                             actions.append(action)
                             print(f"DEBUG: Action Generator - Generated {field_type} action for checked item: {action}")
                         
@@ -6209,9 +6279,16 @@ For each field, check:
                     actions_generated_for_field = 0
                     for data_item in data_array:
                         if data_item.get("check") == 1:
+                            # 🚀 CRITICAL FIX: Determine action type based on individual data item's selector, not group metadata
+                            field_selector = data_item.get("selector", "")
+                            
+                            # Parse field type from selector to determine correct action type
+                            actual_field_type = self._determine_field_type_from_selector(field_selector)
+                            print(f"DEBUG: Action Generator - Data item selector: {field_selector}, determined type: {actual_field_type}")
+                            
                             # 🚀 OPTIMIZATION: For country/location fields, prefer readable text over codes
                             field_name = metadata.get("field_name", "").lower()
-                            field_selector = metadata.get("field_selector", "").lower()
+                            field_selector_lower = field_selector.lower()
                             field_label = metadata.get("field_label", "").lower()
                             action_value = data_item.get("value", "")
 
@@ -6220,7 +6297,7 @@ For each field, check:
                             country_keywords = ["country", "location", "nationality", "birth"]
                             is_country_field = (
                                     any(keyword in field_name for keyword in country_keywords) or
-                                    any(keyword in field_selector for keyword in country_keywords) or
+                                    any(keyword in field_selector_lower for keyword in country_keywords) or
                                     any(keyword in field_label for keyword in country_keywords)
                             )
 
@@ -6238,27 +6315,28 @@ For each field, check:
                                     print(
                                         f"DEBUG: Action Generator - Using readable country name '{item_name}' instead of code '{item_value}'")
 
-                            # Generate input action for this field
-                            # 🚀 NEW: Determine action type based on field type
-                            field_type = metadata.get("field_type", "")
-                            if field_type == "autocomplete":
-                                # For autocomplete fields, use input action (user types in the UI input)
+                            # 🚀 CRITICAL FIX: Determine action type based on actual field type, not group metadata
+                            if actual_field_type in ["radio", "checkbox"]:
+                                action_type = "click"
+                            elif actual_field_type == "select":
                                 action_type = "input"
-                            elif field_type == "select":
-                                # For regular select fields, use input action (select from dropdown)
+                            elif actual_field_type == "autocomplete":
                                 action_type = "input"
                             else:
                                 # For other field types (text, email, etc.), use input action
                                 action_type = "input"
 
                             action = {
-                                "selector": data_item.get("selector", metadata.get("field_selector", "")),
+                                "selector": field_selector,
                                 "type": action_type,
-                                "value": action_value
+                                "value": action_value if action_type == "input" else data_item.get("value", "")
                             }
+                            
+                            # 🚀 NEW: Validate action type based on determined field type
+                            action = self._validate_action_type(action, actual_field_type)
                             actions.append(action)
                             actions_generated_for_field += 1
-                            print(f"DEBUG: Action Generator - Generated {action['type']} action: {action}")
+                            print(f"DEBUG: Action Generator - Generated {action['type']} action for {actual_field_type} field: {action}")
                             # 🚀 CRITICAL FIX: Process ALL data items, not just the first one
                             # This ensures multiple related fields (e.g., issue date AND expiry date) are all handled
                     print(f"DEBUG: Action Generator - Generated {actions_generated_for_field} actions for input field {metadata.get('field_name')}")
@@ -7433,6 +7511,7 @@ For each field, check:
                     profile_dummy_data=clean_profile_dummy_data,
                 parsed_form=None,
                 detected_fields=[],
+                field_groups_info=None,  # 🚀 FIXED: Initialize basic radio/checkbox field grouping
                 field_questions=[],
                 ai_answers=[],
                 merged_qa_data=[],
@@ -7808,10 +7887,14 @@ For each field, check:
                             print(f"DEBUG: Skipping item without selector: {data_item}")
                             continue
 
-                        # Determine action type based on field type
-                        if field_type in ["radio", "checkbox"]:
+                        # 🚀 CRITICAL FIX: Determine action type based on individual data item's selector, not group field_type
+                        actual_field_type = self._determine_field_type_from_selector(selector)
+                        print(f"DEBUG: LLM Action Generator - Data item selector: {selector}, determined type: {actual_field_type}")
+                        
+                        # Determine action type based on actual field type from selector
+                        if actual_field_type in ["radio", "checkbox"]:
                             action_type = "click"
-                        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time",
+                        elif actual_field_type in ["text", "email", "password", "number", "tel", "url", "date", "time",
                                             "datetime-local", "textarea", "select"]:
                             action_type = "input"
                         else:
@@ -7820,9 +7903,11 @@ For each field, check:
                         action = {
                             "selector": selector,
                             "type": action_type,
-                            "value": value if action_type == "input" else None
+                            "value": value  # 🚀 FIXED: Always keep value for all action types
                         }
 
+                        # 🚀 NEW: Validate action type based on actual field type
+                        action = self._validate_action_type(action, actual_field_type)
                         final_actions.append(action)
                         print(f"DEBUG: Generated action from data: {action}")
 
@@ -7889,6 +7974,98 @@ For each field, check:
 
         except Exception as e:
             return False, f"Selector validation error: {str(e)}"
+
+    def _validate_action_type(self, action: Dict[str, Any], field_type: str) -> Dict[str, Any]:
+        """Validate and fix action type based on field type"""
+        action_type = action.get("type", "")
+        
+        # CRITICAL FIX: Ensure radio and checkbox always use click type
+        if field_type in ["radio", "checkbox"]:
+            if action_type != "click":
+                print(f"WARNING: Fixed incorrect action type for {field_type} field. Was '{action_type}', now 'click'")
+                action["type"] = "click"
+        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local", "textarea", "select", "autocomplete"]:
+            if action_type != "input":
+                print(f"WARNING: Fixed incorrect action type for {field_type} field. Was '{action_type}', now 'input'")
+                action["type"] = "input"
+        
+        return action
+
+    def _determine_field_type_from_selector(self, selector: str) -> str:
+        """Determine field type from CSS selector"""
+        try:
+            if not selector:
+                return "unknown"
+            
+            # Extract type attribute from selector
+            if '[type="radio"]' in selector or 'type="radio"' in selector:
+                return "radio"
+            elif '[type="checkbox"]' in selector or 'type="checkbox"' in selector:
+                return "checkbox"
+            elif '[type="text"]' in selector or 'type="text"' in selector:
+                return "text"
+            elif '[type="email"]' in selector or 'type="email"' in selector:
+                return "email"
+            elif '[type="password"]' in selector or 'type="password"' in selector:
+                return "password"
+            elif '[type="number"]' in selector or 'type="number"' in selector:
+                return "number"
+            elif '[type="tel"]' in selector or 'type="tel"' in selector:
+                return "tel"
+            elif '[type="url"]' in selector or 'type="url"' in selector:
+                return "url"
+            elif '[type="date"]' in selector or 'type="date"' in selector:
+                return "date"
+            elif '[type="time"]' in selector or 'type="time"' in selector:
+                return "time"
+            elif '[type="datetime-local"]' in selector or 'type="datetime-local"' in selector:
+                return "datetime-local"
+            elif 'select' in selector.lower():
+                return "select"
+            elif 'textarea' in selector.lower():
+                return "textarea"
+            else:
+                # Default to text for unspecified input types
+                return "text"
+                
+        except Exception as e:
+            print(f"ERROR: Failed to determine field type from selector '{selector}': {str(e)}")
+            return "unknown"
+
+    def _create_standardized_action(self, selector: str, field_type: str, value: str = "") -> Dict[str, Any]:
+        """Create a standardized action with correct type based on field type
+        
+        This is the RECOMMENDED way to create actions to ensure consistency.
+        
+        Args:
+            selector: CSS selector for the element
+            field_type: Type of the form field (radio, checkbox, text, etc.)
+            value: Value for the action
+            
+        Returns:
+            Dict with standardized action format
+        """
+        # Determine correct action type
+        if field_type in ["radio", "checkbox"]:
+            action_type = "click"
+            action_value = value  # Keep value for radio/checkbox
+        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local", "textarea", "select", "autocomplete"]:
+            action_type = "input"
+            action_value = value
+        else:
+            # Default fallback
+            action_type = "input"
+            action_value = value
+            print(f"WARNING: Unknown field type '{field_type}', defaulting to 'input' action")
+        
+        action = {
+            "selector": selector,
+            "type": action_type,
+            "value": action_value
+        }
+        
+        # Validate the action
+        return self._validate_action_type(action, field_type)
 
     def _recover_failed_action(self, action: Dict[str, Any], html_content: str) -> Optional[Dict[str, Any]]:
         """🚀 OPTIMIZATION: Try to recover failed action with fallback selectors"""
@@ -8828,33 +9005,7 @@ For each field, check:
             print(f"ERROR: Failed contextual confidence adjustment: {str(e)}")
             return results
 
-    def _generate_grouped_question(self, group_fields: List[Dict[str, Any]], base_name: str) -> str:
-        """Generate a question for a group of related fields"""
-        try:
-            if not group_fields:
-                return f"Please provide information for {base_name}"
-            
-            # Use the first field's question as base
-            first_field = group_fields[0]
-            base_question = first_field.get('question', first_field.get('field_label', base_name))
-            
-            # If it's already a good question, return it
-            if len(base_question) > 10 and '?' in base_question:
-                return base_question
-            
-            # Generate a generic question based on field types
-            field_types = [field.get('field_type', '') for field in group_fields]
-            
-            if 'radio' in field_types or 'checkbox' in field_types:
-                return f"Please select the appropriate option for {base_name}?"
-            elif 'select' in field_types:
-                return f"Please choose from the dropdown for {base_name}?"
-            else:
-                return f"Please enter the value for {base_name}?"
-                
-        except Exception as e:
-            print(f"ERROR: Failed to generate grouped question: {str(e)}")
-            return f"Please provide information for {base_name}"
+
 
     def _validate_and_improve_action_selector(self, action: Dict[str, Any], html_content: str, 
                                              current_attempt: int = 1) -> Dict[str, Any]:
