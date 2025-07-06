@@ -3502,14 +3502,21 @@ class LangGraphFormProcessor:
         """🎯 第一层：基于HTML结构的分组"""
         print(f"[workflow_id:{workflow_id}] DEBUG: Creating structural groups")
         
-        # 🚀 SIMPLIFIED: 只使用条件逻辑分组 - 最直接有效
+        # 🚀 ENHANCED: 尝试多种分组方法，优先级从高到低
         
+        # 1. 首先尝试条件逻辑分组
         structural_groups = self._group_by_conditional_logic(questions, detected_fields, form_html)
         print(f"[workflow_id:{workflow_id}] DEBUG: Conditional logic groups: {len(structural_groups)}")
         
-        # 如果条件逻辑分组没有找到任何组，则每个问题单独成组
+        # 2. 如果条件逻辑分组没有找到任何组，尝试HTML容器分组（fieldset分组）
         if not structural_groups:
-            print(f"[workflow_id:{workflow_id}] DEBUG: No conditional groups found, creating individual groups")
+            print(f"[workflow_id:{workflow_id}] DEBUG: No conditional groups found, trying HTML container grouping")
+            structural_groups = self._group_by_html_containers(questions, form_html)
+            print(f"[workflow_id:{workflow_id}] DEBUG: HTML container groups: {len(structural_groups)}")
+        
+        # 3. 如果还没有找到分组，则每个问题单独成组
+        if not structural_groups:
+            print(f"[workflow_id:{workflow_id}] DEBUG: No structural groups found, creating individual groups")
             structural_groups = []
             for i, question in enumerate(questions):
                 structural_groups.append({
@@ -3517,7 +3524,7 @@ class LangGraphFormProcessor:
                     "group_name": f"Individual Question {i+1}",
                     "questions": [question],
                     "priority": 10,
-                    "reasoning": "No conditional dependencies found"
+                    "reasoning": "No structural dependencies found"
                 })
         
         print(f"[workflow_id:{workflow_id}] DEBUG: Created {len(structural_groups)} structural groups")
@@ -5057,26 +5064,44 @@ For each field, check:
                         ai_answer_value = ai_answer.get("answer", "").strip() if ai_answer else ""
                         is_required = question.get("required", False)
                         
-                        # Always need intervention if:
-                        # 1. No AI answer at all
-                        # 2. AI explicitly marked as needing intervention
-                        # 3. Low confidence (< 50)
-                        # 🚀 CRITICAL FIX: Only force intervention for empty answers if field is required
-                        # For optional fields, empty answers are acceptable and should not trigger intervention
-                        empty_answer_intervention = not ai_answer_value and is_required
-                        
-                        needs_intervention = (not ai_answer or
-                                              ai_answer.get("needs_intervention", False) or
-                                              ai_answer.get("confidence", 0) < 50 or
-                                              empty_answer_intervention)  # Only check empty answer for REQUIRED fields
-                        
-                        if not ai_answer_value:
-                            if is_required:
-                                print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                        # 🚀 CRITICAL FIX: For checkbox/radio fields, distinguish between:
+                        # 1. No answer (AI is uncertain) -> needs intervention
+                        # 2. Empty answer (AI explicitly decides not to select) -> no intervention needed
+                        if question.get("field_type") in ["checkbox", "radio"] and not ai_answer_value:
+                            # For checkbox/radio, check if AI provided reasoning for not selecting
+                            has_reasoning = ai_answer and ai_answer.get("reasoning", "").strip()
+                            if has_reasoning:
+                                # AI provided reasoning for not selecting - this is a valid decision
+                                needs_intervention = (not ai_answer or
+                                                    ai_answer.get("needs_intervention", False) or
+                                                    ai_answer.get("confidence", 0) < 50)
+                                print(f"DEBUG: Q&A Merger - Checkbox/radio field '{question.get('field_name')}' has empty answer but valid reasoning, no intervention needed (confidence={ai_answer.get('confidence', 0)})")
                             else:
-                                print(f"DEBUG: Q&A Merger - Optional field '{question.get('field_name')}' has empty answer, no intervention needed (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
-                        elif needs_intervention:
-                            print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
+                                # No reasoning provided - AI is uncertain
+                                needs_intervention = True
+                                print(f"DEBUG: Q&A Merger - Checkbox/radio field '{question.get('field_name')}' has empty answer with no reasoning, needs intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                        else:
+                            # For non-checkbox fields, use original logic
+                            # Always need intervention if:
+                            # 1. No AI answer at all
+                            # 2. AI explicitly marked as needing intervention
+                            # 3. Low confidence (< 50)
+                            # 🚀 CRITICAL FIX: Only force intervention for empty answers if field is required
+                            # For optional fields, empty answers are acceptable and should not trigger intervention
+                            empty_answer_intervention = not ai_answer_value and is_required
+                            
+                            needs_intervention = (not ai_answer or
+                                                ai_answer.get("needs_intervention", False) or
+                                                ai_answer.get("confidence", 0) < 50 or
+                                                empty_answer_intervention)  # Only check empty answer for REQUIRED fields
+                            
+                            if not ai_answer_value:
+                                if is_required:
+                                    print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                                else:
+                                    print(f"DEBUG: Q&A Merger - Optional field '{question.get('field_name')}' has empty answer, no intervention needed (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                            elif needs_intervention:
+                                print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
 
                     all_needs_intervention.append(needs_intervention)
                     all_confidences.append(ai_answer.get("confidence", 0) if ai_answer else 0)
@@ -5128,10 +5153,22 @@ For each field, check:
                     if first_field_selector:
                         correct_selector = first_field_selector
 
-                # 🚀 CRITICAL FIX: Generate individual merged_item for each field in the group
+                # 🚀 CRITICAL FIX: Check if this is a checkbox/radio group that should stay grouped
+                should_keep_grouped = False
                 if len(valid_questions) > 1:
-                    # Multi-field group: create separate merged_item for each field
-                    print(f"DEBUG: Q&A Merger - Creating individual questions for {len(valid_questions)} fields in group")
+                    # Check if all fields in the group are checkbox/radio and share the same question text
+                    field_types = [q.get("field_type", "") for q in valid_questions]
+                    question_texts = [q.get("question", "") for q in valid_questions]
+                    
+                    # If all fields are checkbox/radio and have the same question text, keep them grouped
+                    if (all(ft in ["checkbox", "radio"] for ft in field_types) and 
+                        len(set(question_texts)) == 1):
+                        should_keep_grouped = True
+                        print(f"DEBUG: Q&A Merger - Keeping {len(valid_questions)} checkbox/radio fields grouped as one question")
+                    else:
+                        print(f"DEBUG: Q&A Merger - Creating individual questions for {len(valid_questions)} fields in group")
+                
+                if len(valid_questions) > 1 and not should_keep_grouped:
                     
                     for field_question in valid_questions:
                         # Find the answer data for this specific field
@@ -5208,7 +5245,7 @@ For each field, check:
                     
                     interrupt_status = "multi_field_group"
                 else:
-                    # Single field: create merged_item as before
+                    # Single field OR grouped checkbox/radio: create merged_item as before
                     # 🚀 CRITICAL FIX: For radio/checkbox, use question text; for others use field_label  
                     primary_field_type = primary_question.get("field_type", "")
                     if primary_field_type in ["radio", "checkbox"]:
@@ -5251,9 +5288,12 @@ For each field, check:
                         interrupt_status = "normal" if has_valid_answer else "no_answer_but_no_interrupt"
 
                     merged_data.append(merged_item)
-                if len(valid_questions) > 1:
+                if len(valid_questions) > 1 and not should_keep_grouped:
                     print(
                         f"DEBUG: Q&A Merger - Split grouped question '{question_text}' into {len(valid_questions)} individual questions, status={interrupt_status}")
+                elif len(valid_questions) > 1 and should_keep_grouped:
+                    print(
+                        f"DEBUG: Q&A Merger - Kept grouped question '{question_text}' with {len(valid_questions)} checkbox/radio fields, status={interrupt_status}")
                 else:
                     print(
                         f"DEBUG: Q&A Merger - Merged question '{question_text}': type={answer_type}, fields={len(valid_questions)}, status={interrupt_status}")
@@ -5776,11 +5816,19 @@ For each field, check:
             # Check for standard conditional logic
             if conditional_container:
                 toggled_by = conditional_container.get("data-toggled-by", "")
+                # 🚀 CRITICAL FIX: Check for data-toggle-reverse attribute
+                if conditional_container.get("data-toggle-reverse") == "true":
+                    is_reverse_logic = True
+                    print(f"DEBUG: Conditional Field - Found data-toggle-reverse='true' on container")
             elif field_element.get("data-toggled-by"):
                 conditional_container = field_element
                 toggled_by = field_element.get("data-toggled-by", "")
+                # 🚀 CRITICAL FIX: Check for data-toggle-reverse attribute
+                if field_element.get("data-toggle-reverse") == "true":
+                    is_reverse_logic = True
+                    print(f"DEBUG: Conditional Field - Found data-toggle-reverse='true' on field element")
             
-            # Check for reverse conditional logic (data-toggled-by-not)
+            # Check for reverse conditional logic (data-toggled-by-not) - fallback method
             if not toggled_by:
                 conditional_container = field_element.find_parent(attrs={"data-toggled-by-not": True})
                 if conditional_container:
