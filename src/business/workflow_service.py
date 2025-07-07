@@ -399,13 +399,13 @@ class WorkflowService:
             total_steps = len(steps)
             
             # Count completed steps (COMPLETED_SUCCESS status)
-            completed_steps = sum(
+            in_process = sum(
                 1 for step in steps 
-                if step.status == StepStatus.COMPLETED_SUCCESS
+                if step.status == StepStatus.COMPLETED_SUCCESS or step.status == StepStatus.ACTIVE
             )
             
             # Calculate percentage
-            progress_percentage = (completed_steps / total_steps) * 100 if total_steps > 0 else 0.0
+            progress_percentage = (in_process / total_steps) * 100 if total_steps > 0 else 0.0
             
             # Round to 2 decimal places
             return round(progress_percentage, 2)

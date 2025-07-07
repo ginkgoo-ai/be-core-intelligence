@@ -5313,7 +5313,7 @@ class LangGraphFormProcessor:
                                 },
                                 "answer": {
                                     "type": self._map_field_type_to_answer_type(
-                                        field_question.get("field_type", "text")),
+                                        field_question.get("field_type", "input")),
                                     "selector": field_question.get("field_selector", ""),
                                     "data": field_answer_data
                                 }
@@ -9307,15 +9307,20 @@ class LangGraphFormProcessor:
     def _map_field_type_to_answer_type(self, field_type: str) -> str:
         """Map field type to answer type"""
         mapping = {
-            'text': 'text',
-            'email': 'email',
-            'tel': 'phone',
-            'number': 'number',
-            'date': 'date',
-            'select': 'option',
-            'radio': 'option',
-            'checkbox': 'boolean',
-            'textarea': 'text',
+            'text': 'input',
+            'email': 'input',
+            'tel': 'input',
+            'url': 'input',
+            'number': 'input',
+            'password': 'input',
+            'date': 'input',
+            'time': 'input',
+            'datetime-local': 'input',
+            'autocomplete': 'input',
+            'select': 'select',
+            'radio': 'radio',
+            'checkbox': 'checkbox',
+            'textarea': 'input',
             'file': 'file',
             'hidden': 'hidden'
         }
