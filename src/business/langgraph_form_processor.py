@@ -5133,11 +5133,38 @@ For each field, check:
                 # If any answer has check=1, then no interrupt should be set regardless of needs_intervention
                 has_valid_answer = any(item.get("check", 0) == 1 for item in all_field_data)
 
-                # Interrupt logic: only set interrupt if needs intervention AND no valid answer exists
-                should_interrupt = overall_needs_intervention and not has_valid_answer
+                # 🚀 NEW: Check if any required field has no answer
+                is_required_field_empty = False
+                for question in valid_questions:
+                    if question.get("required", False):
+                        # Check if this required field has any valid answer data
+                        field_selector = question.get("field_selector", "")
+                        field_name = question.get("field_name", "")
+                        field_has_answer = False
+                        
+                        for data_item in all_field_data:
+                            item_selector = data_item.get("selector", "")
+                            # Check if this data item belongs to the required field
+                            if (field_selector and field_selector == item_selector) or \
+                               (field_name and field_name in item_selector):
+                                # For checkbox/radio: check=1 means selected
+                                # For input: non-empty value means filled
+                                if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
+                                    field_has_answer = True
+                                    break
+                        
+                        if not field_has_answer:
+                            is_required_field_empty = True
+                            print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
+                            break
+
+                # Enhanced interrupt logic: 
+                # 1. Original logic: needs intervention AND no valid answer
+                # 2. New logic: required field with empty answer
+                should_interrupt = (overall_needs_intervention and not has_valid_answer) or is_required_field_empty
 
                 print(
-                    f"DEBUG: Q&A Merger - Question '{question_text}': needs_intervention={overall_needs_intervention}, has_valid_answer={has_valid_answer}, should_interrupt={should_interrupt}")
+                    f"DEBUG: Q&A Merger - Question '{question_text}': needs_intervention={overall_needs_intervention}, has_valid_answer={has_valid_answer}, is_required_field_empty={is_required_field_empty}, should_interrupt={should_interrupt}")
 
                 # Calculate average confidence
                 avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
@@ -5236,8 +5263,25 @@ For each field, check:
                             }
                         }
                         
-                        # Add interrupt field at question level ONLY if should_interrupt is True
-                        if should_interrupt:
+                        # 🚀 NEW: Check if this individual field is required and has no answer
+                        field_should_interrupt = should_interrupt  # Use global interrupt status as default
+                        
+                        if field_question.get("required", False):
+                            # Check if this required field has any valid answer
+                            field_has_answer = False
+                            for data_item in field_answer_data:
+                                # For checkbox/radio: check=1 means selected
+                                # For input: non-empty value means filled
+                                if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
+                                    field_has_answer = True
+                                    break
+                            
+                            if not field_has_answer:
+                                field_should_interrupt = True
+                                print(f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
+                        
+                        # Add interrupt field at question level ONLY if field_should_interrupt is True
+                        if field_should_interrupt:
                             field_merged_item["question"]["type"] = "interrupt"
                         
                         merged_data.append(field_merged_item)
@@ -8217,6 +8261,9 @@ For each field, check:
         try:
             print("DEBUG: Processing non-form page (task list or navigation page) - Async")
 
+            # Determine which profile data to use
+            profile_data_to_use = state["profile_data"] if state["profile_data"] else state["profile_dummy_data"]
+            
             # Prepare simplified prompt for non-form pages
             prompt = f"""
             # Role 
@@ -8224,20 +8271,34 @@ For each field, check:
 
             # HTML Content:
             {state["form_html"]}
+            
+            # Profile data (use this for analysis):
+            {profile_data_to_use}
+            
+            # Available profile dummy data (fallback):
+            {state["profile_dummy_data"]}
 
             # Instructions:
             Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
+            **IMPORTANT**: Combine the HTML content analysis with the profile data to make intelligent decisions about which buttons/links to click.
+            
+            # Analysis Strategy:
+            1. **Use profile data for context**: If profile data is available, use it to understand user's current state and determine appropriate actions
+            2. **Fallback to dummy data**: If profile data is empty or insufficient, use profile dummy data for analysis
+            3. **Match content to user state**: Look for buttons/links that match the user's profile information, current process stage, or next logical steps
+
             Focus on:
             1. **Task list items with "In progress" status** - these should be clicked
-            2. **Links that represent next steps** in a workflow or application process
-            3. **Submit buttons or continue buttons**
+            2. **Links that represent next steps** in a workflow or application process that match user's profile
+            3. **Submit buttons or continue buttons** that are contextually appropriate
             4. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
+            5. **Profile-specific actions**: Buttons/links that relate to user's specific situation based on profile data
 
             # Priority Rules:
-            - **HIGHEST PRIORITY**: Links or buttons with "In progress" status
-            - **SECOND PRIORITY**: Submit/Continue/Next buttons
-            - **THIRD PRIORITY**: Navigation links that advance the process
-            - **SKIP**: Disabled buttons, "Cannot start yet" items, or non-actionable elements
+            - **HIGHEST PRIORITY**: Links or buttons with "In progress" status that match user's profile context
+            - **SECOND PRIORITY**: Submit/Continue/Next buttons that are contextually appropriate for user's current state
+            - **THIRD PRIORITY**: Navigation links that advance the process and align with user's profile
+            - **SKIP**: Disabled buttons, "Cannot start yet" items, or actions that don't match user's profile/context
 
             # Response Format (JSON only):
             {{
