@@ -39,6 +39,7 @@ def clean_llm_response_array(response_content: str) -> str:
     content = content.strip()
     return content
 
+
 def clean_llm_response(response_content: str) -> str:
     """Clean and extract JSON from LLM response"""
     content = response_content.strip()
@@ -750,17 +751,17 @@ class StepAnalyzer:
 
             # Get the label first so we can use it for required detection
             field_label = self._find_field_label(element)
-            
+
             # Enhanced required detection: check HTML attribute OR label text OR aria-required OR fieldset legend
             # 🚀 CRITICAL FIX: Check for "(optional)" in label to override other required indicators
             label_optional = field_label and "(optional)" in field_label.lower()
-            
+
             html_required = element.get("required") is not None
             aria_required = element.get("aria-required") == "true"
             label_required = (field_label and "(Required)" in field_label) or \
-                           (field_label and "Required" in field_label and 
-                            ("*" in field_label or field_label.strip().endswith("Required")))
-            
+                             (field_label and "Required" in field_label and
+                              ("*" in field_label or field_label.strip().endswith("Required")))
+
             # Check fieldset legend for Required indication
             fieldset_required = False
             fieldset_parent = element.find_parent("fieldset")
@@ -770,17 +771,19 @@ class StepAnalyzer:
                     legend_text = legend.get_text(strip=True)
                     if "(Required)" in legend_text or "Required" in legend_text:
                         fieldset_required = True
-            
+
             # 🚀 CRITICAL FIX: If label explicitly says "(optional)", override all other required indicators
             if label_optional:
                 is_required = False
-                print(f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as OPTIONAL due to label text: '{field_label}'")
+                print(
+                    f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as OPTIONAL due to label text: '{field_label}'")
             else:
                 is_required = html_required or aria_required or label_required or fieldset_required
-            
+
             if is_required:
-                print(f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as REQUIRED: html_required={html_required}, aria_required={aria_required}, label_required={label_required}, fieldset_required={fieldset_required}, label='{field_label}'")
-            
+                print(
+                    f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as REQUIRED: html_required={html_required}, aria_required={aria_required}, label_required={label_required}, fieldset_required={fieldset_required}, label='{field_label}'")
+
             field_info = {
                 "id": field_id,  # Add unique ID for tracking
                 "name": element.get("name", ""),
@@ -883,7 +886,7 @@ class StepAnalyzer:
     def _generate_selector(self, element) -> str:
         """Generate complete CSS selector for element - NO SHORTCUTS"""
         element_type = element.name.lower()
-        
+
         # 🚀 CRITICAL FIX: Always start with element type for complete selector
         selectors = [element_type]
 
@@ -1096,34 +1099,43 @@ class StepAnalyzer:
                             if form_element:
                                 # Look for all span/div/p elements that come before the form
                                 all_elements = soup.find_all(['span', 'p', 'div', 'h1', 'h2', 'h3'])
-                                form_position = list(soup.descendants).index(form_element) if form_element in soup.descendants else -1
-                                
+                                form_position = list(soup.descendants).index(
+                                    form_element) if form_element in soup.descendants else -1
+
                                 for elem in all_elements:
                                     try:
-                                        elem_position = list(soup.descendants).index(elem) if elem in soup.descendants else -1
+                                        elem_position = list(soup.descendants).index(
+                                            elem) if elem in soup.descendants else -1
                                         # If element comes before form in document order
                                         if elem_position < form_position and elem_position != -1:
                                             text = elem.get_text(strip=True)
                                             # Look for question patterns, but exclude text that contains option words
                                             if (text and 5 < len(text) < 80 and
-                                                (text.endswith('?') or
-                                                 any(word in text.lower() for word in ['are you', 'do you', 'have you'])) and
-                                                # Exclude text that contains common option words (indicates mixed content)
-                                                not any(option_word in text.lower() for option_word in ['yes', 'no', 'true', 'false', 'submit', 'next', 'continue'])):
+                                                    (text.endswith('?') or
+                                                     any(word in text.lower() for word in
+                                                         ['are you', 'do you', 'have you'])) and
+                                                    # Exclude text that contains common option words (indicates mixed content)
+                                                    not any(option_word in text.lower() for option_word in
+                                                            ['yes', 'no', 'true', 'false', 'submit', 'next',
+                                                             'continue'])):
                                                 print(f"DEBUG: Found form-external question: '{text}'")
                                                 return text
-                                            
+
                                             # If text contains option words, try to extract just the question part
                                             elif (text and 5 < len(text) < 150 and
-                                                  (text.endswith('?') or any(word in text.lower() for word in ['are you', 'do you', 'have you'])) and
-                                                  any(option_word in text.lower() for option_word in ['yes', 'no', 'true', 'false'])):
+                                                  (text.endswith('?') or any(word in text.lower() for word in
+                                                                             ['are you', 'do you', 'have you'])) and
+                                                  any(option_word in text.lower() for option_word in
+                                                      ['yes', 'no', 'true', 'false'])):
                                                 # Try to split and get the question part
                                                 sentences = text.split('?')
                                                 if len(sentences) >= 2:
                                                     question_part = sentences[0] + '?'
                                                     if (question_part and 5 < len(question_part.strip()) < 80 and
-                                                        any(word in question_part.lower() for word in ['are you', 'do you', 'have you'])):
-                                                        print(f"DEBUG: Found extracted question part: '{question_part.strip()}'")
+                                                            any(word in question_part.lower() for word in
+                                                                ['are you', 'do you', 'have you'])):
+                                                        print(
+                                                            f"DEBUG: Found extracted question part: '{question_part.strip()}'")
                                                         return question_part.strip()
                                     except (ValueError, AttributeError):
                                         continue
@@ -1137,13 +1149,13 @@ class StepAnalyzer:
                                 text = sibling.get_text(strip=True)
                                 # Enhanced pattern matching for question-like text
                                 if (text and 5 < len(text) < 100 and  # Question length range
-                                    (text.endswith('?') or  # Direct question
-                                     any(pattern in text.lower() for pattern in
-                                         ['are you', 'do you', 'have you', 'will you', 'can you', 'where are',
-                                          'what is', 'which', 'how', 'when', 'where', 'who', 'why']))):
+                                        (text.endswith('?') or  # Direct question
+                                         any(pattern in text.lower() for pattern in
+                                             ['are you', 'do you', 'have you', 'will you', 'can you', 'where are',
+                                              'what is', 'which', 'how', 'when', 'where', 'who', 'why']))):
                                     print(f"DEBUG: Found question text for {field_name}: '{text}'")
                                     return text
-                            
+
                             # Strategy 4b: Look for text within reasonable proximity (broader search)
                             form_parent = first_field.find_parent('form')
                             if form_parent and form_parent.find_parent():
@@ -1155,16 +1167,17 @@ class StepAnalyzer:
                                         if elem.sourceline and form_parent.sourceline and elem.sourceline < form_parent.sourceline:
                                             text = elem.get_text(strip=True)
                                             if (text and 5 < len(text) < 100 and
-                                                (text.endswith('?') or
-                                                 any(pattern in text.lower() for pattern in
-                                                     ['are you', 'do you', 'have you', 'will you', 'can you', 'where are',
-                                                      'what is', 'which', 'how', 'when', 'where', 'who', 'why']))):
+                                                    (text.endswith('?') or
+                                                     any(pattern in text.lower() for pattern in
+                                                         ['are you', 'do you', 'have you', 'will you', 'can you',
+                                                          'where are',
+                                                          'what is', 'which', 'how', 'when', 'where', 'who', 'why']))):
                                                 print(f"DEBUG: Found form-external question for {field_name}: '{text}'")
                                                 return text
                                     except (AttributeError, TypeError):
                                         # Fallback: check by position in document
                                         pass
-                            
+
                             # Strategy 4c: Original descriptive text search (fallback)
                             for sibling in first_field.find_all_previous(['p', 'div', 'span', 'label']):
                                 text = sibling.get_text(strip=True)
@@ -1303,7 +1316,7 @@ class StepAnalyzer:
                     "value": answer
                 })
             else:
-                # No answer - generate base action 
+                # No answer - generate base action
                 actions.append({
                     "selector": selector,
                     "type": "click",
@@ -1321,7 +1334,7 @@ class StepAnalyzer:
                         "value": value
                     })
             else:
-                # No answer - generate base action 
+                # No answer - generate base action
                 actions.append({
                     "selector": selector,
                     "type": "click",
@@ -1442,7 +1455,7 @@ class StepAnalyzer:
 
     def _generate_enhanced_selector(self, question: Dict[str, Any], option_value: str = None) -> str:
         """Generate enhanced CSS selector with element type and attributes
-        
+
         Examples:
         - input[id="mandatoryDocuments_travelDocRef-TUR-Elif Kaya_0"]
         - input[type="radio"][name="warCrimesInvolvement"][value="false"]
@@ -1451,7 +1464,7 @@ class StepAnalyzer:
             field_type = question.get("field_type", "")
             field_name = question.get("field_name", "")
             original_selector = question.get("field_selector", "")
-            
+
             # Extract element type from field type
             if field_type in ["radio", "checkbox"]:
                 element_type = "input"
@@ -1463,7 +1476,7 @@ class StepAnalyzer:
                 element_type = "input"
             else:
                 element_type = "input"  # Default fallback
-            
+
             # Try to extract ID pattern from original selector
             base_element_id = ""
             if original_selector.startswith("#"):
@@ -1474,7 +1487,7 @@ class StepAnalyzer:
                 id_match = re.search(r'id=["\']([^"\']*)["\']', original_selector)
                 if id_match:
                     base_element_id = id_match.group(1)
-            
+
             # 🚀 CRITICAL FIX: For radio/checkbox, intelligently determine ID pattern
             element_id = ""
             if field_type in ["radio", "checkbox"] and option_value:
@@ -1485,17 +1498,19 @@ class StepAnalyzer:
                         parts = base_element_id.rsplit("_", 1)
                         base_pattern = parts[0]
                         current_suffix = parts[1].lower()
-                        
+
                         # Check if current suffix looks like an option value (boolean/yes-no pattern)
                         boolean_suffixes = ["true", "false", "yes", "no", "1", "0"]
                         if current_suffix in boolean_suffixes:
                             # This looks like a pattern-based ID, generate new ID with correct option
                             element_id = f"{base_pattern}_{option_value}"
-                            print(f"DEBUG: Radio ID pattern detected - base: '{base_pattern}', current: '{current_suffix}', option: '{option_value}' -> '{element_id}'")
+                            print(
+                                f"DEBUG: Radio ID pattern detected - base: '{base_pattern}', current: '{current_suffix}', option: '{option_value}' -> '{element_id}'")
                         else:
                             # This is likely a complete ID name (like "out-of-crown-dependency"), use as-is
                             element_id = base_element_id
-                            print(f"DEBUG: Radio ID complete name detected - using as-is: '{element_id}' (option: '{option_value}')")
+                            print(
+                                f"DEBUG: Radio ID complete name detected - using as-is: '{element_id}' (option: '{option_value}')")
                     else:
                         # No underscore, assume complete ID name and use as-is
                         element_id = base_element_id
@@ -1514,7 +1529,7 @@ class StepAnalyzer:
             elif base_element_id:
                 # For non-radio/checkbox fields, use the original ID as-is
                 element_id = base_element_id
-            
+
             # Generate enhanced selector based on available information
             if element_id:
                 # Use ID-based selector with element type
@@ -1532,10 +1547,11 @@ class StepAnalyzer:
                     enhanced_selector = f'{element_type}{original_selector}'
                 else:
                     enhanced_selector = original_selector
-                
-            print(f"DEBUG: Enhanced selector - Field: '{field_name}', Type: '{field_type}', Option: '{option_value}' -> '{enhanced_selector}'")
+
+            print(
+                f"DEBUG: Enhanced selector - Field: '{field_name}', Type: '{field_type}', Option: '{option_value}' -> '{enhanced_selector}'")
             return enhanced_selector
-            
+
         except Exception as e:
             print(f"DEBUG: Error generating enhanced selector: {str(e)}")
             return question.get("field_selector", "")
@@ -1704,7 +1720,8 @@ class StepAnalyzer:
                         }]
             else:
                 # 没有答案或需要intervention：存储完整选项列表供用户选择
-                print(f"DEBUG: _create_answer_data - Option-based field '{question.get('field_name', 'unknown')}' returning option list (needs_intervention={needs_intervention}, has_ai_answer={has_ai_answer})")
+                print(
+                    f"DEBUG: _create_answer_data - Option-based field '{question.get('field_name', 'unknown')}' returning option list (needs_intervention={needs_intervention}, has_ai_answer={has_ai_answer})")
                 answer_data = []
 
                 for option in options:
@@ -1721,7 +1738,7 @@ class StepAnalyzer:
                         # Use the selector stored with the option during field detection
                         selector = option.get("selector", "")
                         option_value_to_use = option.get("value", "")  # Keep original value for radio/checkbox
-                        
+
                         if not selector:
                             # Fallback to enhanced selector generation if no stored selector
                             option_value = option.get("value", "")
@@ -1752,7 +1769,8 @@ class StepAnalyzer:
             else:
                 # No answer from AI OR needs intervention - show empty field for user input
                 display_value = ai_answer_value if has_ai_answer else ""
-                print(f"DEBUG: _create_answer_data - Text field '{question.get('field_name', 'unknown')}' set to check=0 (needs_intervention={needs_intervention}, has_ai_answer={has_ai_answer})")
+                print(
+                    f"DEBUG: _create_answer_data - Text field '{question.get('field_name', 'unknown')}' set to check=0 (needs_intervention={needs_intervention}, has_ai_answer={has_ai_answer})")
                 return [{
                     "name": display_value,
                     "value": display_value,
@@ -1910,7 +1928,7 @@ class StepAnalyzer:
                 else:
                     # Try to get content from the response object
                     response_content = str(response)
-                
+
                 result = robust_json_parse(response_content)
 
                 # 验证和设置默认值
@@ -1970,7 +1988,7 @@ class LangGraphFormProcessor:
         self._batch_analysis_cache = {}  # Cache for batch analysis results
         self._cache_max_size = 100  # Maximum cache entries
         self._cache_ttl = 3600  # Cache TTL in seconds (1 hour)
-        
+
         # 🚀 NEW: Cross-page data cache for handling related pages
         self.cross_page_cache = CrossPageDataCache(db_session)
 
@@ -2036,30 +2054,30 @@ class LangGraphFormProcessor:
         # Also set it for the step analyzer
         if hasattr(self.step_analyzer, 'set_workflow_id'):
             self.step_analyzer.set_workflow_id(workflow_id)
-    
+
     def _is_phone_code_field(self, question: Dict[str, Any]) -> bool:
         """Check if a field is a phone/country code field that should have '+' prefix removed"""
         field_name = question.get("field_name", "").lower()
         field_label = question.get("field_label", "").lower()
         field_selector = question.get("field_selector", "").lower()
-        
+
         # Keywords that indicate phone/country code fields
         code_keywords = [
             "international code", "country code", "phone code", "dialing code",
             "area code", "calling code", "telephone code", "mobile code"
         ]
-        
+
         # Check field name, label, and selector for code-related keywords
         for keyword in code_keywords:
-            if (keyword in field_name or 
-                keyword in field_label or 
-                keyword in field_selector):
+            if (keyword in field_name or
+                    keyword in field_label or
+                    keyword in field_selector):
                 return True
-        
+
         # Additional pattern checks
         if "code" in field_name and ("phone" in field_name or "country" in field_name):
             return True
-            
+
         return False
 
     def _invoke_llm(self, messages: List, workflow_id: str = None):
@@ -2145,7 +2163,7 @@ class LangGraphFormProcessor:
         try:
             # Reset details expansion tracking for new form
             self._expanded_details = set()
-            
+
             print(f"DEBUG: process_form - Starting with workflow_id: {workflow_id}, step_key: {step_key}")
             print(f"DEBUG: process_form - HTML length: {len(form_html)}")
             print(f"DEBUG: process_form - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
@@ -2172,7 +2190,7 @@ class LangGraphFormProcessor:
                 llm_generated_actions=[],
                 saved_step_data=None,
                 dummy_data_usage=[],
-                consistency_issues=None,   # 🚀 NEW: Initialize consistency issues
+                consistency_issues=None,  # 🚀 NEW: Initialize consistency issues
                 conditional_context=None,  # 🚀 NEW: Initialize conditional context
                 # 🚀 NEW: Initialize conditional field analysis state
                 field_selections=None,
@@ -2415,49 +2433,36 @@ class LangGraphFormProcessor:
 
         return state
 
-
-
-
-    
-
-
-
-
-
-    
-
-
-
-
-    def _analyze_proximity_grouping(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[Dict[str, Any]]:
+    def _analyze_proximity_grouping(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[
+        Dict[str, Any]]:
         """🚀 ENHANCED: Advanced HTML structure analysis with AI-powered grouping reasoning"""
-        
+
         groups = []
-        
+
         # Re-create BeautifulSoup object from HTML content to avoid serialization issues
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # 🚀 STEP 1: Analyze semantic HTML containers with enhanced reasoning
         semantic_containers = soup.find_all(['div', 'section', 'article', 'fieldset', 'details'], class_=True)
-        
+
         for container in semantic_containers:
             container_classes = ' '.join(container.get('class', []))
             container_id = container.get('id', '')
-            
+
             # 🚀 ENHANCED: Smart container classification with reasoning
             container_purpose = self._analyze_container_purpose(container, container_classes, container_id)
-            
+
             # Skip pure layout containers but keep semantic ones
             if container_purpose['type'] == 'layout':
                 continue
-            
+
             # Find fields within this container with enhanced matching
             container_fields = self._find_fields_in_container(container, detected_fields)
-            
+
             # 🚀 REASONING: Only group if we have meaningful field relationships
             if len(container_fields) >= 2:
                 group_reasoning = self._analyze_group_coherence(container_fields, container_purpose)
-                
+
                 if group_reasoning['is_coherent']:
                     groups.append({
                         "group_type": "proximity",
@@ -2469,20 +2474,20 @@ class LangGraphFormProcessor:
                         "reasoning": group_reasoning['reasoning'],
                         "confidence": group_reasoning['confidence']
                     })
-        
+
         # 🚀 STEP 2: Analyze HTML hierarchy patterns (parent-child relationships)
         hierarchy_groups = self._analyze_html_hierarchy_patterns(detected_fields, html_content)
         groups.extend(hierarchy_groups)
-        
+
         # 🚀 STEP 3: Analyze visual layout patterns (same row, column, etc.)
         layout_groups = self._analyze_visual_layout_patterns(detected_fields, html_content)
         groups.extend(layout_groups)
-        
+
         return groups
-    
+
     def _analyze_container_purpose(self, container, container_classes: str, container_id: str) -> Dict[str, Any]:
         """🚀 NEW: Analyze the semantic purpose of HTML containers"""
-        
+
         # Semantic indicators for different purposes
         semantic_indicators = {
             'personal_info': ['personal', 'name', 'identity', 'bio', 'profile'],
@@ -2495,12 +2500,12 @@ class LangGraphFormProcessor:
             'education': ['education', 'school', 'university', 'qualification', 'degree'],
             'layout': ['container', 'wrapper', 'layout', 'grid', 'row', 'col', 'flex']
         }
-        
+
         combined_text = f"{container_classes} {container_id}".lower()
-        
+
         # Find the most likely purpose
         best_match = {'type': 'unknown', 'confidence': 0, 'indicators': []}
-        
+
         for purpose, indicators in semantic_indicators.items():
             matches = [indicator for indicator in indicators if indicator in combined_text]
             if matches:
@@ -2511,7 +2516,7 @@ class LangGraphFormProcessor:
                         'confidence': confidence,
                         'indicators': matches
                     }
-        
+
         # Check for additional semantic clues from container content
         container_text = container.get_text()[:200].lower()  # First 200 chars
         if container_text:
@@ -2520,35 +2525,36 @@ class LangGraphFormProcessor:
                 if content_matches and purpose != 'layout':
                     best_match['confidence'] += len(content_matches) * 10
                     best_match['indicators'].extend(content_matches)
-        
+
         return best_match
-    
+
     def _find_fields_in_container(self, container, detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """🚀 ENHANCED: Find fields within container with better matching"""
         container_fields = []
-        
+
         for field in detected_fields:
             field_name = field.get('field_name', '')
             field_id = field.get('id', '')
-            
+
             # Multiple ways to match fields to containers
-            if (container.find(attrs={'name': field_name}) or 
-                container.find(attrs={'id': field_id}) or
-                (field.get('selector') and container.select(field.get('selector')))):
+            if (container.find(attrs={'name': field_name}) or
+                    container.find(attrs={'id': field_id}) or
+                    (field.get('selector') and container.select(field.get('selector')))):
                 container_fields.append(field)
-        
+
         return container_fields
-    
-    def _analyze_group_coherence(self, fields: List[Dict[str, Any]], container_purpose: Dict[str, Any]) -> Dict[str, Any]:
+
+    def _analyze_group_coherence(self, fields: List[Dict[str, Any]], container_purpose: Dict[str, Any]) -> Dict[
+        str, Any]:
         """🚀 NEW: Analyze if fields form a coherent logical group"""
-        
+
         field_names = [field.get('field_name', '').lower() for field in fields]
         field_labels = [field.get('field_label', '').lower() for field in fields]
-        
+
         # Check semantic coherence
         coherence_score = 0
         reasoning_parts = []
-        
+
         # 1. Container purpose alignment
         if container_purpose['type'] != 'unknown':
             purpose_keywords = {
@@ -2561,49 +2567,49 @@ class LangGraphFormProcessor:
                 'medical': ['health', 'medical', 'doctor', 'treatment'],
                 'education': ['school', 'university', 'qualification', 'education']
             }
-            
+
             purpose_words = purpose_keywords.get(container_purpose['type'], [])
-            field_matches = sum(1 for name in field_names + field_labels 
-                              if any(keyword in name for keyword in purpose_words))
-            
+            field_matches = sum(1 for name in field_names + field_labels
+                                if any(keyword in name for keyword in purpose_words))
+
             if field_matches > 0:
                 coherence_score += (field_matches / len(fields)) * 30
                 reasoning_parts.append(f"Fields match container purpose '{container_purpose['type']}'")
-        
+
         # 2. Field name similarity patterns
         common_prefixes = self._find_common_field_prefixes(field_names)
         if common_prefixes:
             coherence_score += 25
             reasoning_parts.append(f"Fields share common prefixes: {', '.join(common_prefixes)}")
-        
+
         # 3. Field type consistency
         field_types = [field.get('type', '') for field in fields]
         if len(set(field_types)) == 1 and field_types[0] in ['radio', 'checkbox']:
             coherence_score += 20
             reasoning_parts.append(f"All fields are {field_types[0]} type")
-        
+
         # 4. Semantic relationship detection
         semantic_relationships = self._detect_semantic_relationships(field_names + field_labels)
         if semantic_relationships:
             coherence_score += len(semantic_relationships) * 10
             reasoning_parts.extend(semantic_relationships)
-        
+
         is_coherent = coherence_score >= 40  # Threshold for grouping
-        
+
         return {
             'is_coherent': is_coherent,
             'confidence': min(100, coherence_score),
             'reasoning': '; '.join(reasoning_parts) if reasoning_parts else 'Basic proximity grouping'
         }
-    
+
     def _find_common_field_prefixes(self, field_names: List[str]) -> List[str]:
         """Find common prefixes in field names"""
         if len(field_names) < 2:
             return []
-        
+
         prefixes = []
         for i, name1 in enumerate(field_names):
-            for name2 in field_names[i+1:]:
+            for name2 in field_names[i + 1:]:
                 # Find common prefix (at least 3 characters)
                 common = ''
                 for j, (c1, c2) in enumerate(zip(name1, name2)):
@@ -2611,16 +2617,16 @@ class LangGraphFormProcessor:
                         common += c1
                     else:
                         break
-                
+
                 if len(common) >= 3 and common not in prefixes:
                     prefixes.append(common)
-        
+
         return prefixes
-    
+
     def _detect_semantic_relationships(self, text_list: List[str]) -> List[str]:
         """Detect semantic relationships between field texts"""
         relationships = []
-        
+
         # Common semantic patterns
         patterns = {
             'date_components': ['day', 'month', 'year', 'date'],
@@ -2629,35 +2635,36 @@ class LangGraphFormProcessor:
             'contact_components': ['phone', 'email', 'mobile', 'telephone', 'contact'],
             'boolean_pairs': ['yes', 'no', 'true', 'false', 'have', 'not']
         }
-        
+
         combined_text = ' '.join(text_list).lower()
-        
+
         for pattern_name, keywords in patterns.items():
             matches = [keyword for keyword in keywords if keyword in combined_text]
             if len(matches) >= 2:
                 relationships.append(f"Contains {pattern_name.replace('_', ' ')}: {', '.join(matches)}")
-        
+
         return relationships
-    
-    def _analyze_html_hierarchy_patterns(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[Dict[str, Any]]:
+
+    def _analyze_html_hierarchy_patterns(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[
+        Dict[str, Any]]:
         """🚀 NEW: Analyze HTML hierarchy for logical grouping"""
         groups = []
-        
+
         # Re-create BeautifulSoup object from HTML content to avoid serialization issues
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Find parent elements that contain multiple fields
         for field in detected_fields:
             field_element = None
             field_selector = field.get('selector', '')
-            
+
             if field_selector:
                 try:
                     elements = soup.select(field_selector)
                     field_element = elements[0] if elements else None
                 except:
                     continue
-            
+
             if field_element:
                 # Find parent containers
                 parent = field_element.parent
@@ -2674,12 +2681,12 @@ class LangGraphFormProcessor:
                                         sibling_fields.append(other_field)
                                 except:
                                     continue
-                    
+
                     # If we found a meaningful group
                     if len(sibling_fields) >= 1:
                         all_fields = [field] + sibling_fields
                         group_id = f"hierarchy_{parent.get('id', '')}_{parent.get('class', [''])[0]}"
-                        
+
                         # Avoid duplicate groups
                         if not any(g.get('group_id') == group_id for g in groups):
                             groups.append({
@@ -2692,30 +2699,31 @@ class LangGraphFormProcessor:
                                 "reasoning": f"Fields are siblings under {parent.name} element"
                             })
                         break
-                    
+
                     parent = parent.parent
-        
+
         return groups
-    
-    def _analyze_visual_layout_patterns(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[Dict[str, Any]]:
+
+    def _analyze_visual_layout_patterns(self, detected_fields: List[Dict[str, Any]], html_content: str) -> List[
+        Dict[str, Any]]:
         """🚀 NEW: Analyze visual layout patterns for grouping"""
         groups = []
-        
+
         # Re-create BeautifulSoup object from HTML content to avoid serialization issues
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Look for fields in the same row/column based on CSS classes
         layout_indicators = ['row', 'column', 'flex', 'grid', 'inline', 'horizontal', 'vertical']
-        
+
         layout_containers = soup.find_all(attrs={'class': True})
-        
+
         for container in layout_containers:
             container_classes = ' '.join(container.get('class', [])).lower()
-            
+
             # Check if this looks like a layout container
             if any(indicator in container_classes for indicator in layout_indicators):
                 container_fields = self._find_fields_in_container(container, detected_fields)
-                
+
                 if len(container_fields) >= 2:
                     layout_type = 'unknown'
                     if 'row' in container_classes or 'horizontal' in container_classes:
@@ -2726,7 +2734,7 @@ class LangGraphFormProcessor:
                         layout_type = 'grid'
                     elif 'flex' in container_classes:
                         layout_type = 'flex'
-                    
+
                     groups.append({
                         "group_type": "visual_layout",
                         "layout_type": layout_type,
@@ -2735,14 +2743,14 @@ class LangGraphFormProcessor:
                         "field_count": len(container_fields),
                         "reasoning": f"Fields arranged in {layout_type} layout pattern"
                     })
-        
+
         return groups
 
     def _analyze_semantic_relationships(self, detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """🚀 ENHANCED: Advanced semantic analysis with AI-powered reasoning"""
-        
+
         groups = []
-        
+
         # 🚀 ENHANCED: More comprehensive semantic patterns with reasoning
         semantic_patterns = {
             "personal_identity": {
@@ -2753,7 +2761,7 @@ class LangGraphFormProcessor:
             },
             "contact_information": {
                 "keywords": ["phone", "email", "contact", "mobile", "telephone", "fax", "communication"],
-                "group_name": "Contact Information", 
+                "group_name": "Contact Information",
                 "reasoning_weight": 30,
                 "must_have": ["phone", "email"]
             },
@@ -2789,7 +2797,7 @@ class LangGraphFormProcessor:
             },
             "financial_information": {
                 "keywords": ["income", "salary", "financial", "money", "cost", "bank", "payment", "funds"],
-                "group_name": "Financial Information", 
+                "group_name": "Financial Information",
                 "reasoning_weight": 25,
                 "must_have": ["income", "salary", "financial"]
             },
@@ -2806,10 +2814,10 @@ class LangGraphFormProcessor:
                 "must_have": ["education", "school", "qualification"]
             }
         }
-        
+
         for pattern_name, pattern_config in semantic_patterns.items():
             pattern_analysis = self._analyze_semantic_pattern(detected_fields, pattern_config, pattern_name)
-            
+
             if pattern_analysis['is_valid_group']:
                 groups.append({
                     "group_type": "semantic",
@@ -2821,30 +2829,31 @@ class LangGraphFormProcessor:
                     "reasoning": pattern_analysis['reasoning'],
                     "semantic_strength": pattern_analysis['semantic_strength']
                 })
-        
+
         # 🚀 NEW: Cross-pattern relationship analysis
         cross_pattern_groups = self._analyze_cross_pattern_relationships(detected_fields, groups)
         groups.extend(cross_pattern_groups)
-        
+
         return groups
-    
-    def _analyze_semantic_pattern(self, detected_fields: List[Dict[str, Any]], pattern_config: Dict[str, Any], pattern_name: str) -> Dict[str, Any]:
+
+    def _analyze_semantic_pattern(self, detected_fields: List[Dict[str, Any]], pattern_config: Dict[str, Any],
+                                  pattern_name: str) -> Dict[str, Any]:
         """🚀 NEW: Analyze semantic pattern with advanced reasoning"""
-        
+
         keywords = pattern_config["keywords"]
         must_have = pattern_config.get("must_have", [])
         reasoning_weight = pattern_config.get("reasoning_weight", 20)
-        
+
         pattern_fields = []
         matched_keywords = []
         reasoning_parts = []
-        
+
         # Analyze each field for pattern matching
         for field in detected_fields:
             field_name = field.get('field_name', '').lower()
             field_label = field.get('field_label', '').lower()
             field_text = f"{field_name} {field_label}"
-            
+
             # Count keyword matches
             field_matches = []
             for keyword in keywords:
@@ -2852,59 +2861,61 @@ class LangGraphFormProcessor:
                     field_matches.append(keyword)
                     if keyword not in matched_keywords:
                         matched_keywords.append(keyword)
-            
+
             # If field has semantic matches, add it
             if field_matches:
                 field['_semantic_matches'] = field_matches
                 field['_semantic_strength'] = len(field_matches)
                 pattern_fields.append(field)
-        
+
         # Calculate semantic strength and confidence
         semantic_strength = 0
         confidence = 0
-        
+
         if pattern_fields:
             # 1. Keyword coverage score
             keyword_coverage = len(matched_keywords) / len(keywords) * 100
             semantic_strength += keyword_coverage * 0.4
-            
+
             # 2. Must-have requirements
             must_have_score = 0
             if must_have:
                 must_have_found = sum(1 for keyword in must_have if keyword in matched_keywords)
                 must_have_score = (must_have_found / len(must_have)) * 100
                 semantic_strength += must_have_score * 0.3
-                
+
                 if must_have_found > 0:
-                    reasoning_parts.append(f"Contains required keywords: {', '.join([k for k in must_have if k in matched_keywords])}")
-            
+                    reasoning_parts.append(
+                        f"Contains required keywords: {', '.join([k for k in must_have if k in matched_keywords])}")
+
             # 3. Field density (how many fields match vs total)
             field_density = len(pattern_fields) / len(detected_fields) * 100
             if field_density > 20:  # If more than 20% of fields match this pattern
                 semantic_strength += field_density * 0.2
                 reasoning_parts.append(f"High field density ({field_density:.1f}%) for {pattern_name}")
-            
+
             # 4. Field relationship strength
             if len(pattern_fields) >= 2:
                 relationship_strength = self._calculate_field_relationship_strength(pattern_fields)
                 semantic_strength += relationship_strength * 0.1
                 if relationship_strength > 50:
                     reasoning_parts.append(f"Strong field relationships detected")
-            
+
             confidence = min(100, semantic_strength)
-            
+
             # Add general reasoning
-            reasoning_parts.append(f"Matched {len(matched_keywords)}/{len(keywords)} keywords: {', '.join(matched_keywords[:5])}")
+            reasoning_parts.append(
+                f"Matched {len(matched_keywords)}/{len(keywords)} keywords: {', '.join(matched_keywords[:5])}")
             if len(matched_keywords) > 5:
                 reasoning_parts.append("...")
-        
+
         # Determine if this is a valid group
         is_valid_group = (
-            len(pattern_fields) >= 2 and 
-            confidence >= 40 and 
-            (not must_have or any(keyword in matched_keywords for keyword in must_have))
+                len(pattern_fields) >= 2 and
+                confidence >= 40 and
+                (not must_have or any(keyword in matched_keywords for keyword in must_have))
         )
-        
+
         return {
             'is_valid_group': is_valid_group,
             'fields': pattern_fields,
@@ -2913,45 +2924,46 @@ class LangGraphFormProcessor:
             'matched_keywords': matched_keywords,
             'reasoning': '; '.join(reasoning_parts) if reasoning_parts else f'Basic {pattern_name} pattern matching'
         }
-    
+
     def _calculate_field_relationship_strength(self, fields: List[Dict[str, Any]]) -> float:
         """Calculate how strongly related fields are to each other"""
         if len(fields) < 2:
             return 0
-        
+
         relationship_score = 0
         total_comparisons = 0
-        
+
         for i, field1 in enumerate(fields):
-            for field2 in fields[i+1:]:
+            for field2 in fields[i + 1:]:
                 total_comparisons += 1
-                
+
                 # Compare field names for common patterns
                 name1 = field1.get('field_name', '').lower()
                 name2 = field2.get('field_name', '').lower()
-                
+
                 # Common prefix/suffix
                 if len(name1) > 3 and len(name2) > 3:
                     if name1[:3] == name2[:3] or name1[-3:] == name2[-3:]:
                         relationship_score += 20
-                
+
                 # Semantic matches overlap
                 matches1 = set(field1.get('_semantic_matches', []))
                 matches2 = set(field2.get('_semantic_matches', []))
                 overlap = len(matches1.intersection(matches2))
                 if overlap > 0:
                     relationship_score += overlap * 15
-                
+
                 # Field type consistency
                 if field1.get('type') == field2.get('type') and field1.get('type') in ['radio', 'checkbox']:
                     relationship_score += 10
-        
+
         return relationship_score / total_comparisons if total_comparisons > 0 else 0
-    
-    def _analyze_cross_pattern_relationships(self, detected_fields: List[Dict[str, Any]], existing_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+    def _analyze_cross_pattern_relationships(self, detected_fields: List[Dict[str, Any]],
+                                             existing_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """🚀 NEW: Find relationships between different semantic patterns"""
         cross_groups = []
-        
+
         # Look for fields that might bridge different semantic categories
         bridge_patterns = {
             "personal_contact": {
@@ -2960,13 +2972,13 @@ class LangGraphFormProcessor:
                 "reasoning": "Personal identity and contact information are closely related"
             },
             "employment_financial": {
-                "patterns": ["employment_details", "financial_information"], 
+                "patterns": ["employment_details", "financial_information"],
                 "group_name": "Employment & Financial Details",
                 "reasoning": "Employment and financial information are interconnected"
             },
             "travel_identity": {
                 "patterns": ["travel_information", "personal_identity"],
-                "group_name": "Travel Identity Documents", 
+                "group_name": "Travel Identity Documents",
                 "reasoning": "Travel documents require personal identity information"
             },
             "family_contact": {
@@ -2975,29 +2987,29 @@ class LangGraphFormProcessor:
                 "reasoning": "Family information often includes contact details"
             }
         }
-        
+
         for bridge_name, bridge_config in bridge_patterns.items():
             required_patterns = bridge_config["patterns"]
-            
+
             # Find groups that match the required patterns
             matching_groups = []
             for group in existing_groups:
                 if group.get("pattern") in required_patterns:
                     matching_groups.append(group)
-            
+
             # If we have groups from multiple required patterns
             if len(matching_groups) >= 2:
                 # Combine fields from matching groups
                 combined_fields = []
                 combined_confidence = 0
-                
+
                 for group in matching_groups:
                     combined_fields.extend(group["fields"])
                     combined_confidence += group.get("confidence", 0)
-                
+
                 # Average confidence
                 avg_confidence = combined_confidence / len(matching_groups)
-                
+
                 # Only create cross-pattern group if confidence is high enough
                 if avg_confidence >= 50:
                     cross_groups.append({
@@ -3010,7 +3022,7 @@ class LangGraphFormProcessor:
                         "reasoning": bridge_config["reasoning"],
                         "source_patterns": required_patterns
                     })
-        
+
         return cross_groups
 
     def _extract_autocomplete_field_info(self, autocomplete_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -3073,17 +3085,18 @@ class LangGraphFormProcessor:
 
             # 🚀 STEP 1: Use all detected fields (dependency analysis removed)
             detected_fields = state["detected_fields"]
-            
+
             # No longer filtering with dependency analysis - using all detected fields
             filtered_fields = detected_fields
-            
+
             # 🚀 STEP 2: Apply universal conditional filtering (TEMPORARILY DISABLED)
             ai_answers = state.get("ai_answers", [])
             form_html = state.get("form_html", "")
             conditional_context = self._build_conditional_context(detected_fields, ai_answers, form_html)
             # DISABLED: filtered_fields = self._filter_fields_by_conditions(filtered_fields, conditional_context)
-            
-            print(f"[workflow_id:{workflow_id}] DEBUG: Question Generator - Filtered {len(detected_fields)} fields to {len(filtered_fields)} after decision tree and conditional filtering")
+
+            print(
+                f"[workflow_id:{workflow_id}] DEBUG: Question Generator - Filtered {len(detected_fields)} fields to {len(filtered_fields)} after decision tree and conditional filtering")
 
             # 🚀 OPTIMIZATION: Use field groups for optimization, but generate individual questions
             field_groups_info = state.get("field_groups_info", {})
@@ -3136,7 +3149,8 @@ class LangGraphFormProcessor:
 
             # 🚀 FIXED: Generate individual questions for all fields - no more grouped questions
             # field_groups_info is used for optimization only, not for question generation
-            print(f"DEBUG: Question Generator - field_groups_info available with {len(field_groups_info)} groups, but generating individual questions for all fields")
+            print(
+                f"DEBUG: Question Generator - field_groups_info available with {len(field_groups_info)} groups, but generating individual questions for all fields")
 
             # Process all fields individually - generate one question per field
             all_questions = []
@@ -3235,18 +3249,20 @@ class LangGraphFormProcessor:
             # 🚀 OPTIMIZATION: Try batch processing first (much more efficient)
             try:
                 batch_answers = self._batch_analyze_fields_sync(field_questions, profile_data, profile_dummy_data)
-                
+
                 if len(batch_answers) == len(field_questions):
                     print(f"DEBUG: AI Answerer - ✅ Batch processing successful for all {len(batch_answers)} fields")
                     answers = batch_answers
                 else:
-                    print(f"DEBUG: AI Answerer - ⚠️ Batch processing partial success: {len(batch_answers)}/{len(field_questions)}")
+                    print(
+                        f"DEBUG: AI Answerer - ⚠️ Batch processing partial success: {len(batch_answers)}/{len(field_questions)}")
                     # If batch processing didn't return all answers, fall back to individual processing
                     processed_field_names = {ans.get("field_name") for ans in batch_answers if isinstance(ans, dict)}
                     remaining_questions = [q for q in field_questions if q["field_name"] not in processed_field_names]
-                    
+
                     if remaining_questions:
-                        print(f"DEBUG: AI Answerer - ⚠️ {len(remaining_questions)} questions remaining, but individual processing removed")
+                        print(
+                            f"DEBUG: AI Answerer - ⚠️ {len(remaining_questions)} questions remaining, but individual processing removed")
                         print("DEBUG: AI Answerer - Using batch answers only")
                         # 🚀 REMOVED: Individual processing fallback
                         answers = batch_answers
@@ -3256,7 +3272,7 @@ class LangGraphFormProcessor:
             except Exception as batch_error:
                 print(f"DEBUG: AI Answerer - ❌ Batch processing failed: {str(batch_error)}")
                 print("DEBUG: AI Answerer - ⚠️ Individual processing fallback removed - generating empty answers")
-                
+
                 # 🚀 REMOVED: Individual processing fallback
                 # Instead of calling single-question methods, generate empty answers
                 answers = []
@@ -3272,7 +3288,7 @@ class LangGraphFormProcessor:
                         "used_dummy_data": False
                     }
                     answers.append(empty_answer)
-                    
+
                 print(f"DEBUG: AI Answerer - Generated {len(answers)} empty answers as fallback")
 
             # Process results and track dummy data usage
@@ -3292,11 +3308,14 @@ class LangGraphFormProcessor:
                         })
 
                         if dummy_source == "ai_generated":
-                            print(f"DEBUG: AI Answerer - Generated smart dummy data for {field_questions[i]['field_name']}: {answer['answer']} (confidence: {answer['confidence']})")
+                            print(
+                                f"DEBUG: AI Answerer - Generated smart dummy data for {field_questions[i]['field_name']}: {answer['answer']} (confidence: {answer['confidence']})")
                         else:
-                            print(f"DEBUG: AI Answerer - Used provided dummy data for {field_questions[i]['field_name']}: {answer['answer']}")
+                            print(
+                                f"DEBUG: AI Answerer - Used provided dummy data for {field_questions[i]['field_name']}: {answer['answer']}")
                     else:
-                        print(f"DEBUG: AI Answerer - Used profile data for {field_questions[i]['field_name']}: confidence={answer['confidence']}")
+                        print(
+                            f"DEBUG: AI Answerer - Used profile data for {field_questions[i]['field_name']}: confidence={answer['confidence']}")
 
             state["ai_answers"] = answers
             state["dummy_data_usage"] = dummy_usage
@@ -3313,72 +3332,73 @@ class LangGraphFormProcessor:
         try:
             workflow_id = state.get("workflow_id", "unknown")
             print(f"[workflow_id:{workflow_id}] DEBUG: Smart Question Grouping - Starting")
-            
+
             questions = state.get("field_questions", [])
             detected_fields = state.get("detected_fields", [])
             form_html = state.get("form_html", "")
-            
+
             if not questions:
                 print(f"[workflow_id:{workflow_id}] DEBUG: No questions for grouping")
                 state["semantic_question_groups"] = []
                 state["question_semantic_analysis"] = {"error": "No questions to analyze"}
                 return state
-            
+
             # 🎯 第一层：结构化分组（无需AI）
             structural_groups = self._create_structural_groups(questions, detected_fields, form_html, workflow_id)
-            
+
             # 🎯 第二层：AI增强分组（仅复杂场景）
-            ai_enhanced_groups = self._create_ai_enhanced_groups(questions, detected_fields, structural_groups, workflow_id)
-            
+            ai_enhanced_groups = self._create_ai_enhanced_groups(questions, detected_fields, structural_groups,
+                                                                 workflow_id)
+
             # 合并所有分组
             final_groups = self._merge_question_groups(structural_groups, ai_enhanced_groups, workflow_id)
-            
+
             # 保存分组结果到正确的字段
             state["semantic_question_groups"] = final_groups
             state["question_semantic_analysis"] = {"groups_created": len(final_groups)}
-            
+
             print(f"[workflow_id:{workflow_id}] DEBUG: Smart grouping complete - {len(final_groups)} groups created")
-            
+
         except Exception as e:
             print(f"[workflow_id:{workflow_id}] ERROR: Smart question grouping failed: {str(e)}")
             # 回退到简单分组
             state["semantic_question_groups"] = self._create_simple_fallback_groups(state.get("field_questions", []))
             state["question_semantic_analysis"] = {"error": str(e)}
-            
+
         return state
-    
+
     def _analyze_question_semantics_with_ai(self, questions: List[Dict], workflow_id: str) -> Dict[str, Any]:
         """🚀 OPTIMIZED: 小批量AI语义分析 - 仅对复杂/不确定的字段使用AI"""
-        
+
         # 只对复杂问题使用AI，减少token消耗
         if len(questions) > 10:
             print(f"[workflow_id:{workflow_id}] DEBUG: Too many questions ({len(questions)}), skipping AI analysis")
             return {"error": "Too many questions for AI analysis"}
-        
+
         # Create prompt for AI semantic analysis
         prompt = f"""
                 # Task: 分析少量复杂表单问题之间的语义关系
-                
+
                 你正在分析签证申请表单中的复杂问题，识别问题之间的逻辑关系。
                 重点识别**互斥问题**和**条件依赖关系**。
-                
+
                 ## 待分析问题 ({len(questions)}个):
                 {json.dumps(questions, indent=2, ensure_ascii=False)}
-                
+
                 ## 任务:
                 分析每个问题的语义含义并识别:
-                
+
                 1. **互斥组**: 不能同时回答的问题
                    - 例如: "你有父母吗?" vs "你父亲的姓名是什么?"
                    - 如果第一个问题回答"否"，第二个问题就变得无关紧要
-                
+
                 2. **条件依赖**: 依赖其他问题答案的问题
                    - 例如: "你结婚了吗?" → "你配偶的姓名是什么?"
                    - 只有第一个问题是"是"时，第二个问题才有意义
-                
+
                 3. **语义分类**: 按语义含义对问题分组
                    - 个人信息、家庭信息、就业、旅行历史等
-                
+
                 ## 输出格式:
                 返回JSON对象，结构如下:
                 {{
@@ -3415,7 +3435,7 @@ class LangGraphFormProcessor:
                     }}
                   ]
                 }}
-                
+
                 专注于理解问题的**逻辑含义**，而不仅仅是HTML结构。
                 """
 
@@ -3424,35 +3444,36 @@ class LangGraphFormProcessor:
                 {"role": "system", "content": "你是分析表单逻辑和问题语义的专家，特别擅长签证申请表单分析。"},
                 {"role": "user", "content": prompt}
             ]
-            
+
             response = self._invoke_llm(messages, workflow_id)
-            
+
             if response and response.content:
                 # Parse the AI response
                 analysis_result = robust_json_parse(response.content)
                 return analysis_result
             else:
                 return {"error": "No response from AI"}
-                
+
         except Exception as e:
             print(f"[workflow_id:{workflow_id}] DEBUG: AI semantic analysis error: {str(e)}")
             return {"error": str(e)}
-    
-    def _create_semantic_question_groups(self, questions: List[Dict], semantic_analysis: Dict, workflow_id: str) -> List[Dict]:
+
+    def _create_semantic_question_groups(self, questions: List[Dict], semantic_analysis: Dict, workflow_id: str) -> \
+    List[Dict]:
         """🚀 NEW: Create question groups based on AI semantic analysis"""
-        
+
         semantic_groups = []
-        
+
         if semantic_analysis.get("error"):
             print(f"[workflow_id:{workflow_id}] DEBUG: Semantic analysis had errors, falling back to basic grouping")
             return semantic_groups
-        
+
         # 🎯 Process mutually exclusive groups
         mutually_exclusive = semantic_analysis.get("mutually_exclusive_groups", [])
         for group in mutually_exclusive:
             trigger_q = group.get("trigger_question", {})
             excluded_qs = group.get("excluded_questions", [])
-            
+
             semantic_groups.append({
                 "group_type": "mutually_exclusive",
                 "group_name": group.get("group_name", ""),
@@ -3462,15 +3483,15 @@ class LangGraphFormProcessor:
                 "exclusion_logic": group.get("exclusion_logic", "if_yes_then_exclude"),
                 "questions_involved": len(excluded_qs) + 1
             })
-            
+
             print(f"[workflow_id:{workflow_id}] DEBUG: Created mutually exclusive group: {group.get('group_name')}")
-        
+
         # 🎯 Process conditional dependencies
         conditional_deps = semantic_analysis.get("conditional_dependencies", [])
         for dependency in conditional_deps:
             trigger_q = dependency.get("trigger_question", {})
             dependent_qs = dependency.get("dependent_questions", [])
-            
+
             semantic_groups.append({
                 "group_type": "conditional_dependency",
                 "trigger_question_index": trigger_q.get("index"),
@@ -3478,42 +3499,42 @@ class LangGraphFormProcessor:
                 "dependency_type": dependency.get("dependency_type", "if_yes_then_include"),
                 "questions_involved": len(dependent_qs) + 1
             })
-            
+
             print(f"[workflow_id:{workflow_id}] DEBUG: Created conditional dependency group")
-        
+
         # 🎯 Process semantic categories
         semantic_categories = semantic_analysis.get("semantic_categories", [])
         for category in semantic_categories:
             category_questions = category.get("questions", [])
-            
+
             semantic_groups.append({
                 "group_type": "semantic_category",
                 "category_name": category.get("category", ""),
                 "question_indices": [q.get("index") for q in category_questions],
                 "questions_involved": len(category_questions)
             })
-            
+
             print(f"[workflow_id:{workflow_id}] DEBUG: Created semantic category: {category.get('category')}")
-        
+
         return semantic_groups
-    
-    def _create_structural_groups(self, questions: List[Dict], detected_fields: List[Dict], 
-                                form_html: str, workflow_id: str) -> List[Dict]:
+
+    def _create_structural_groups(self, questions: List[Dict], detected_fields: List[Dict],
+                                  form_html: str, workflow_id: str) -> List[Dict]:
         """🎯 第一层：基于HTML结构的分组"""
         print(f"[workflow_id:{workflow_id}] DEBUG: Creating structural groups")
-        
+
         # 🚀 ENHANCED: 尝试多种分组方法，优先级从高到低
-        
+
         # 1. 首先尝试条件逻辑分组
         structural_groups = self._group_by_conditional_logic(questions, detected_fields, form_html)
         print(f"[workflow_id:{workflow_id}] DEBUG: Conditional logic groups: {len(structural_groups)}")
-        
+
         # 2. 如果条件逻辑分组没有找到任何组，尝试HTML容器分组（fieldset分组）
         if not structural_groups:
             print(f"[workflow_id:{workflow_id}] DEBUG: No conditional groups found, trying HTML container grouping")
             structural_groups = self._group_by_html_containers(questions, form_html)
             print(f"[workflow_id:{workflow_id}] DEBUG: HTML container groups: {len(structural_groups)}")
-        
+
         # 3. 如果还没有找到分组，则每个问题单独成组
         if not structural_groups:
             print(f"[workflow_id:{workflow_id}] DEBUG: No structural groups found, creating individual groups")
@@ -3521,30 +3542,29 @@ class LangGraphFormProcessor:
             for i, question in enumerate(questions):
                 structural_groups.append({
                     "group_type": "individual",
-                    "group_name": f"Individual Question {i+1}",
+                    "group_name": f"Individual Question {i + 1}",
                     "questions": [question],
                     "priority": 10,
                     "reasoning": "No structural dependencies found"
                 })
-        
+
         print(f"[workflow_id:{workflow_id}] DEBUG: Created {len(structural_groups)} structural groups")
         return structural_groups
 
-    
-    def _create_ai_enhanced_groups(self, questions: List[Dict], detected_fields: List[Dict], 
-                                 existing_groups: List[Dict], workflow_id: str) -> List[Dict]:
+    def _create_ai_enhanced_groups(self, questions: List[Dict], detected_fields: List[Dict],
+                                   existing_groups: List[Dict], workflow_id: str) -> List[Dict]:
         """🎯 第三层：AI增强分组（仅复杂场景）"""
         print(f"[workflow_id:{workflow_id}] DEBUG: Creating AI-enhanced groups")
-        
+
         ai_enhanced_groups = []
-        
+
         # 找出未分组的复杂字段
         ungrouped_questions = self._find_ungrouped_questions(questions, existing_groups)
-        
+
         if len(ungrouped_questions) > 0:
             # 只对复杂/不确定的字段使用AI
             complex_questions = self._filter_complex_questions(ungrouped_questions)
-            
+
             if len(complex_questions) > 0:
                 # 小批量处理，每次最多5-10个字段
                 batch_size = 8
@@ -3552,32 +3572,32 @@ class LangGraphFormProcessor:
                     batch = complex_questions[i:i + batch_size]
                     batch_groups = self._analyze_question_batch_with_ai(batch, existing_groups, workflow_id)
                     ai_enhanced_groups.extend(batch_groups)
-        
+
         print(f"[workflow_id:{workflow_id}] DEBUG: Created {len(ai_enhanced_groups)} AI-enhanced groups")
         return ai_enhanced_groups
-    
+
     def _group_by_html_containers(self, questions: List[Dict], form_html: str) -> List[Dict]:
         """基于HTML容器分组 - 增强层级结构识别"""
         from bs4 import BeautifulSoup
-        
+
         try:
             soup = BeautifulSoup(form_html, 'html.parser')
             groups = []
             grouped_questions = set()  # 跟踪已分组的问题
-            
+
             # 1. 查找fieldset容器（最高优先级）
             fieldsets = soup.find_all('fieldset')
             for i, fieldset in enumerate(fieldsets):
                 legend = fieldset.find('legend')
-                group_name = legend.get_text(strip=True) if legend else f"Field Group {i+1}"
-                
+                group_name = legend.get_text(strip=True) if legend else f"Field Group {i + 1}"
+
                 # 找出在这个fieldset中的问题
                 group_questions = []
                 for question in questions:
                     field_name = question.get('field_name', '')
                     if field_name in grouped_questions:
                         continue
-                        
+
                     selector = question.get('field_selector', '')
                     if selector:
                         # 检查字段是否在这个fieldset中
@@ -3585,7 +3605,7 @@ class LangGraphFormProcessor:
                         if field_element and fieldset in field_element.parents:
                             group_questions.append(question)
                             grouped_questions.add(field_name)
-                
+
                 if group_questions:
                     groups.append({
                         "group_type": "html_container",
@@ -3594,9 +3614,10 @@ class LangGraphFormProcessor:
                         "priority": 1,
                         "reasoning": f"Questions grouped by HTML fieldset: {group_name}"
                     })
-            
+
             # 2. 查找嵌套容器（父子关系，如父亲1、父亲2）
-            nested_containers = soup.find_all('div', class_=lambda x: x and any(cls in x for cls in ['parent', 'person', 'individual', 'member']))
+            nested_containers = soup.find_all('div', class_=lambda x: x and any(
+                cls in x for cls in ['parent', 'person', 'individual', 'member']))
             for i, container in enumerate(nested_containers):
                 # 尝试获取容器的标题或标识
                 title_element = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'label', 'legend'])
@@ -3604,21 +3625,21 @@ class LangGraphFormProcessor:
                     group_name = title_element.get_text(strip=True)
                 else:
                     container_class = ' '.join(container.get('class', []))
-                    group_name = f"Person {i+1} ({container_class})"
-                
+                    group_name = f"Person {i + 1} ({container_class})"
+
                 group_questions = []
                 for question in questions:
                     field_name = question.get('field_name', '')
                     if field_name in grouped_questions:
                         continue
-                        
+
                     selector = question.get('field_selector', '')
                     if selector:
                         field_element = soup.select_one(selector)
                         if field_element and container in field_element.parents:
                             group_questions.append(question)
                             grouped_questions.add(field_name)
-                
+
                 if group_questions:
                     groups.append({
                         "group_type": "html_nested_container",
@@ -3627,25 +3648,26 @@ class LangGraphFormProcessor:
                         "priority": 1,
                         "reasoning": f"Questions grouped by nested HTML container: {group_name}"
                     })
-            
+
             # 3. 查找一般容器（section, group, panel等）
-            general_containers = soup.find_all('div', class_=lambda x: x and any(cls in x for cls in ['section', 'group', 'panel', 'block']))
+            general_containers = soup.find_all('div', class_=lambda x: x and any(
+                cls in x for cls in ['section', 'group', 'panel', 'block']))
             for i, container in enumerate(general_containers):
                 container_class = ' '.join(container.get('class', []))
-                
+
                 # 尝试获取更好的组名
                 title_element = container.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
                 if title_element:
                     group_name = title_element.get_text(strip=True)
                 else:
-                    group_name = f"Section {i+1} ({container_class})"
-                
+                    group_name = f"Section {i + 1} ({container_class})"
+
                 group_questions = []
                 for question in questions:
                     field_name = question.get('field_name', '')
                     if field_name in grouped_questions:
                         continue
-                        
+
                     selector = question.get('field_selector', '')
                     if selector:
                         field_element = soup.select_one(selector)
@@ -3653,16 +3675,16 @@ class LangGraphFormProcessor:
                             # 确保不是嵌套在更小的容器中
                             is_direct_child = True
                             for other_container in nested_containers:
-                                if (other_container != container and 
-                                    other_container in field_element.parents and
-                                    container in other_container.parents):
+                                if (other_container != container and
+                                        other_container in field_element.parents and
+                                        container in other_container.parents):
                                     is_direct_child = False
                                     break
-                            
+
                             if is_direct_child:
                                 group_questions.append(question)
                                 grouped_questions.add(field_name)
-                
+
                 if group_questions:
                     groups.append({
                         "group_type": "html_container",
@@ -3671,29 +3693,29 @@ class LangGraphFormProcessor:
                         "priority": 2,
                         "reasoning": f"Questions grouped by HTML container: {container_class}"
                     })
-            
+
             # 4. 基于字段名模式识别层级关系（如father1_name, father2_name）
             pattern_groups = self._group_by_field_name_patterns(questions, grouped_questions)
             groups.extend(pattern_groups)
-            
+
             return groups
-            
+
         except Exception as e:
             print(f"DEBUG: HTML container grouping failed: {str(e)}")
             return []
-    
+
     def _group_by_field_name_patterns(self, questions: List[Dict], grouped_questions: set) -> List[Dict]:
         """基于字段名模式识别层级关系"""
         groups = []
-        
+
         # 识别字段名模式，如 father1_name, father1_birth, father2_name, father2_birth
         pattern_map = {}
-        
+
         for question in questions:
             field_name = question.get('field_name', '')
             if field_name in grouped_questions:
                 continue
-                
+
             # 分析字段名模式
             import re
             # 匹配模式如：father1_name, parent2_birth, person3_address
@@ -3701,11 +3723,11 @@ class LangGraphFormProcessor:
             if match:
                 prefix, number, suffix = match.groups()
                 pattern_key = f"{prefix}{number}"
-                
+
                 if pattern_key not in pattern_map:
                     pattern_map[pattern_key] = []
                 pattern_map[pattern_key].append(question)
-        
+
         # 为每个模式创建分组
         for pattern_key, pattern_questions in pattern_map.items():
             if len(pattern_questions) > 1:  # 至少2个字段才分组
@@ -3716,17 +3738,18 @@ class LangGraphFormProcessor:
                     "priority": 1,
                     "reasoning": f"Questions grouped by field name pattern: {pattern_key}"
                 })
-                
+
                 # 标记为已分组
                 for question in pattern_questions:
                     grouped_questions.add(question.get('field_name', ''))
-        
+
         return groups
-    
-    def _group_by_conditional_logic(self, questions: List[Dict], detected_fields: List[Dict], form_html: str) -> List[Dict]:
+
+    def _group_by_conditional_logic(self, questions: List[Dict], detected_fields: List[Dict], form_html: str) -> List[
+        Dict]:
         """基于条件逻辑分组"""
         groups = []
-        
+
         # 查找条件逻辑模式
         conditional_patterns = [
             r'data-conditional[^>]*=["\'](.*?)["\']',
@@ -3735,35 +3758,36 @@ class LangGraphFormProcessor:
             r'data-toggled-by[^>]*=["\'](.*?)["\']',  # 🚀 NEW: Support data-toggled-by
             r'data-toggled-by-not[^>]*=["\'](.*?)["\']'  # 🚀 NEW: Support data-toggled-by-not
         ]
-        
+
         import re
         from bs4 import BeautifulSoup
-        
+
         # 🚀 NEW: Enhanced conditional logic grouping
         conditional_relationships = {}  # trigger_field -> [dependent_fields]
         all_conditional_fields = set()
-        
+
         print(f"DEBUG: Conditional Logic Grouping - Starting analysis for {len(questions)} questions")
-        
+
         try:
             soup = BeautifulSoup(form_html, 'html.parser')
-            
+
             # Find all elements with conditional attributes (any of these attributes)
             conditional_elements = set()
-            
+
             # Search for each attribute separately and combine results
             conditional_elements.update(soup.find_all(attrs={'data-toggled-by': True}))
             conditional_elements.update(soup.find_all(attrs={'data-toggled-by-not': True}))
             conditional_elements.update(soup.find_all(attrs={'data-conditional': True}))
             conditional_elements.update(soup.find_all(attrs={'data-show-if': True}))
             conditional_elements.update(soup.find_all(attrs={'data-hide-if': True}))
-            
-            print(f"DEBUG: Conditional Logic Grouping - Found {len(conditional_elements)} elements with conditional attributes")
-            
+
+            print(
+                f"DEBUG: Conditional Logic Grouping - Found {len(conditional_elements)} elements with conditional attributes")
+
             for element in conditional_elements:
                 # Get the field name for this element
                 dependent_field = element.get('name') or element.get('id', '')
-                
+
                 # If element doesn't have name/id, look for form fields inside it
                 if not dependent_field:
                     # Look for input, select, textarea elements inside this container
@@ -3772,57 +3796,59 @@ class LangGraphFormProcessor:
                         field_name = field.get('name') or field.get('id', '')
                         if field_name:
                             dependent_field = field_name
-                            print(f"DEBUG: Conditional Logic Grouping - Found field '{dependent_field}' inside conditional container")
+                            print(
+                                f"DEBUG: Conditional Logic Grouping - Found field '{dependent_field}' inside conditional container")
                             break
-                
+
                 if not dependent_field:
-                    print(f"DEBUG: Conditional Logic Grouping - Skipping element with no field name: {element.name} {element.get('class', '')}")
+                    print(
+                        f"DEBUG: Conditional Logic Grouping - Skipping element with no field name: {element.name} {element.get('class', '')}")
                     continue
-                    
+
                 # Find the trigger condition
-                trigger_condition = (element.get('data-toggled-by') or 
-                                   element.get('data-toggled-by-not') or
-                                   element.get('data-conditional') or
-                                   element.get('data-show-if') or
-                                   element.get('data-hide-if'))
-                
+                trigger_condition = (element.get('data-toggled-by') or
+                                     element.get('data-toggled-by-not') or
+                                     element.get('data-conditional') or
+                                     element.get('data-show-if') or
+                                     element.get('data-hide-if'))
+
                 if trigger_condition:
                     # Parse trigger field from condition (e.g., "hasCertificate_true" -> "hasCertificate")
                     trigger_field = trigger_condition.split('_')[0] if '_' in trigger_condition else trigger_condition
-                    
+
                     # Track the relationship
                     if trigger_field not in conditional_relationships:
                         conditional_relationships[trigger_field] = []
                     conditional_relationships[trigger_field].append(dependent_field)
-                    
+
                     # Add both fields to conditional fields set
                     all_conditional_fields.add(trigger_field)
                     all_conditional_fields.add(dependent_field)
-                    
+
                     print(f"DEBUG: Conditional Logic Grouping - Found dependency: {trigger_field} -> {dependent_field}")
-        
+
         except Exception as e:
             print(f"DEBUG: Conditional Logic Grouping - Error parsing HTML: {e}")
             # Fallback to original pattern matching
             conditional_fields = set()
-            
+
             for pattern in conditional_patterns:
                 matches = re.findall(pattern, form_html, re.IGNORECASE)
                 for match in matches:
                     # 解析条件逻辑中涉及的字段
                     field_names = re.findall(r'(\w+)', match)
                     conditional_fields.update(field_names)
-            
+
             all_conditional_fields = conditional_fields
-        
+
         # Create groups for each conditional relationship
         created_groups = []
         processed_fields = set()
-        
+
         for trigger_field, dependent_fields in conditional_relationships.items():
             # Find questions for trigger field and dependent fields
             group_questions = []
-            
+
             # Add trigger field question
             for question in questions:
                 field_name = question.get('field_name', '')
@@ -3830,7 +3856,7 @@ class LangGraphFormProcessor:
                     group_questions.append(question)
                     processed_fields.add(field_name)
                     break
-            
+
             # Add dependent field questions
             for dependent_field in dependent_fields:
                 for question in questions:
@@ -3839,7 +3865,7 @@ class LangGraphFormProcessor:
                         group_questions.append(question)
                         processed_fields.add(field_name)
                         break
-            
+
             if len(group_questions) > 1:  # Only create group if we have multiple related fields
                 created_groups.append({
                     "group_type": "conditional_logic",
@@ -3848,15 +3874,16 @@ class LangGraphFormProcessor:
                     "priority": 1,
                     "reasoning": f"Questions grouped by conditional dependency: {trigger_field} controls {', '.join(dependent_fields)}"
                 })
-                print(f"DEBUG: Conditional Logic Grouping - Created group for {trigger_field} with {len(group_questions)} questions")
-        
+                print(
+                    f"DEBUG: Conditional Logic Grouping - Created group for {trigger_field} with {len(group_questions)} questions")
+
         # Handle any remaining conditional fields that weren't part of relationships
         remaining_conditional_questions = []
         for question in questions:
             field_name = question.get('field_name', '')
             if field_name in all_conditional_fields and field_name not in processed_fields:
                 remaining_conditional_questions.append(question)
-        
+
         if remaining_conditional_questions:
             created_groups.append({
                 "group_type": "conditional_logic",
@@ -3865,19 +3892,19 @@ class LangGraphFormProcessor:
                 "priority": 2,
                 "reasoning": "Questions with conditional logic that don't have clear dependencies"
             })
-        
+
         print(f"DEBUG: Conditional Logic Grouping - Final result: {len(created_groups)} groups created")
         for group in created_groups:
             group_questions = group.get("questions", [])
             field_names = [q.get("field_name", "") for q in group_questions]
             print(f"DEBUG: Conditional Logic Grouping - Group '{group.get('group_name', '')}': {field_names}")
-        
+
         return created_groups
-    
+
     def _group_by_field_patterns(self, questions: List[Dict]) -> List[Dict]:
         """基于字段名规律分组"""
         groups = []
-        
+
         # 定义字段模式
         field_patterns = {
             "address": ["address", "street", "city", "state", "zip", "country", "postal"],
@@ -3889,21 +3916,21 @@ class LangGraphFormProcessor:
             "travel": ["travel", "trip", "visit", "destination", "purpose", "duration"],
             "financial": ["income", "savings", "money", "amount", "currency", "bank"]
         }
-        
+
         # 按模式分组
         for pattern_name, keywords in field_patterns.items():
             pattern_questions = []
-            
+
             for question in questions:
                 field_name = question.get('field_name', '').lower()
                 field_label = question.get('field_label', '').lower()
                 question_text = question.get('question', '').lower()
-                
+
                 # 检查字段是否匹配模式
-                if any(keyword in field_name or keyword in field_label or keyword in question_text 
+                if any(keyword in field_name or keyword in field_label or keyword in question_text
                        for keyword in keywords):
                     pattern_questions.append(question)
-            
+
             if pattern_questions:
                 groups.append({
                     "group_type": "field_pattern",
@@ -3912,67 +3939,67 @@ class LangGraphFormProcessor:
                     "priority": 3,
                     "reasoning": f"Questions grouped by field pattern: {pattern_name}"
                 })
-        
+
         return groups
-    
+
     def _find_ungrouped_questions(self, questions: List[Dict], existing_groups: List[Dict]) -> List[Dict]:
         """找出未分组的问题"""
         grouped_questions = set()
-        
+
         for group in existing_groups:
             for question in group.get('questions', []):
                 question_id = question.get('field_name', '')
                 if question_id:
                     grouped_questions.add(question_id)
-        
+
         ungrouped = []
         for question in questions:
             question_id = question.get('field_name', '')
             if question_id not in grouped_questions:
                 ungrouped.append(question)
-        
+
         return ungrouped
-    
+
     def _filter_complex_questions(self, questions: List[Dict]) -> List[Dict]:
         """过滤出复杂/不确定的问题"""
         complex_questions = []
-        
+
         for question in questions:
             # 判断是否为复杂问题
             is_complex = False
-            
+
             # 检查是否有复杂的选项
             options = question.get('options', [])
             if len(options) > 5:  # 选项过多
                 is_complex = True
-            
+
             # 检查是否有复杂的问题描述
             question_text = question.get('question', '')
             if len(question_text) > 100:  # 问题描述过长
                 is_complex = True
-            
+
             # 检查是否有复杂的字段名
             field_name = question.get('field_name', '')
             if len(field_name) > 50 or field_name.count('_') > 3:  # 字段名复杂
                 is_complex = True
-            
+
             if is_complex:
                 complex_questions.append(question)
-        
+
         return complex_questions
-    
-    def _analyze_question_batch_with_ai(self, questions: List[Dict], existing_groups: List[Dict], 
-                                      workflow_id: str) -> List[Dict]:
+
+    def _analyze_question_batch_with_ai(self, questions: List[Dict], existing_groups: List[Dict],
+                                        workflow_id: str) -> List[Dict]:
         """小批量AI分析问题 - 包含HTML层级结构信息"""
         if len(questions) == 0:
             return []
-        
+
         # 构建增强的上下文信息 - 包含HTML层级结构
         enhanced_questions = []
         for i, question in enumerate(questions):
             # 获取HTML层级结构信息
             hierarchy_info = self._extract_question_hierarchy(question)
-            
+
             enhanced_questions.append({
                 "index": i,
                 "field_name": question.get("field_name", ""),
@@ -3985,32 +4012,32 @@ class LangGraphFormProcessor:
                 "html_depth": hierarchy_info.get("depth", 0),
                 "nearby_labels": hierarchy_info.get("nearby_labels", [])
             })
-        
+
         context = {
-            "existing_groups": [{"name": g.get("group_name", ""), "type": g.get("group_type", "")} 
-                              for g in existing_groups],
+            "existing_groups": [{"name": g.get("group_name", ""), "type": g.get("group_type", "")}
+                                for g in existing_groups],
             "questions": enhanced_questions
         }
-        
+
         prompt = f"""
         请分析以下{len(questions)}个表单字段的语义关系和层级结构。
-        
+
         现有分组：{json.dumps(context['existing_groups'], ensure_ascii=False)}
-        
+
         待分析字段（包含HTML层级结构）：{json.dumps(context['questions'], indent=2, ensure_ascii=False)}
-        
+
         ## 重要提示：
         你需要特别关注HTML层级结构信息来正确分组。例如：
         - 如果两个"名字"字段在不同的html_container中，它们应该分到不同组
         - 如果一个"父亲"字段和"名字"字段在同一个html_container中，它们应该分到同一组
         - html_depth表示嵌套层级，相同层级的字段更可能相关
         - nearby_labels提供了周围的标签信息，有助于理解语义关系
-        
+
         ## 分组策略：
         1. **层级优先**：优先基于HTML层级结构分组
         2. **语义相关**：在同一层级内按语义相关性分组
         3. **避免跨层级**：避免将不同层级的字段分到同一组
-        
+
         请返回JSON格式：
         {{
             "groups": [
@@ -4021,24 +4048,24 @@ class LangGraphFormProcessor:
                 }}
             ]
         }}
-        
+
         要求：
         1. 每组最多5个字段
         2. 优先考虑HTML层级结构
         3. 避免重复现有分组
         4. 确保相关字段在同一组中
         """
-        
+
         try:
             messages = [
                 {"role": "system", "content": "你是表单字段分析专家，特别擅长基于HTML层级结构进行智能分组。"},
                 {"role": "user", "content": prompt}
             ]
-            
+
             response = self._invoke_llm(messages, workflow_id)
             if response and response.content:
                 result = robust_json_parse(response.content)
-                
+
                 # 转换AI结果为标准格式
                 ai_groups = []
                 for group in result.get("groups", []):
@@ -4046,7 +4073,7 @@ class LangGraphFormProcessor:
                     for idx in group.get("questions", []):
                         if 0 <= idx < len(questions):
                             group_questions.append(questions[idx])
-                    
+
                     if group_questions:
                         ai_groups.append({
                             "group_type": "ai_enhanced",
@@ -4055,14 +4082,14 @@ class LangGraphFormProcessor:
                             "priority": 4,
                             "reasoning": group.get("reasoning", "")
                         })
-                
+
                 return ai_groups
-                
+
         except Exception as e:
             print(f"[workflow_id:{workflow_id}] DEBUG: AI batch analysis failed: {str(e)}")
-        
+
         return []
-    
+
     def _extract_question_hierarchy(self, question: Dict) -> Dict:
         """提取问题的HTML层级结构信息"""
         hierarchy_info = {
@@ -4072,28 +4099,28 @@ class LangGraphFormProcessor:
             "depth": 0,
             "nearby_labels": []
         }
-        
+
         try:
             # 从question中获取HTML相关信息
             field_selector = question.get("field_selector", "")
             if not field_selector:
                 return hierarchy_info
-            
+
             # 分析field_selector来推断层级结构
             # 例如: "#container1 .section2 input[name='father1_name']"
             selector_parts = field_selector.split()
             hierarchy_info["depth"] = len(selector_parts)
-            
+
             # 提取容器信息
             for part in selector_parts:
                 if part.startswith("#"):
                     hierarchy_info["container"] = part[1:]  # 去掉#
                 elif part.startswith("."):
-                    hierarchy_info["section"] = part[1:]   # 去掉.
+                    hierarchy_info["section"] = part[1:]  # 去掉.
                 elif "[" in part and "]" in part:
                     # 这是最终的字段选择器
                     hierarchy_info["parent"] = part.split("[")[0]
-            
+
             # 从field_name中提取层级信息
             field_name = question.get("field_name", "")
             if field_name:
@@ -4101,33 +4128,33 @@ class LangGraphFormProcessor:
                 name_parts = field_name.split("_")
                 if len(name_parts) > 1:
                     hierarchy_info["nearby_labels"] = name_parts[:-1]  # 除了最后一个部分
-            
+
             # 从field_label中提取附近标签信息
             field_label = question.get("field_label", "")
             if field_label:
                 hierarchy_info["nearby_labels"].append(field_label)
-            
+
         except Exception as e:
             print(f"DEBUG: Failed to extract hierarchy info: {str(e)}")
-        
+
         return hierarchy_info
-    
+
     def _merge_question_groups(self, structural_groups: List[Dict],
-                             ai_enhanced_groups: List[Dict], workflow_id: str) -> List[Dict]:
+                               ai_enhanced_groups: List[Dict], workflow_id: str) -> List[Dict]:
         """合并所有分组"""
         all_groups = []
-        
+
         # 按优先级合并
         all_groups.extend(structural_groups)
         all_groups.extend(ai_enhanced_groups)
-        
+
         # 去重并排序
         final_groups = []
         seen_questions = set()
-        
+
         # 按优先级排序
         all_groups.sort(key=lambda x: x.get("priority", 5))
-        
+
         for group in all_groups:
             # 移除已经分组的问题
             unique_questions = []
@@ -4136,78 +4163,79 @@ class LangGraphFormProcessor:
                 if question_id not in seen_questions:
                     unique_questions.append(question)
                     seen_questions.add(question_id)
-            
+
             if unique_questions:
                 group["questions"] = unique_questions
                 final_groups.append(group)
-        
+
         print(f"[workflow_id:{workflow_id}] DEBUG: Final groups: {len(final_groups)}")
         return final_groups
-    
+
     def _create_simple_fallback_groups(self, questions: List[Dict]) -> List[Dict]:
         """简单回退分组"""
         if not questions:
             return []
-        
+
         # 简单按数量分组
         batch_size = 10
         groups = []
-        
+
         for i in range(0, len(questions), batch_size):
             batch = questions[i:i + batch_size]
             groups.append({
                 "group_type": "simple_batch",
-                "group_name": f"Question Group {i//batch_size + 1}",
+                "group_name": f"Question Group {i // batch_size + 1}",
                 "questions": batch,
                 "priority": 5,
                 "reasoning": "Simple fallback grouping"
             })
-        
+
         return groups
-    
+
     def _semantic_question_filter_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """🚀 ENHANCED: Apply semantic-based question filtering with explicit pattern fallbacks"""
         try:
             workflow_id = state.get("workflow_id", "unknown")
             print(f"[workflow_id:{workflow_id}] DEBUG: Semantic Question Filter - Starting")
-            
+
             semantic_groups = state.get("semantic_question_groups", [])
             ai_answers = state.get("ai_answers", [])
             field_questions = state.get("field_questions", [])
-            
+
             if not ai_answers:
                 print(f"[workflow_id:{workflow_id}] DEBUG: No AI answers for semantic filtering")
                 state["semantically_filtered_questions"] = field_questions
                 return state
-            
+
             # Create answer lookup
             answer_lookup = {}
             for answer in ai_answers:
                 field_name = answer.get("field_name", "")
                 answer_text = answer.get("answer", "").lower().strip()
                 answer_lookup[field_name] = answer_text
-            
+
             print(f"[workflow_id:{workflow_id}] DEBUG: AI Answers for semantic filtering: {answer_lookup}")
-            
+
             # Apply semantic filtering rules
             excluded_question_indices = set()
-            
+
             # 🚀 STEP 1: Process AI-generated semantic groups (if available) - FIXED INDEX MATCHING
             if semantic_groups:
-                print(f"[workflow_id:{workflow_id}] DEBUG: Processing {len(semantic_groups)} AI-generated semantic groups")
-                
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: Processing {len(semantic_groups)} AI-generated semantic groups")
+
                 for group in semantic_groups:
                     if group["group_type"] == "mutually_exclusive":
                         group_name = group.get("group_name", "")
                         exclusion_logic = group.get("exclusion_logic", "if_yes_then_exclude")
-                        
+
                         print(f"[workflow_id:{workflow_id}] DEBUG: Processing mutually exclusive group: {group_name}")
-                        
+
                         # 🚀 CRITICAL FIX: Use field name matching instead of index matching
                         # Find trigger field by checking if it exists in answer_lookup
                         trigger_field_name = None
                         trigger_answer = None
-                        
+
                         # For income/savings mutual exclusion, look for the trigger field
                         if "income" in group_name.lower() and "savings" in group_name.lower():
                             # Look for hasNoOtherIncome field
@@ -4216,130 +4244,145 @@ class LangGraphFormProcessor:
                                     trigger_field_name = field_name
                                     trigger_answer = answer
                                     break
-                        
+
                         if trigger_field_name and trigger_answer is not None:
-                            print(f"[workflow_id:{workflow_id}] DEBUG: Found trigger field: {trigger_field_name}, Answer: {trigger_answer}")
-                            
+                            print(
+                                f"[workflow_id:{workflow_id}] DEBUG: Found trigger field: {trigger_field_name}, Answer: {trigger_answer}")
+
                             # 🚀 CRITICAL FIX: Enhanced exclusion logic for income/savings mutual exclusion
                             should_exclude = False
-                            
+
                             # Special handling for income/savings mutual exclusion
                             if "hasnootherincome" in trigger_field_name.lower() or "no_other_income" in trigger_field_name.lower():
                                 # For "hasNoOtherIncome" field, if the answer indicates "no other income", exclude other income fields
                                 # Handle both boolean values and text responses
-                                if (trigger_answer == "true" or 
-                                    trigger_answer == "yes" or 
-                                    any(phrase in trigger_answer for phrase in [
-                                        "do not have", "don't have", "no other", "no additional", 
-                                        "no income", "no savings", "none", "没有", "无"
-                                    ])):
+                                if (trigger_answer == "true" or
+                                        trigger_answer == "yes" or
+                                        any(phrase in trigger_answer for phrase in [
+                                            "do not have", "don't have", "no other", "no additional",
+                                            "no income", "no savings", "none", "没有", "无"
+                                        ])):
                                     should_exclude = True
-                                    print(f"[workflow_id:{workflow_id}] DEBUG: 🎯 Income/Savings exclusion triggered by: {trigger_answer}")
+                                    print(
+                                        f"[workflow_id:{workflow_id}] DEBUG: 🎯 Income/Savings exclusion triggered by: {trigger_answer}")
                             else:
                                 # Original logic for other exclusion types
                                 if exclusion_logic == "if_yes_then_exclude":
                                     should_exclude = any(word in trigger_answer for word in ["yes", "true", "是", "有"])
                                 elif exclusion_logic == "if_no_then_exclude":
-                                    should_exclude = any(word in trigger_answer for word in ["no", "false", "否", "don't", "not", "没有"])
-                            
+                                    should_exclude = any(word in trigger_answer for word in
+                                                         ["no", "false", "否", "don't", "not", "没有"])
+
                             if should_exclude:
                                 # 🚀 CRITICAL FIX: Use field name matching to find questions to exclude
                                 pattern_excluded_count = 0
                                 for i, question in enumerate(field_questions):
                                     question_field_name = question.get("field_name", "")
-                                    
+
                                     # Check if this is an income/savings field that should be excluded
                                     income_savings_patterns = [
                                         "typeofincome", "sourceof", "sourceref", "amount", "savings", "income",
                                         "howmuch", "monthly", "weekly", "annual", "currency", "moneyinbank",
                                         "regularincome", "moneyinbankamount", "currencyref"
                                     ]
-                                    
+
                                     # Don't exclude the trigger field itself
                                     if question_field_name == trigger_field_name:
                                         continue
-                                        
+
                                     # Check if this field should be excluded
                                     # Remove array indices and dots for better pattern matching
-                                    clean_field_name = question_field_name.lower().replace('[', '').replace(']', '').replace('.', '').replace('_', '')
-                                    
+                                    clean_field_name = question_field_name.lower().replace('[', '').replace(']',
+                                                                                                            '').replace(
+                                        '.', '').replace('_', '')
+
                                     for pattern in income_savings_patterns:
                                         if pattern.lower() in clean_field_name:
                                             if i not in excluded_question_indices:
                                                 excluded_question_indices.add(i)
                                                 pattern_excluded_count += 1
-                                                print(f"[workflow_id:{workflow_id}] DEBUG: AI Group excluded income/savings question {i}: {question_field_name} (matched: {pattern})")
+                                                print(
+                                                    f"[workflow_id:{workflow_id}] DEBUG: AI Group excluded income/savings question {i}: {question_field_name} (matched: {pattern})")
                                             break
-                                
-                                print(f"[workflow_id:{workflow_id}] DEBUG: ✅ AI Group excluded {pattern_excluded_count} questions due to trigger: {trigger_answer}")
+
+                                print(
+                                    f"[workflow_id:{workflow_id}] DEBUG: ✅ AI Group excluded {pattern_excluded_count} questions due to trigger: {trigger_answer}")
                             else:
-                                print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No exclusion triggered for: {trigger_answer}")
+                                print(
+                                    f"[workflow_id:{workflow_id}] DEBUG: ➡️ No exclusion triggered for: {trigger_answer}")
                         else:
-                            print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No trigger field found for group: {group_name}")
-            
+                            print(
+                                f"[workflow_id:{workflow_id}] DEBUG: ➡️ No trigger field found for group: {group_name}")
+
             # 🚀 STEP 2: Apply explicit pattern-based fallback filtering (ENHANCED)
             print(f"[workflow_id:{workflow_id}] DEBUG: Applying explicit pattern-based filtering as fallback")
-            
+
             # Enhanced income/savings mutual exclusion fallback
             income_savings_exclusion_triggered = False
             for field_name, answer in answer_lookup.items():
                 # Check for income/savings mutual exclusion patterns
-                if any(pattern in field_name.lower() for pattern in ["hasnootherincome", "no_other_income", "noadditionincome"]):
+                if any(pattern in field_name.lower() for pattern in
+                       ["hasnootherincome", "no_other_income", "noadditionincome"]):
                     # Handle both boolean values and text responses
-                    if (answer == "true" or 
-                        answer == "yes" or 
-                        any(phrase in answer for phrase in [
-                            "do not have", "don't have", "no other", "no additional", 
-                            "no income", "no savings", "none", "没有", "无"
-                        ])):
-                        print(f"[workflow_id:{workflow_id}] DEBUG: Found income/savings exclusion trigger: {field_name} = {answer}")
+                    if (answer == "true" or
+                            answer == "yes" or
+                            any(phrase in answer for phrase in [
+                                "do not have", "don't have", "no other", "no additional",
+                                "no income", "no savings", "none", "没有", "无"
+                            ])):
+                        print(
+                            f"[workflow_id:{workflow_id}] DEBUG: Found income/savings exclusion trigger: {field_name} = {answer}")
                         income_savings_exclusion_triggered = True
-                        
+
                         # Exclude all other income/savings related questions
                         pattern_excluded_count = 0
                         for i, question in enumerate(field_questions):
                             question_field_name = question.get("field_name", "")
-                            
+
                             # Check if this is an income/savings field that should be excluded
                             income_savings_patterns = [
                                 "typeofincome", "sourceof", "sourceref", "amount", "savings", "income",
                                 "howmuch", "monthly", "weekly", "annual", "currency", "moneyinbank",
                                 "regularincome", "moneyinbankamount", "currencyref"
                             ]
-                            
+
                             # Don't exclude the trigger field itself
                             if question_field_name == field_name:
                                 continue
-                                
+
                             # Check if this field should be excluded
                             # Remove array indices and dots for better pattern matching
-                            clean_field_name = question_field_name.lower().replace('[', '').replace(']', '').replace('.', '').replace('_', '')
-                            
+                            clean_field_name = question_field_name.lower().replace('[', '').replace(']', '').replace(
+                                '.', '').replace('_', '')
+
                             for pattern in income_savings_patterns:
                                 if pattern.lower() in clean_field_name:
                                     if i not in excluded_question_indices:
                                         excluded_question_indices.add(i)
                                         pattern_excluded_count += 1
-                                        print(f"[workflow_id:{workflow_id}] DEBUG: Pattern excluded income/savings question {i}: {question_field_name} (matched: {pattern})")
+                                        print(
+                                            f"[workflow_id:{workflow_id}] DEBUG: Pattern excluded income/savings question {i}: {question_field_name} (matched: {pattern})")
                                     break
-                        
-                        print(f"[workflow_id:{workflow_id}] DEBUG: ✅ Income/Savings exclusion pattern excluded {pattern_excluded_count} questions")
+
+                        print(
+                            f"[workflow_id:{workflow_id}] DEBUG: ✅ Income/Savings exclusion pattern excluded {pattern_excluded_count} questions")
                         break
-            
+
             # Find trigger field for parent exclusion
             parent_trigger_found = False
             if not income_savings_exclusion_triggered:  # Only check parent exclusion if income/savings wasn't triggered
                 for field_name, answer in answer_lookup.items():
                     if "parentIsUnknown" in field_name or "parent" in field_name.lower() and "unknown" in field_name.lower():
                         if answer == "true" or "don't have" in answer or "do not have" in answer:
-                            print(f"[workflow_id:{workflow_id}] DEBUG: Found parent exclusion trigger: {field_name} = {answer}")
+                            print(
+                                f"[workflow_id:{workflow_id}] DEBUG: Found parent exclusion trigger: {field_name} = {answer}")
                             parent_trigger_found = True
-                        
+
                         # Exclude all parent-related questions
                         pattern_excluded_count = 0
                         for i, question in enumerate(field_questions):
                             question_field_name = question.get("field_name", "")
-                            
+
                             # Check if this is a parent-related field that should be excluded
                             parent_field_patterns = [
                                 "parent.givenName", "parent.familyName", "parent.firstName", "parent.lastName",
@@ -4348,137 +4391,142 @@ class LangGraphFormProcessor:
                                 "parent.relationshipRef", "parent.relationship",
                                 "parent.hadAlwaysSameNationality", "parent.nationalityAtApplicantsBirthRef"
                             ]
-                            
+
                             for pattern in parent_field_patterns:
                                 if pattern.lower() in question_field_name.lower():
                                     if i not in excluded_question_indices:
                                         excluded_question_indices.add(i)
                                         pattern_excluded_count += 1
-                                        print(f"[workflow_id:{workflow_id}] DEBUG: Pattern excluded question {i}: {question_field_name}")
+                                        print(
+                                            f"[workflow_id:{workflow_id}] DEBUG: Pattern excluded question {i}: {question_field_name}")
                                     break
-                        
-                        print(f"[workflow_id:{workflow_id}] DEBUG: ✅ Parent exclusion pattern excluded {pattern_excluded_count} questions")
+
+                        print(
+                            f"[workflow_id:{workflow_id}] DEBUG: ✅ Parent exclusion pattern excluded {pattern_excluded_count} questions")
                         break
-            
+
             if not parent_trigger_found and not income_savings_exclusion_triggered:
                 print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No parent or income/savings exclusion triggers found")
-            
+
             # Filter out excluded questions
             filtered_questions = []
             for i, question in enumerate(field_questions):
                 if i not in excluded_question_indices:
                     filtered_questions.append(question)
                 else:
-                    print(f"[workflow_id:{workflow_id}] DEBUG: 🗑️ Filtered out question {i}: {question.get('question', '')[:50]}...")
-            
+                    print(
+                        f"[workflow_id:{workflow_id}] DEBUG: 🗑️ Filtered out question {i}: {question.get('question', '')[:50]}...")
+
             state["semantically_filtered_questions"] = filtered_questions
-            print(f"[workflow_id:{workflow_id}] DEBUG: Semantic filtering: {len(field_questions)} → {len(filtered_questions)} questions")
-            
+            print(
+                f"[workflow_id:{workflow_id}] DEBUG: Semantic filtering: {len(field_questions)} → {len(filtered_questions)} questions")
+
             # Log summary of exclusions
             if excluded_question_indices:
-                print(f"[workflow_id:{workflow_id}] DEBUG: ✅ Successfully excluded {len(excluded_question_indices)} questions using semantic filtering")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: ✅ Successfully excluded {len(excluded_question_indices)} questions using semantic filtering")
             else:
                 print(f"[workflow_id:{workflow_id}] DEBUG: ➡️ No questions were excluded by semantic filtering")
-            
+
         except Exception as e:
             print(f"[workflow_id:{workflow_id}] DEBUG: Semantic filtering error: {str(e)}")
             state["semantically_filtered_questions"] = state.get("field_questions", [])
-            
+
         return state
 
     def _conditional_field_analyzer_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """🚀 NEW: Analyze AI answers to determine which field groups should be activated"""
         try:
             print("DEBUG: Conditional Field Analyzer - Starting answer-based field group analysis")
-            
+
             ai_answers = state.get("ai_answers", [])
             detected_fields = state.get("detected_fields", [])
-            
+
             if not ai_answers:
                 print("DEBUG: Conditional Field Analyzer - No AI answers to analyze")
                 state["active_field_groups"] = []
                 return state
-            
+
             # 🚀 STEP 1: Map AI semantic answers to actual field selections
             field_selections = self._map_semantic_to_field_selections(ai_answers, detected_fields)
-            
+
             # 🚀 STEP 2: Determine which conditional field groups should be activated
             active_groups = self._determine_active_field_groups(field_selections, detected_fields)
-            
+
             # 🚀 STEP 3: Filter field questions based on conditional logic
             filtered_questions = self._apply_conditional_field_filtering(
-                state["field_questions"], 
-                active_groups, 
+                state["field_questions"],
+                active_groups,
                 field_selections
             )
-            
+
             # 🚀 STEP 4: Update state with conditional analysis results
             state["field_selections"] = field_selections
-            state["active_field_groups"] = active_groups  
+            state["active_field_groups"] = active_groups
             state["conditionally_filtered_questions"] = filtered_questions
-            
+
             print(f"DEBUG: Conditional Field Analyzer - Mapped {len(field_selections)} field selections")
             print(f"DEBUG: Conditional Field Analyzer - Activated {len(active_groups)} field groups")
-            
+
         except Exception as e:
             print(f"DEBUG: Conditional Field Analyzer - Error: {str(e)}")
             state["error_details"] = f"Conditional field analysis failed: {str(e)}"
-            
+
         return state
-    
+
     def _map_semantic_to_field_selections(self, ai_answers: List[Dict], detected_fields: List[Dict]) -> Dict[str, str]:
         """🚀 NEW: Map AI semantic answers to specific field option selections"""
         field_selections = {}
-        
+
         for answer in ai_answers:
             field_name = answer.get("field_name", "")
             raw_answer = answer.get("answer", "")
             reasoning = answer.get("reasoning", "")
-            
+
             # Find the corresponding detected field
             field_info = None
             for field in detected_fields:
                 if field.get("field_name") == field_name:
                     field_info = field
                     break
-            
+
             if not field_info:
                 continue
-                
+
             field_type = field_info.get("type", "")
             field_options = field_info.get("field_options", [])
-            
+
             # 🎯 For radio/checkbox fields, map semantic answer to specific option
             if field_type in ["radio", "checkbox"] and field_options:
                 selected_option = self._match_semantic_answer_to_option(raw_answer, reasoning, field_options)
                 if selected_option:
                     field_selections[field_name] = selected_option
                     print(f"DEBUG: Mapped '{raw_answer}' → '{selected_option}' for field '{field_name}'")
-            
+
             # 🎯 For text/select fields, use answer directly
             elif field_type in ["text", "select", "email", "number"]:
                 field_selections[field_name] = raw_answer
-        
+
         return field_selections
-    
+
     def _match_semantic_answer_to_option(self, ai_answer: str, reasoning: str, field_options: List[Dict]) -> str:
         """🚀 NEW: Match AI semantic answer to specific field option"""
         ai_text = f"{ai_answer} {reasoning}".lower()
-        
+
         best_match = None
         highest_score = 0
-        
+
         for option in field_options:
             option_text = option.get("text", "").lower()
             option_value = option.get("value", "")
-            
+
             # Calculate semantic similarity score
             score = 0
-            
+
             # Direct keyword matching
             if option_text in ai_text or ai_text in option_text:
                 score += 50
-            
+
             # Common semantic patterns for visa forms
             semantic_mappings = {
                 "married": ["married", "spouse", "husband", "wife", "wed", "marriage"],
@@ -4489,26 +4537,27 @@ class LangGraphFormProcessor:
                 "employed": ["employed", "working", "job", "work", "employee"],
                 "unemployed": ["unemployed", "not working", "jobless", "retired", "student"]
             }
-            
+
             for pattern, keywords in semantic_mappings.items():
                 if pattern in option_text:
                     for keyword in keywords:
                         if keyword in ai_text:
                             score += 30
                             break
-            
+
             # Update best match
             if score > highest_score:
                 highest_score = score
                 best_match = option_value
-        
+
         return best_match if highest_score >= 30 else None
-    
-    def _determine_active_field_groups(self, field_selections: Dict[str, str], detected_fields: List[Dict]) -> List[Dict]:
+
+    def _determine_active_field_groups(self, field_selections: Dict[str, str], detected_fields: List[Dict]) -> List[
+        Dict]:
         """🚀 ENHANCED: Determine which field groups should be activated/deactivated based on selections"""
         active_groups = []
         excluded_field_names = set()  # Track fields that should be excluded
-        
+
         # 🚀 STEP 1: Handle exclusion patterns first (higher priority)
         exclusion_patterns = {
             "parent_exclusion": {
@@ -4530,21 +4579,21 @@ class LangGraphFormProcessor:
                 "description": "Exclude employment details when user is unemployed"
             }
         }
-        
+
         print(f"DEBUG: Field Selections for exclusion analysis: {field_selections}")
-        
+
         for exclusion_name, pattern in exclusion_patterns.items():
             exclusion_triggered = False
             trigger_info = None
-            
+
             for field_name, selected_value in field_selections.items():
                 field_name_lower = field_name.lower()
                 selected_value_lower = selected_value.lower()
-                
+
                 # Check if this field triggers an exclusion
                 trigger_field_match = any(p in field_name_lower for p in pattern["trigger_field_patterns"])
                 exclusion_value_match = any(v in selected_value_lower for v in pattern["exclusion_values"])
-                
+
                 if trigger_field_match and exclusion_value_match:
                     exclusion_triggered = True
                     trigger_info = {
@@ -4554,7 +4603,7 @@ class LangGraphFormProcessor:
                     }
                     print(f"DEBUG: 🚫 EXCLUSION TRIGGERED - {pattern['description']}: {trigger_info['reasoning']}")
                     break
-            
+
             if exclusion_triggered:
                 # Find fields to exclude based on patterns
                 excluded_count = 0
@@ -4564,9 +4613,9 @@ class LangGraphFormProcessor:
                         excluded_field_names.add(field.get("field_name", ""))
                         excluded_count += 1
                         print(f"DEBUG: 🚫 Excluding field: {field.get('field_name', '')}")
-                
+
                 print(f"DEBUG: 🚫 Exclusion '{exclusion_name}' triggered, excluded {excluded_count} fields")
-        
+
         # 🚀 STEP 2: Handle inclusion patterns (lower priority)
         inclusion_patterns = {
             "spouse_info": {
@@ -4575,8 +4624,9 @@ class LangGraphFormProcessor:
                 "activated_field_patterns": ["spouse", "partner", "husband", "wife", "marriage"]
             },
             "parent_info": {
-                "trigger_field_patterns": ["parent", "family", "guardian"],  
-                "trigger_values": ["have", "yes", "details", "known", "alive", "false"],  # Include "false" for parentIsUnknown:false
+                "trigger_field_patterns": ["parent", "family", "guardian"],
+                "trigger_values": ["have", "yes", "details", "known", "alive", "false"],
+                # Include "false" for parentIsUnknown:false
                 "activated_field_patterns": ["father", "mother", "parent", "guardian"]
             },
             "employment_details": {
@@ -4590,18 +4640,18 @@ class LangGraphFormProcessor:
                 "activated_field_patterns": ["country", "visit", "trip", "travel", "destination"]
             }
         }
-        
+
         for group_name, pattern in inclusion_patterns.items():
             group_activated = False
             trigger_info = None
-            
+
             for field_name, selected_value in field_selections.items():
                 field_name_lower = field_name.lower()
                 selected_value_lower = selected_value.lower()
-                
+
                 trigger_field_match = any(p in field_name_lower for p in pattern["trigger_field_patterns"])
                 trigger_value_match = any(v in selected_value_lower for v in pattern["trigger_values"])
-                
+
                 if trigger_field_match and trigger_value_match:
                     group_activated = True
                     trigger_info = {
@@ -4611,7 +4661,7 @@ class LangGraphFormProcessor:
                     }
                     print(f"DEBUG: ✅ INCLUSION TRIGGERED - {trigger_info['reasoning']}")
                     break
-            
+
             if group_activated:
                 # Find fields that belong to this activated group
                 group_fields = []
@@ -4619,12 +4669,12 @@ class LangGraphFormProcessor:
                     field_name_lower = field.get("field_name", "").lower()
                     field_label_lower = field.get("field_label", "").lower()
                     field_text = f"{field_name_lower} {field_label_lower}"
-                    
+
                     # Only include if not already excluded
                     if (field.get("field_name", "") not in excluded_field_names and
-                        any(p in field_text for p in pattern["activated_field_patterns"])):
+                            any(p in field_text for p in pattern["activated_field_patterns"])):
                         group_fields.append(field)
-                
+
                 if group_fields:
                     active_groups.append({
                         "group_name": group_name,
@@ -4633,50 +4683,51 @@ class LangGraphFormProcessor:
                         "field_count": len(group_fields)
                     })
                     print(f"DEBUG: ✅ Activated field group '{group_name}' with {len(group_fields)} fields")
-        
+
         # 🚀 STEP 3: Create summary
         print(f"DEBUG: 📊 SUMMARY - Excluded {len(excluded_field_names)} fields, Activated {len(active_groups)} groups")
         if excluded_field_names:
             print(f"DEBUG: 📊 Excluded fields: {list(excluded_field_names)}")
-        
+
         # Store exclusion info in state for downstream nodes
         for group in active_groups:
             group["excluded_fields"] = list(excluded_field_names)
-        
+
         return active_groups
-    
-    def _apply_conditional_field_filtering(self, questions: List[Dict], active_groups: List[Dict], field_selections: Dict[str, str]) -> List[Dict]:
+
+    def _apply_conditional_field_filtering(self, questions: List[Dict], active_groups: List[Dict],
+                                           field_selections: Dict[str, str]) -> List[Dict]:
         """🚀 ENHANCED: Filter questions based on both activated and excluded field groups"""
-        
+
         # Get list of fields that should be excluded (higher priority)
         excluded_field_names = set()
         if active_groups:
             for group in active_groups:
                 excluded_fields = group.get("excluded_fields", [])
                 excluded_field_names.update(excluded_fields)
-        
+
         # Get list of fields that should be included
         included_field_names = set()
-        
+
         # Include all trigger fields (fields that caused activation/exclusion)
         for field_name in field_selections.keys():
             included_field_names.add(field_name)
-        
+
         # Include fields from activated groups (only if not excluded)
         for group in active_groups:
             for field in group["group_fields"]:
                 field_name = field.get("field_name", "")
                 if field_name and field_name not in excluded_field_names:
                     included_field_names.add(field_name)
-        
+
         # Always include basic required fields (not conditional) unless explicitly excluded
         basic_field_patterns = ["name", "email", "phone", "address", "passport", "nationality"]
         for question in questions:
             question_field_name = question.get("field_name", "").lower()
-            if (any(pattern in question_field_name for pattern in basic_field_patterns) and 
-                question.get("field_name", "") not in excluded_field_names):
+            if (any(pattern in question_field_name for pattern in basic_field_patterns) and
+                    question.get("field_name", "") not in excluded_field_names):
                 included_field_names.add(question.get("field_name", ""))
-        
+
         # If no groups are active but we have exclusions, include all non-excluded fields
         if not active_groups and excluded_field_names:
             print("DEBUG: No active groups but have exclusions, including all non-excluded fields")
@@ -4687,31 +4738,31 @@ class LangGraphFormProcessor:
         elif not active_groups and not excluded_field_names:
             print("DEBUG: No active field groups and no exclusions, keeping all questions")
             return questions
-        
+
         # Filter questions to only include relevant ones
         filtered_questions = []
         excluded_count = 0
-        
+
         for question in questions:
             question_field_name = question.get("field_name", "")
-            
+
             # Exclude if explicitly in excluded list
             if question_field_name in excluded_field_names:
                 excluded_count += 1
                 print(f"DEBUG: 🚫 Excluded field '{question_field_name}' (in exclusion list)")
                 continue
-            
+
             # Include if it's in our included set or if we're in inclusion mode
             if question_field_name in included_field_names:
                 filtered_questions.append(question)
             else:
                 excluded_count += 1
                 print(f"DEBUG: 🚫 Filtered out question for field '{question_field_name}' (not in active groups)")
-        
+
         print(f"DEBUG: 📊 Conditional filtering kept {len(filtered_questions)} questions, excluded {excluded_count}")
         if excluded_field_names:
             print(f"DEBUG: 📊 Explicitly excluded {len(excluded_field_names)} fields: {list(excluded_field_names)}")
-        
+
         return filtered_questions
 
     def _batch_analyze_fields_sync(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
@@ -4740,71 +4791,71 @@ class LangGraphFormProcessor:
 
             # 🚀 OPTIMIZED: Simplified prompt to reduce token usage but maintain accuracy
             prompt = f"""
-# Task Description
-You are the backend of a Google plugin, analyzing HTML pages sent from the frontend, analyzing form items that need to be filled, retrieving provided customer data, filling form content, and returning it to the frontend in a fixed JSON format.
-
-# Important Context - UK Visa Website
-⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
-- Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
-- Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
-- When determining address types or answering location-related questions, apply UK-centric logic
-
-# Fields to analyze ({len(questions)} fields):
-{json.dumps(fields_data, indent=1, ensure_ascii=False)}
-
-# User Data:
-{json.dumps(profile_data, indent=1, ensure_ascii=False)}
-
-# Fallback Data:
-{json.dumps(profile_dummy_data, indent=1, ensure_ascii=False) if profile_dummy_data else "None"}
-
-# Key Instructions:
-1. **Semantic Matching** - Understand field meaning, not just field names
-2. **Reverse Semantics**: "I do not have X" + "hasX: false" = answer "true" (because user indeed doesn't have X)
-3. **Option Matching**: Answer must be exact option text/value, not original data value
-4. **Range Matching**: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
-5. **Country Reasoning**: European countries → "European Economic Area" or "schengen"
-6. **Confidence**: 90+ perfect match, 80+ strong semantic match, 60+ reasonable inference
-
-# Character Limit Checking
-For each field, check:
-- "maxlength" attribute in field data: maxlength="500" means answer must be ≤ 500 characters
-- Validation error messages: "maximum 500 characters", "Required field"
-- Character count displays: "X characters remaining of Y characters"
-
-# Content Adaptation for Limits
-- If data exceeds character limits, prioritize core information and summarize
-- For 500 char limit: Include purpose + key dates + essential details only
-- Remove redundant phrases, verbose language, unnecessary details
-- Maintain factual accuracy while staying within constraints
-
-# Return Format (JSON array, one object per field):
-[
-    {{
-        "index": 0,
-        "field_name": "field_name",
-        "answer": "value_or_empty_string",
-        "confidence": 0-100,
-        "reasoning": "brief_explanation",
-        "needs_intervention": true/false,
-        "data_source_path": "data_path",
-        "field_match_type": "exact|semantic|inferred|none",
-        "used_dummy_data": true/false
-    }},
-    ...
-]
-
-**IMPORTANT**: Return ONLY the JSON array, no other text. Process ALL {len(questions)} fields.
-"""
+                # Task Description
+                You are the backend of a Google plugin, analyzing HTML pages sent from the frontend, analyzing form items that need to be filled, retrieving provided customer data, filling form content, and returning it to the frontend in a fixed JSON format.
+                
+                # Important Context - UK Visa Website
+                ⚠️ CRITICAL: This is a UK visa website. For any address-related fields:
+                - Only addresses within the United Kingdom (England, Scotland, Wales, Northern Ireland) are considered domestic addresses
+                - Any addresses outside the UK (including EU countries, US, Canada, Australia, etc.) should be treated as international/foreign addresses
+                - When determining address types or answering location-related questions, apply UK-centric logic
+                
+                # Fields to analyze ({len(questions)} fields):
+                {json.dumps(fields_data, indent=1, ensure_ascii=False)}
+                
+                # User Data:
+                {json.dumps(profile_data, indent=1, ensure_ascii=False)}
+                
+                # Fallback Data:
+                {json.dumps(profile_dummy_data, indent=1, ensure_ascii=False) if profile_dummy_data else "None"}
+                
+                # Key Instructions:
+                1. **Semantic Matching** - Understand field meaning, not just field names
+                2. **Reverse Semantics**: "I do not have X" + "hasX: false" = answer "true" (because user indeed doesn't have X)
+                3. **Option Matching**: Answer must be exact option text/value, not original data value
+                4. **Range Matching**: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
+                5. **Country Reasoning**: European countries → "European Economic Area" or "schengen"
+                6. **Confidence**: 90+ perfect match, 80+ strong semantic match, 60+ reasonable inference
+                
+                # Character Limit Checking
+                For each field, check:
+                - "maxlength" attribute in field data: maxlength="500" means answer must be ≤ 500 characters
+                - Validation error messages: "maximum 500 characters", "Required field"
+                - Character count displays: "X characters remaining of Y characters"
+                
+                # Content Adaptation for Limits
+                - If data exceeds character limits, prioritize core information and summarize
+                - For 500 char limit: Include purpose + key dates + essential details only
+                - Remove redundant phrases, verbose language, unnecessary details
+                - Maintain factual accuracy while staying within constraints
+                
+                # Return Format (JSON array, one object per field):
+                [
+                    {{
+                        "index": 0,
+                        "field_name": "field_name",
+                        "answer": "value_or_empty_string",
+                        "confidence": 0-100,
+                        "reasoning": "brief_explanation",
+                        "needs_intervention": true/false,
+                        "data_source_path": "data_path",
+                        "field_match_type": "exact|semantic|inferred|none",
+                        "used_dummy_data": true/false
+                    }},
+                    ...
+                ]
+                
+                **IMPORTANT**: Return ONLY the JSON array, no other text. Process ALL {len(questions)} fields.
+                """
 
             # Single LLM call for all fields
             import time
             start_time = time.time()
-            
+
             # Use the existing LLM invoke method
             messages = [{"role": "user", "content": prompt}]
             response = self._invoke_llm(messages, self.workflow_id)
-            
+
             end_time = time.time()
             print(f"DEBUG: Batch Analysis Sync - LLM call completed in {end_time - start_time:.2f}s")
 
@@ -4816,7 +4867,7 @@ For each field, check:
                     response_content = response
                 else:
                     response_content = str(response)
-                
+
                 # Clean and parse JSON response
                 response_content = clean_llm_response(response_content)
                 results = robust_json_parse(response_content)
@@ -4831,13 +4882,13 @@ For each field, check:
                         index = result["index"]
                         if 0 <= index < len(questions):
                             question = questions[index]
-                            
+
                             # Determine if dummy data was used
                             used_dummy_data = result.get("used_dummy_data", False)
                             if not used_dummy_data:
                                 # Check based on data source path or reasoning
                                 used_dummy_data = ("contactInformation" in result.get("data_source_path", "") or
-                                                 "dummy" in result.get("reasoning", "").lower())
+                                                   "dummy" in result.get("reasoning", "").lower())
 
                             # Format the result according to expected structure
                             formatted_result = {
@@ -4862,8 +4913,9 @@ For each field, check:
 
                 # Ensure we have results for all questions
                 if len(formatted_results) != len(questions):
-                    print(f"DEBUG: Batch Analysis Sync - Warning: Expected {len(questions)} results, got {len(formatted_results)}")
-                    
+                    print(
+                        f"DEBUG: Batch Analysis Sync - Warning: Expected {len(questions)} results, got {len(formatted_results)}")
+
                     # Fill missing results with empty answers
                     processed_indices = {r.get("field_name") for r in formatted_results}
                     for i, question in enumerate(questions):
@@ -4885,11 +4937,13 @@ For each field, check:
                             formatted_results.append(fallback_result)
 
                 print(f"DEBUG: Batch Analysis Sync - Successfully processed {len(formatted_results)} fields")
-                
+
                 # Save to cache if available
                 if hasattr(self, '_save_to_cache'):
                     cache_data = {
-                        "questions": [{"field_name": q["field_name"], "field_type": q["field_type"], "question": q["question"]} for q in questions],
+                        "questions": [
+                            {"field_name": q["field_name"], "field_type": q["field_type"], "question": q["question"]}
+                            for q in questions],
                         "profile_data": profile_data,
                         "profile_dummy_data": profile_dummy_data
                     }
@@ -4915,9 +4969,11 @@ For each field, check:
 
             # 🚀 CRITICAL: Use semantically filtered questions instead of original field_questions
             semantically_filtered_questions = state.get("semantically_filtered_questions", [])
-            questions = semantically_filtered_questions if semantically_filtered_questions else state.get("field_questions", [])
-            
-            print(f"[workflow_id:{workflow_id}] DEBUG: Q&A Merger - Using {'semantically filtered' if semantically_filtered_questions else 'original'} questions")
+            questions = semantically_filtered_questions if semantically_filtered_questions else state.get(
+                "field_questions", [])
+
+            print(
+                f"[workflow_id:{workflow_id}] DEBUG: Q&A Merger - Using {'semantically filtered' if semantically_filtered_questions else 'original'} questions")
             answers = state.get("ai_answers", [])
 
             print(f"DEBUG: Q&A Merger - Processing {len(questions)} questions and {len(answers)} answers")
@@ -4930,23 +4986,24 @@ For each field, check:
 
             # 🚀 HYBRID APPROACH: Use intelligent grouping for answering, but generate individual questions for output
             intelligent_groups = state.get("semantic_question_groups", [])
-            
+
             if intelligent_groups:
-                print(f"DEBUG: Q&A Merger - Using {len(intelligent_groups)} intelligent groups for answering, but will generate individual questions for output")
-                
+                print(
+                    f"DEBUG: Q&A Merger - Using {len(intelligent_groups)} intelligent groups for answering, but will generate individual questions for output")
+
                 # Convert intelligent groups to question groups format for processing
                 question_groups = {}
                 grouped_question_ids = set()
-                
+
                 for group in intelligent_groups:
                     group_questions = group.get("questions", [])
                     if not group_questions:
                         continue
-                        
+
                     # Use the group name as the key for processing
                     group_name = group.get("group_name", f"Group_{len(question_groups)}")
                     question_groups[group_name] = []
-                    
+
                     for group_question in group_questions:
                         # Find the actual question object
                         field_name = group_question.get("field_name", "")
@@ -4955,14 +5012,15 @@ For each field, check:
                                 question_groups[group_name].append(question)
                                 grouped_question_ids.add(question.get("id", ""))
                                 break
-                    
-                    print(f"DEBUG: Q&A Merger - Intelligent group '{group_name}': {len(question_groups[group_name])} questions")
-                
+
+                    print(
+                        f"DEBUG: Q&A Merger - Intelligent group '{group_name}': {len(question_groups[group_name])} questions")
+
                 # Add ungrouped questions as individual groups
                 for i, question in enumerate(questions):
                     if not isinstance(question, dict) or "question" not in question:
                         continue
-                        
+
                     question_id = question.get("id", "")
                     if question_id not in grouped_question_ids:
                         field_name = question.get("field_name", f"question_{i}")
@@ -4970,10 +5028,10 @@ For each field, check:
                         unique_key = f"{field_name}_{question_text}"
                         question_groups[unique_key] = [question]
                         print(f"DEBUG: Q&A Merger - Added ungrouped question: '{question_text}'")
-                
+
             else:
                 print("DEBUG: Q&A Merger - No intelligent groups found, creating individual questions")
-                
+
                 # Create individual groups for each question
                 question_groups = {}
                 for i, question in enumerate(questions):
@@ -4989,11 +5047,11 @@ For each field, check:
                     # Use field_name as key to ensure each field gets its own question
                     field_name = question.get("field_name", f"question_{i}")
                     question_text = question["question"]
-                    
+
                     # Create unique key for each question to prevent grouping
                     unique_key = f"{field_name}_{question_text}"
                     question_groups[unique_key] = [question]
-                    
+
                     print(f"DEBUG: Q&A Merger - Created individual question for '{field_name}': '{question_text}'")
 
             print(f"DEBUG: Q&A Merger - Created {len(question_groups)} question groups total")
@@ -5053,17 +5111,18 @@ For each field, check:
                     is_conditionally_hidden = self._check_conditional_field_visibility(
                         question, questions, answers, state.get("form_html", "")
                     )
-                    
+
                     # Determine if intervention is needed for this field
                     # Skip intervention for conditionally hidden fields
                     if is_conditionally_hidden:
                         needs_intervention = False
-                        print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' is conditionally hidden, skipping intervention")
+                        print(
+                            f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' is conditionally hidden, skipping intervention")
                     else:
                         # 🚀 CRITICAL FIX: Enhanced intervention logic for ALL fields with empty answers
                         ai_answer_value = ai_answer.get("answer", "").strip() if ai_answer else ""
                         is_required = question.get("required", False)
-                        
+
                         # 🚀 CRITICAL FIX: For checkbox/radio fields, distinguish between:
                         # 1. No answer (AI is uncertain) -> needs intervention
                         # 2. Empty answer (AI explicitly decides not to select) -> no intervention needed
@@ -5073,13 +5132,15 @@ For each field, check:
                             if has_reasoning:
                                 # AI provided reasoning for not selecting - this is a valid decision
                                 needs_intervention = (not ai_answer or
-                                                    ai_answer.get("needs_intervention", False) or
-                                                    ai_answer.get("confidence", 0) < 50)
-                                print(f"DEBUG: Q&A Merger - Checkbox/radio field '{question.get('field_name')}' has empty answer but valid reasoning, no intervention needed (confidence={ai_answer.get('confidence', 0)})")
+                                                      ai_answer.get("needs_intervention", False) or
+                                                      ai_answer.get("confidence", 0) < 50)
+                                print(
+                                    f"DEBUG: Q&A Merger - Checkbox/radio field '{question.get('field_name')}' has empty answer but valid reasoning, no intervention needed (confidence={ai_answer.get('confidence', 0)})")
                             else:
                                 # No reasoning provided - AI is uncertain
                                 needs_intervention = True
-                                print(f"DEBUG: Q&A Merger - Checkbox/radio field '{question.get('field_name')}' has empty answer with no reasoning, needs intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                                print(
+                                    f"DEBUG: Q&A Merger - Checkbox/radio field '{question.get('field_name')}' has empty answer with no reasoning, needs intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
                         else:
                             # For non-checkbox fields, use original logic
                             # Always need intervention if:
@@ -5089,19 +5150,22 @@ For each field, check:
                             # 🚀 CRITICAL FIX: Only force intervention for empty answers if field is required
                             # For optional fields, empty answers are acceptable and should not trigger intervention
                             empty_answer_intervention = not ai_answer_value and is_required
-                            
+
                             needs_intervention = (not ai_answer or
-                                                ai_answer.get("needs_intervention", False) or
-                                                ai_answer.get("confidence", 0) < 50 or
-                                                empty_answer_intervention)  # Only check empty answer for REQUIRED fields
-                            
+                                                  ai_answer.get("needs_intervention", False) or
+                                                  ai_answer.get("confidence", 0) < 50 or
+                                                  empty_answer_intervention)  # Only check empty answer for REQUIRED fields
+
                             if not ai_answer_value:
                                 if is_required:
-                                    print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                                    print(
+                                        f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has empty answer, forcing intervention (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
                                 else:
-                                    print(f"DEBUG: Q&A Merger - Optional field '{question.get('field_name')}' has empty answer, no intervention needed (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
+                                    print(
+                                        f"DEBUG: Q&A Merger - Optional field '{question.get('field_name')}' has empty answer, no intervention needed (confidence={ai_answer.get('confidence', 0) if ai_answer else 0})")
                             elif needs_intervention:
-                                print(f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
+                                print(
+                                    f"DEBUG: Q&A Merger - Field '{question.get('field_name')}' needs intervention: has_answer={bool(ai_answer)}, confidence={ai_answer.get('confidence', 0) if ai_answer else 0}, required={is_required}")
 
                     all_needs_intervention.append(needs_intervention)
                     all_confidences.append(ai_answer.get("confidence", 0) if ai_answer else 0)
@@ -5119,8 +5183,9 @@ For each field, check:
                         }]
                         print(f"DEBUG: Q&A Merger - Created hidden field data for '{question.get('field_name')}'")
                     else:
-                        field_answer_data = self.step_analyzer._create_answer_data(question, ai_answer, needs_intervention)
-                    
+                        field_answer_data = self.step_analyzer._create_answer_data(question, ai_answer,
+                                                                                   needs_intervention)
+
                     all_field_data.extend(field_answer_data)
 
                 # Determine the overall answer type based on the field types in the group
@@ -5141,24 +5206,25 @@ For each field, check:
                         field_selector = question.get("field_selector", "")
                         field_name = question.get("field_name", "")
                         field_has_answer = False
-                        
+
                         for data_item in all_field_data:
                             item_selector = data_item.get("selector", "")
                             # Check if this data item belongs to the required field
                             if (field_selector and field_selector == item_selector) or \
-                               (field_name and field_name in item_selector):
+                                    (field_name and field_name in item_selector):
                                 # For checkbox/radio: check=1 means selected
                                 # For input: non-empty value means filled
                                 if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
                                     field_has_answer = True
                                     break
-                        
+
                         if not field_has_answer:
                             is_required_field_empty = True
-                            print(f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
+                            print(
+                                f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
                             break
 
-                # Enhanced interrupt logic: 
+                # Enhanced interrupt logic:
                 # 1. Original logic: needs intervention AND no valid answer
                 # 2. New logic: required field with empty answer
                 should_interrupt = (overall_needs_intervention and not has_valid_answer) or is_required_field_empty
@@ -5186,26 +5252,28 @@ For each field, check:
                     # Check if all fields in the group are checkbox/radio and share the same question text
                     field_types = [q.get("field_type", "") for q in valid_questions]
                     question_texts = [q.get("question", "") for q in valid_questions]
-                    
+
                     # If all fields are checkbox/radio and have the same question text, keep them grouped
-                    if (all(ft in ["checkbox", "radio"] for ft in field_types) and 
-                        len(set(question_texts)) == 1):
+                    if (all(ft in ["checkbox", "radio"] for ft in field_types) and
+                            len(set(question_texts)) == 1):
                         should_keep_grouped = True
-                        print(f"DEBUG: Q&A Merger - Keeping {len(valid_questions)} checkbox/radio fields grouped as one question")
+                        print(
+                            f"DEBUG: Q&A Merger - Keeping {len(valid_questions)} checkbox/radio fields grouped as one question")
                     else:
-                        print(f"DEBUG: Q&A Merger - Creating individual questions for {len(valid_questions)} fields in group")
-                
+                        print(
+                            f"DEBUG: Q&A Merger - Creating individual questions for {len(valid_questions)} fields in group")
+
                 if len(valid_questions) > 1 and not should_keep_grouped:
-                    
+
                     for field_question in valid_questions:
                         # Find the answer data for this specific field
                         field_answer_data = []
                         field_selector = field_question.get("field_selector", "")
                         field_name = field_question.get("field_name", "")
-                        
+
                         for data_item in all_field_data:
                             item_selector = data_item.get("selector", "")
-                            
+
                             # 🚀 CRITICAL FIX: More precise matching logic
                             # 1. Exact selector match
                             if field_selector and field_selector == item_selector:
@@ -5216,7 +5284,7 @@ For each field, check:
                             # 3. Partial selector match (fallback)
                             elif field_selector and field_selector in item_selector:
                                 field_answer_data.append(data_item)
-                        
+
                         # If no specific data found, use empty data
                         if not field_answer_data:
                             field_answer_data = [{
@@ -5224,10 +5292,12 @@ For each field, check:
                                 "value": "",
                                 "check": 0
                             }]
-                            print(f"DEBUG: Q&A Merger - No answer data found for field '{field_name}', using empty data")
+                            print(
+                                f"DEBUG: Q&A Merger - No answer data found for field '{field_name}', using empty data")
                         else:
-                            print(f"DEBUG: Q&A Merger - Found {len(field_answer_data)} answer data items for field '{field_name}'")
-                        
+                            print(
+                                f"DEBUG: Q&A Merger - Found {len(field_answer_data)} answer data items for field '{field_name}'")
+
                         # Create individual merged_item for this field
                         # 🚀 CRITICAL FIX: For radio/checkbox, use question text; for others use field_label
                         field_type = field_question.get("field_type", "")
@@ -5235,14 +5305,15 @@ For each field, check:
                             question_name = field_question.get("question", field_question.get("field_label", ""))
                         else:
                             question_name = field_question.get("field_label", field_question.get("question", ""))
-                        
+
                         field_merged_item = {
                             "question": {
                                 "data": {
                                     "name": question_name
                                 },
                                 "answer": {
-                                    "type": self._map_field_type_to_answer_type(field_question.get("field_type", "text")),
+                                    "type": self._map_field_type_to_answer_type(
+                                        field_question.get("field_type", "text")),
                                     "selector": field_question.get("field_selector", ""),
                                     "data": field_answer_data
                                 }
@@ -5262,10 +5333,10 @@ For each field, check:
                                 "grouped_fields": [q.get("field_name", "") for q in valid_questions]
                             }
                         }
-                        
+
                         # 🚀 NEW: Check if this individual field is required and has no answer
                         field_should_interrupt = should_interrupt  # Use global interrupt status as default
-                        
+
                         if field_question.get("required", False):
                             # Check if this required field has any valid answer
                             field_has_answer = False
@@ -5275,28 +5346,30 @@ For each field, check:
                                 if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
                                     field_has_answer = True
                                     break
-                            
+
                             if not field_has_answer:
                                 field_should_interrupt = True
-                                print(f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
-                        
+                                print(
+                                    f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
+
                         # Add interrupt field at question level ONLY if field_should_interrupt is True
                         if field_should_interrupt:
                             field_merged_item["question"]["type"] = "interrupt"
-                        
+
                         merged_data.append(field_merged_item)
-                        print(f"DEBUG: Q&A Merger - Created individual question for field '{field_question.get('field_name')}'")
-                    
+                        print(
+                            f"DEBUG: Q&A Merger - Created individual question for field '{field_question.get('field_name')}'")
+
                     interrupt_status = "multi_field_group"
                 else:
                     # Single field OR grouped checkbox/radio: create merged_item as before
-                    # 🚀 CRITICAL FIX: For radio/checkbox, use question text; for others use field_label  
+                    # 🚀 CRITICAL FIX: For radio/checkbox, use question text; for others use field_label
                     primary_field_type = primary_question.get("field_type", "")
                     if primary_field_type in ["radio", "checkbox"]:
                         single_question_name = primary_question.get("question", primary_question.get("field_label", ""))
                     else:
                         single_question_name = primary_question.get("field_label", question_text)
-                        
+
                     merged_item = {
                         "question": {
                             "data": {
@@ -5379,33 +5452,33 @@ For each field, check:
     # =============================================================================
     # 🚀 UNIVERSAL CONDITIONAL DEPENDENCY FRAMEWORK
     # =============================================================================
-    
-    def _build_conditional_context(self, detected_fields: List[Dict[str, Any]], 
-                                   answers: List[Dict[str, Any]], 
+
+    def _build_conditional_context(self, detected_fields: List[Dict[str, Any]],
+                                   answers: List[Dict[str, Any]],
                                    form_html: str) -> Dict[str, Any]:
         """Build comprehensive conditional context for field filtering"""
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(form_html, 'html.parser')
-            
+
             # Extract all conditional rules from HTML
             conditional_rules = self._extract_universal_conditional_rules(form_html, detected_fields)
-            
+
             # Build field state map from current answers
             field_states = self._build_field_state_map(answers)
-            
+
             # Calculate conditional dependencies
             dependency_map = self._calculate_conditional_dependencies(conditional_rules, field_states)
-            
+
             print(f"DEBUG: Conditional Context - Found {len(conditional_rules)} rules, {len(field_states)} states")
-            
+
             return {
                 "conditional_rules": conditional_rules,
-                "field_states": field_states, 
+                "field_states": field_states,
                 "dependency_map": dependency_map,
                 "html_soup": soup
             }
-            
+
         except Exception as e:
             print(f"ERROR: Failed to build conditional context: {str(e)}")
             return {
@@ -5415,18 +5488,18 @@ For each field, check:
                 "html_soup": None
             }
 
-    def _extract_universal_conditional_rules(self, html_content: str, 
-                                           detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _extract_universal_conditional_rules(self, html_content: str,
+                                             detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract conditional rules from HTML in a universal way"""
         rules = []
-        
+
         # Re-create BeautifulSoup object from HTML content to avoid serialization issues
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Find all elements with conditional attributes
         conditional_patterns = [
             "data-toggled-by",
-            "data-toggled-by-not", 
+            "data-toggled-by-not",
             "data-toggle-reverse",
             "data-depends-on",
             "data-show-when",
@@ -5434,34 +5507,34 @@ For each field, check:
             "data-conditional",
             "data-visibility-trigger"
         ]
-        
+
         for pattern in conditional_patterns:
             elements = soup.find_all(attrs={pattern: True})
-            
+
             for element in elements:
                 rule = self._parse_conditional_element(element, pattern, detected_fields)
                 if rule:
                     rules.append(rule)
-        
+
         # Also check for JavaScript-based conditionals in script tags
         script_rules = self._extract_script_conditionals(html_content, detected_fields)
         rules.extend(script_rules)
-        
+
         # Look for form-specific conditional patterns
         form_rules = self._extract_form_specific_conditionals(html_content, detected_fields)
         rules.extend(form_rules)
-        
+
         print(f"DEBUG: Universal Rules - Extracted {len(rules)} conditional rules")
         return rules
 
-    def _parse_conditional_element(self, element, pattern: str, 
-                                 detected_fields: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _parse_conditional_element(self, element, pattern: str,
+                                   detected_fields: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Parse a single conditional element into a rule"""
         try:
             trigger_value = element.get(pattern, "")
             if not trigger_value:
                 return None
-            
+
             # Find affected fields within this element
             affected_fields = []
             for field in detected_fields:
@@ -5469,17 +5542,17 @@ For each field, check:
                 # Check if field is within this conditional container
                 if self._is_field_in_element(field, element):
                     affected_fields.append(field_name)
-            
+
             if not affected_fields:
                 return None
-            
+
             # Parse trigger conditions
             conditions = self._parse_trigger_conditions(trigger_value)
-            
+
             # Determine logic type
-            is_reverse = (pattern in ["data-toggled-by-not", "data-hide-when"] or 
-                         element.get("data-toggle-reverse") == "true")
-            
+            is_reverse = (pattern in ["data-toggled-by-not", "data-hide-when"] or
+                          element.get("data-toggle-reverse") == "true")
+
             rule = {
                 "type": "conditional_visibility",
                 "pattern": pattern,
@@ -5490,10 +5563,11 @@ For each field, check:
                 "element_id": element.get("id", ""),
                 "element_classes": element.get("class", [])
             }
-            
-            print(f"DEBUG: Rule Parser - Created rule for {len(affected_fields)} fields with {len(conditions)} conditions")
+
+            print(
+                f"DEBUG: Rule Parser - Created rule for {len(affected_fields)} fields with {len(conditions)} conditions")
             return rule
-            
+
         except Exception as e:
             print(f"ERROR: Failed to parse conditional element: {str(e)}")
             return None
@@ -5502,37 +5576,37 @@ For each field, check:
         """Check if a detected field is within a conditional element"""
         field_name = field.get("field_name", "")
         field_selector = field.get("field_selector", "")
-        
+
         # Check by name attribute
         if element.find(attrs={"name": field_name}):
             return True
-        
+
         # Check by id
         if field_selector.startswith("#"):
             field_id = field_selector[1:]
             if element.find(id=field_id):
                 return True
-        
+
         # Check by data attributes
         data_attrs = ["data-field", "data-name", "data-field-name"]
         for attr in data_attrs:
             if element.find(attrs={attr: field_name}):
                 return True
-        
+
         return False
 
     def _parse_trigger_conditions(self, trigger_value: str) -> List[Dict[str, Any]]:
         """Parse trigger conditions from conditional attribute value"""
         conditions = []
-        
+
         # Handle multiple conditions separated by comma
         if "," in trigger_value:
             condition_parts = [part.strip() for part in trigger_value.split(",")]
         else:
             condition_parts = [trigger_value.strip()]
-        
+
         for part in condition_parts:
-            # Parse condition: "fieldName_expectedValue" or "fieldName:expectedValue" 
+            # Parse condition: "fieldName_expectedValue" or "fieldName:expectedValue"
             if "_" in part:
                 field_name, expected_value = part.rsplit("_", 1)
             elif ":" in part:
@@ -5543,32 +5617,32 @@ For each field, check:
                 # Default to boolean true
                 field_name = part
                 expected_value = "true"
-            
+
             conditions.append({
                 "field_name": field_name.strip(),
                 "expected_value": expected_value.strip().lower(),
                 "operator": "equals"  # Could be extended for other operators
             })
-        
+
         return conditions
 
-    def _extract_script_conditionals(self, html_content: str, 
-                                   detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _extract_script_conditionals(self, html_content: str,
+                                     detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract conditional logic from JavaScript code"""
         rules = []
-        
+
         # Re-create BeautifulSoup object from HTML content to avoid serialization issues
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Find script tags with conditional logic
         scripts = soup.find_all("script")
-        
+
         for script in scripts:
             if not script.string:
                 continue
-                
+
             script_content = script.string
-            
+
             # Look for common JavaScript conditional patterns
             js_patterns = [
                 r"if\s*\(\s*([^)]+)\s*\)\s*\{[^}]*\.show\(\)",
@@ -5576,7 +5650,7 @@ For each field, check:
                 r"toggle\s*\(\s*([^)]+)\s*\)",
                 r"visibility\s*:\s*([^;]+)"
             ]
-            
+
             import re
             for pattern in js_patterns:
                 matches = re.finditer(pattern, script_content, re.IGNORECASE)
@@ -5586,17 +5660,17 @@ For each field, check:
                     # Parse JavaScript condition into our rule format
                     # This would need more sophisticated parsing for production use
                     pass
-        
+
         return rules
 
-    def _extract_form_specific_conditionals(self, html_content: str, 
-                                          detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _extract_form_specific_conditionals(self, html_content: str,
+                                            detected_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract form-specific conditional patterns"""
         rules = []
-        
+
         # Re-create BeautifulSoup object from HTML content to avoid serialization issues
         soup = BeautifulSoup(html_content, 'html.parser')
-        
+
         # Look for fieldsets with conditional behavior
         fieldsets = soup.find_all("fieldset")
         for fieldset in fieldsets:
@@ -5604,7 +5678,7 @@ For each field, check:
                 rule = self._parse_conditional_element(fieldset, "data-conditional", detected_fields)
                 if rule:
                     rules.append(rule)
-        
+
         # Look for details/summary conditional containers
         details = soup.find_all("details")
         for detail in details:
@@ -5613,7 +5687,7 @@ For each field, check:
             for field in detected_fields:
                 if self._is_field_in_element(field, detail):
                     affected_fields.append(field.get("field_name", ""))
-            
+
             if affected_fields:
                 rules.append({
                     "type": "expandable_section",
@@ -5625,59 +5699,59 @@ For each field, check:
                     "element_id": detail.get("id", ""),
                     "auto_expand": detail.get("open") is not None
                 })
-        
+
         return rules
 
     def _build_field_state_map(self, answers: List[Dict[str, Any]]) -> Dict[str, str]:
         """Build current field state map from AI answers"""
         field_states = {}
-        
+
         for answer in answers:
             field_name = answer.get("field_name", "")
             answer_value = str(answer.get("answer", "")).lower().strip()
-            
+
             if field_name and answer_value:
                 field_states[field_name] = answer_value
-                
+
                 # Also store boolean representations
                 if answer_value in ["yes", "true", "1", "on", "checked"]:
                     field_states[field_name] = "true"
                 elif answer_value in ["no", "false", "0", "off", "unchecked"]:
                     field_states[field_name] = "false"
-        
+
         print(f"DEBUG: Field States - Built state map with {len(field_states)} field states")
         return field_states
 
-    def _calculate_conditional_dependencies(self, conditional_rules: List[Dict[str, Any]], 
-                                          field_states: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+    def _calculate_conditional_dependencies(self, conditional_rules: List[Dict[str, Any]],
+                                            field_states: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
         """Calculate which fields should be visible based on current states"""
         dependency_map = {}
-        
+
         # 🚀 FIXED: If no field states (no user answers), don't apply conditional hiding
         # This allows initial form rendering to show all fields
         if not field_states:
             print(f"DEBUG: Dependencies - No field states available, skipping conditional filtering")
             return dependency_map
-        
+
         for rule in conditional_rules:
             affected_fields = rule.get("affected_fields", [])
             conditions = rule.get("conditions", [])
             reverse_logic = rule.get("reverse_logic", False)
-            
+
             # Evaluate all conditions (AND logic by default)
             all_conditions_met = True
             condition_results = []
             has_relevant_answers = False
-            
+
             for condition in conditions:
                 field_name = condition.get("field_name", "")
                 expected_value = condition.get("expected_value", "")
                 actual_value = field_states.get(field_name, "")
-                
+
                 # Check if we have a relevant answer for this condition
                 if actual_value:
                     has_relevant_answers = True
-                
+
                 condition_met = actual_value == expected_value
                 condition_results.append({
                     "field": field_name,
@@ -5685,20 +5759,20 @@ For each field, check:
                     "actual": actual_value,
                     "met": condition_met
                 })
-                
+
                 if not condition_met:
                     all_conditions_met = False
-            
+
             # 🚀 FIXED: Only apply hiding if we have relevant answers
             if not has_relevant_answers:
                 continue
-            
+
             # Determine visibility based on logic type
             if reverse_logic:
                 should_be_visible = not all_conditions_met
             else:
                 should_be_visible = all_conditions_met
-            
+
             # Apply to all affected fields
             for field_name in affected_fields:
                 dependency_map[field_name] = {
@@ -5707,105 +5781,110 @@ For each field, check:
                     "condition_results": condition_results,
                     "reverse_logic": reverse_logic
                 }
-        
+
         print(f"DEBUG: Dependencies - Calculated visibility for {len(dependency_map)} fields")
         return dependency_map
 
     def _should_process_field(self, field: Dict[str, Any], conditional_context: Dict[str, Any]) -> bool:
         """Universal check if a field should be processed based on conditional logic"""
         field_name = field.get("field_name", "")
-        
+
         # If no conditional context, process all fields
         if not conditional_context:
             return True
-        
+
         # 🚀 FIXED: If field_name is empty, default to processing the field
         if not field_name:
             return True
-        
+
         dependency_map = conditional_context.get("dependency_map", {})
-        
+
         # 🚀 FIXED: If field has no conditional rules, it should be processed (default visible)
         if field_name not in dependency_map:
             return True
-        
+
         # Check if field is conditionally visible
         field_dependency = dependency_map[field_name]
         is_visible = field_dependency.get("visible", True)
-        
+
         if not is_visible:
             print(f"DEBUG: Field Filter - Field '{field_name}' is conditionally hidden")
-        
+
         return is_visible
 
-    def _filter_fields_by_conditions(self, fields: List[Dict[str, Any]], 
-                                   conditional_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _filter_fields_by_conditions(self, fields: List[Dict[str, Any]],
+                                     conditional_context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Filter fields list based on conditional visibility"""
         if not conditional_context:
             return fields
-        
+
         filtered_fields = []
         skipped_count = 0
-        
+
         for field in fields:
             if self._should_process_field(field, conditional_context):
                 filtered_fields.append(field)
             else:
                 skipped_count += 1
-        
-        print(f"DEBUG: Field Filter - Kept {len(filtered_fields)} fields, skipped {skipped_count} conditionally hidden fields")
+
+        print(
+            f"DEBUG: Field Filter - Kept {len(filtered_fields)} fields, skipped {skipped_count} conditionally hidden fields")
         return filtered_fields
 
-    def _filter_questions_by_conditions(self, questions: List[Dict[str, Any]], 
-                                      conditional_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _filter_questions_by_conditions(self, questions: List[Dict[str, Any]],
+                                        conditional_context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Filter questions list based on conditional visibility"""
         if not conditional_context:
             return questions
-        
+
         filtered_questions = []
         skipped_count = 0
-        
+
         for question in questions:
             # Create a field-like object for compatibility
             field_data = {
                 "field_name": question.get("field_name", ""),
                 "field_selector": question.get("field_selector", "")
             }
-            
+
             if self._should_process_field(field_data, conditional_context):
                 filtered_questions.append(question)
             else:
                 skipped_count += 1
-                print(f"DEBUG: Question Filter - Skipped conditionally hidden question: {question.get('field_name', 'unknown')}")
-        
-        print(f"DEBUG: Question Filter - Kept {len(filtered_questions)} questions, skipped {skipped_count} conditionally hidden questions")
+                print(
+                    f"DEBUG: Question Filter - Skipped conditionally hidden question: {question.get('field_name', 'unknown')}")
+
+        print(
+            f"DEBUG: Question Filter - Kept {len(filtered_questions)} questions, skipped {skipped_count} conditionally hidden questions")
         return filtered_questions
 
-    def _filter_actions_by_conditions(self, actions: List[Dict[str, Any]], 
-                                    conditional_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _filter_actions_by_conditions(self, actions: List[Dict[str, Any]],
+                                      conditional_context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Filter actions list based on conditional visibility"""
         if not conditional_context:
             return actions
-        
+
         filtered_actions = []
         skipped_count = 0
-        
+
         for action in actions:
             # Extract field name from action selector
             field_name = self._extract_field_name_from_selector(action.get("selector", ""))
-            
+
             field_data = {
                 "field_name": field_name,
                 "field_selector": action.get("selector", "")
             }
-            
+
             if self._should_process_field(field_data, conditional_context):
                 filtered_actions.append(action)
             else:
                 skipped_count += 1
-                print(f"DEBUG: Action Filter - Skipped conditionally hidden action: {action.get('selector', 'unknown')}")
-        
-        print(f"DEBUG: Action Filter - Kept {len(filtered_actions)} actions, skipped {skipped_count} conditionally hidden actions")
+                print(
+                    f"DEBUG: Action Filter - Skipped conditionally hidden action: {action.get('selector', 'unknown')}")
+
+        print(
+            f"DEBUG: Action Filter - Kept {len(filtered_actions)} actions, skipped {skipped_count} conditionally hidden actions")
         return filtered_actions
 
     def _extract_field_name_from_selector(self, selector: str) -> str:
@@ -5817,46 +5896,46 @@ For each field, check:
             match = re.search(r'\[name=[\'""]([^\'""]+)[\'""]?\]', selector)
             if match:
                 return match.group(1)
-        
+
         if "#" in selector:
             # Extract from ID selector
             return selector.split("#")[-1]
-        
+
         if "data-field=" in selector:
             # Extract from data-field attribute
             import re
             match = re.search(r'data-field=[\'""]([^\'""]+)[\'""]?', selector)
             if match:
                 return match.group(1)
-        
+
         return ""
 
-    def _check_conditional_field_visibility(self, question: Dict[str, Any], all_questions: List[Dict[str, Any]], 
-                                           answers: List[Dict[str, Any]], form_html: str) -> bool:
+    def _check_conditional_field_visibility(self, question: Dict[str, Any], all_questions: List[Dict[str, Any]],
+                                            answers: List[Dict[str, Any]], form_html: str) -> bool:
         """Check if a field should be hidden due to conditional logic"""
         try:
             field_name = question.get("field_name", "")
             field_selector = question.get("field_selector", "")
-            
+
             # Look for conditional attributes in HTML
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(form_html, 'html.parser')
-            
+
             # Find the field element
             field_element = None
             if field_selector.startswith('#'):
                 field_element = soup.find(id=field_selector[1:])
             elif field_name:
                 field_element = soup.find(attrs={"name": field_name})
-            
+
             if not field_element:
                 return False
-                
+
             # Check if the field or its container has conditional attributes
             conditional_container = field_element.find_parent(attrs={"data-toggled-by": True})
             is_reverse_logic = False
             toggled_by = ""
-            
+
             # Check for standard conditional logic
             if conditional_container:
                 toggled_by = conditional_container.get("data-toggled-by", "")
@@ -5871,7 +5950,7 @@ For each field, check:
                 if field_element.get("data-toggle-reverse") == "true":
                     is_reverse_logic = True
                     print(f"DEBUG: Conditional Field - Found data-toggle-reverse='true' on field element")
-            
+
             # Check for reverse conditional logic (data-toggled-by-not) - fallback method
             if not toggled_by:
                 conditional_container = field_element.find_parent(attrs={"data-toggled-by-not": True})
@@ -5882,32 +5961,34 @@ For each field, check:
                     conditional_container = field_element
                     toggled_by = field_element.get("data-toggled-by-not", "")
                     is_reverse_logic = True
-            
+
             # Check for HTML hidden attribute or CSS display:none
             if not toggled_by:
                 if field_element.get("hidden") or field_element.get("aria-hidden") == "true":
                     print(f"DEBUG: Conditional Field - Field '{field_name}' is statically hidden")
                     return True  # Field is hidden
                 return False  # No conditional logic found
-            
+
             if not toggled_by:
                 return False
-                
-            print(f"DEBUG: Conditional Field - Field '{field_name}' toggled by '{toggled_by}' (reverse_logic: {is_reverse_logic})")
-            
+
+            print(
+                f"DEBUG: Conditional Field - Field '{field_name}' toggled by '{toggled_by}' (reverse_logic: {is_reverse_logic})")
+
             # Extract trigger field name and expected value
             # Format: "fieldName_expectedValue" (e.g., "warCrimesInvolvement_true")
-            # Support multiple conditions: 
+            # Support multiple conditions:
             # - "field1_value1,field2_value2" (comma-separated = AND logic)
             # - "field1_value1 field2_value2" (space-separated = OR logic)
             conditions = []
             condition_logic = "AND"  # Default logic
-            
+
             if "," in toggled_by:
                 # Multiple conditions with AND logic (comma-separated)
                 condition_parts = [part.strip() for part in toggled_by.split(",")]
                 condition_logic = "AND"
-            elif " " in toggled_by and "_" in toggled_by and not any(word in toggled_by.lower() for word in ["data-", "class", "style", "http"]):
+            elif " " in toggled_by and "_" in toggled_by and not any(
+                    word in toggled_by.lower() for word in ["data-", "class", "style", "http"]):
                 # Multiple conditions with OR logic (space-separated)
                 # Only if it contains underscores (field_value pattern) and doesn't look like attributes
                 condition_parts = [part.strip() for part in toggled_by.split(" ") if part.strip() and "_" in part]
@@ -5921,7 +6002,7 @@ For each field, check:
                 # Single condition
                 condition_parts = [toggled_by.strip()]
                 condition_logic = "SINGLE"
-            
+
             # Parse each condition part
             for part in condition_parts:
                 if "_" in part:
@@ -5932,23 +6013,24 @@ For each field, check:
                     expected_val = "true"
                 conditions.append((field_name, expected_val))
                 print(f"DEBUG: Conditional Field - Parsed condition: field='{field_name}', expected='{expected_val}'")
-                
+
             print(f"DEBUG: Conditional Field - Found {len(conditions)} condition(s) with {condition_logic} logic")
-            
+
             # Check conditions based on logic type
             if condition_logic == "OR":
                 # OR logic - at least one condition must be satisfied
                 any_condition_satisfied = False
                 condition_results = []
-                
+
                 for trigger_field_name, expected_value in conditions:
-                    print(f"DEBUG: Conditional Field - Checking OR condition: '{trigger_field_name}' should be '{expected_value}'")
-                    
+                    print(
+                        f"DEBUG: Conditional Field - Checking OR condition: '{trigger_field_name}' should be '{expected_value}'")
+
                     # Find the trigger field's answer
                     trigger_answer = None
                     for answer in answers:
                         answer_field_name = answer.get("field_name", "")
-                        
+
                         # Try multiple matching strategies
                         # 1. Exact match
                         if answer_field_name == trigger_field_name:
@@ -5966,19 +6048,20 @@ For each field, check:
                         elif trigger_field_name in answer_field_name or answer_field_name in trigger_field_name:
                             trigger_answer = answer
                             break
-                    
+
                     if trigger_answer:
-                        print(f"DEBUG: Conditional Field - Found trigger answer: field='{trigger_answer.get('field_name', 'unknown')}', answer='{trigger_answer.get('answer', 'unknown')}'")
-                            
+                        print(
+                            f"DEBUG: Conditional Field - Found trigger answer: field='{trigger_answer.get('field_name', 'unknown')}', answer='{trigger_answer.get('answer', 'unknown')}'")
+
                     if not trigger_answer:
                         print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
                         condition_results.append(f"{trigger_field_name}: NOT_FOUND")
                         continue
-                        
+
                     # 🚀 CRITICAL FIX: Get the actual value from the trigger field with proper mapping
                     actual_value = trigger_answer.get("answer", "").lower()
                     expected_value_lower = expected_value.lower()
-                    
+
                     # 🚀 NEW: Map AI answer text to value if needed (for radio/checkbox fields)
                     # Get field options from all_questions since answer may not contain options
                     trigger_field_options = []
@@ -5986,46 +6069,49 @@ For each field, check:
                         if q.get("field_name", "") == trigger_answer.get("field_name", ""):
                             trigger_field_options = q.get("options", [])  # Use 'options' instead of 'field_options'
                             break
-                    
+
                     mapped_value = None
-                    
+
                     if trigger_field_options:
                         # Try to find the option that matches the AI answer text
                         for option in trigger_field_options:
                             option_text = option.get("text", "").lower()
                             option_value = option.get("value", "").lower()
-                            
+
                             # If AI answer matches option text, use the option value
                             if actual_value == option_text:
                                 mapped_value = option_value
-                                print(f"DEBUG: Conditional Field - Mapped AI answer '{actual_value}' to value '{mapped_value}'")
+                                print(
+                                    f"DEBUG: Conditional Field - Mapped AI answer '{actual_value}' to value '{mapped_value}'")
                                 break
-                    
+
                     # Use mapped value if available, otherwise use original value
                     comparison_value = mapped_value if mapped_value else actual_value
-                    
+
                     # Use safe matching approaches only
                     condition_met = False
                     match_reason = ""
-                    
+
                     # 1. Direct text match (most reliable)
                     if comparison_value == expected_value_lower:
                         condition_met = True
                         match_reason = "exact_match"
-                    
+
                     # 2. Safe partial matching only for specific patterns
-                    elif len(expected_value_lower) >= 5 and expected_value_lower in comparison_value and comparison_value.count(expected_value_lower) == 1:
+                    elif len(
+                            expected_value_lower) >= 5 and expected_value_lower in comparison_value and comparison_value.count(
+                            expected_value_lower) == 1:
                         # Only allow partial matching for longer strings (5+ chars) that appear exactly once
                         condition_met = True
                         match_reason = "safe_contains_match"
-                    
+
                     # 3. Normalized text matching for compound words (e.g., "someoneIKnow" vs "someone i know")
                     elif len(expected_value_lower) >= 5:
                         # Normalize both strings by removing spaces, punctuation, and common words
                         import re
                         normalized_comparison = re.sub(r'[^\w]', '', comparison_value).lower()
                         normalized_expected = re.sub(r'[^\w]', '', expected_value_lower).lower()
-                        
+
                         # Check if normalized versions match or contain each other
                         if normalized_comparison == normalized_expected:
                             condition_met = True
@@ -6036,33 +6122,37 @@ For each field, check:
                         elif len(normalized_comparison) >= 8 and normalized_comparison in normalized_expected:
                             condition_met = True
                             match_reason = "normalized_reverse_contains_match"
-                    
-                    condition_results.append(f"{trigger_field_name}: {comparison_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
-                    
+
+                    condition_results.append(
+                        f"{trigger_field_name}: {comparison_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
+
                     if condition_met:
                         any_condition_satisfied = True
-                        print(f"DEBUG: Conditional Field - OR condition met: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}' ({match_reason})")
+                        print(
+                            f"DEBUG: Conditional Field - OR condition met: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}' ({match_reason})")
                         break  # For OR logic, one satisfied condition is enough
                     else:
-                        print(f"DEBUG: Conditional Field - OR condition not met: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}'")
-                
+                        print(
+                            f"DEBUG: Conditional Field - OR condition not met: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}'")
+
                 condition_satisfied = any_condition_satisfied
                 print(f"DEBUG: Conditional Field - OR condition results: {'; '.join(condition_results)}")
                 print(f"DEBUG: Conditional Field - Any OR condition satisfied: {condition_satisfied}")
-                
+
             else:
                 # AND logic (default) - all conditions must be satisfied
                 all_conditions_satisfied = True
                 condition_results = []
-                
+
                 for trigger_field_name, expected_value in conditions:
-                    print(f"DEBUG: Conditional Field - Checking AND condition: '{trigger_field_name}' should be '{expected_value}'")
-                    
+                    print(
+                        f"DEBUG: Conditional Field - Checking AND condition: '{trigger_field_name}' should be '{expected_value}'")
+
                     # Find the trigger field's answer
                     trigger_answer = None
                     for answer in answers:
                         answer_field_name = answer.get("field_name", "")
-                        
+
                         # Try multiple matching strategies
                         # 1. Exact match
                         if answer_field_name == trigger_field_name:
@@ -6080,80 +6170,87 @@ For each field, check:
                         elif trigger_field_name in answer_field_name or answer_field_name in trigger_field_name:
                             trigger_answer = answer
                             break
-                    
+
                     if trigger_answer:
-                        print(f"DEBUG: Conditional Field - Found trigger answer: field='{trigger_answer.get('field_name', 'unknown')}', answer='{trigger_answer.get('answer', 'unknown')}'")
-                            
+                        print(
+                            f"DEBUG: Conditional Field - Found trigger answer: field='{trigger_answer.get('field_name', 'unknown')}', answer='{trigger_answer.get('answer', 'unknown')}'")
+
                     if not trigger_answer:
                         print(f"DEBUG: Conditional Field - No trigger answer found for '{trigger_field_name}'")
                         continue
-                        
+
                     # 🚀 CRITICAL FIX: Get the actual value from the trigger field with proper mapping
                     actual_value = trigger_answer.get("answer", "").lower()
                     # Get the actual value from the trigger field with proper mapping
                     actual_value = trigger_answer.get("answer", "").lower()
                     expected_value_lower = expected_value.lower()
-                    
+
                     # Map AI answer text to value if needed (for radio/checkbox fields)
                     # Get field options from all_questions since answer may not contain options
                     trigger_field_options = []
-                    print(f"DEBUG: Conditional Field - Looking for options for field '{trigger_answer.get('field_name', '')}'")
-                    
+                    print(
+                        f"DEBUG: Conditional Field - Looking for options for field '{trigger_answer.get('field_name', '')}'")
+
                     for q in all_questions:
                         q_field_name = q.get("field_name", "")
                         q_field_options = q.get("options", [])  # Use 'options' instead of 'field_options'
-                        print(f"DEBUG: Conditional Field - Checking question field '{q_field_name}' with {len(q_field_options)} options")
-                        
+                        print(
+                            f"DEBUG: Conditional Field - Checking question field '{q_field_name}' with {len(q_field_options)} options")
+
                         if q_field_name == trigger_answer.get("field_name", ""):
                             trigger_field_options = q_field_options
                             print(f"DEBUG: Conditional Field - Found matching field! Options: {trigger_field_options}")
                             break
-                    
+
                     print(f"DEBUG: Conditional Field - Final trigger_field_options: {trigger_field_options}")
-                    
+
                     mapped_value = None
-                    
+
                     if trigger_field_options:
                         # Try to find the option that matches the AI answer text
                         for option in trigger_field_options:
                             option_text = option.get("text", "").lower()
                             option_value = option.get("value", "").lower()
-                            
-                            print(f"DEBUG: Conditional Field - Checking option: text='{option_text}', value='{option_value}' against AI answer '{actual_value}'")
-                            
+
+                            print(
+                                f"DEBUG: Conditional Field - Checking option: text='{option_text}', value='{option_value}' against AI answer '{actual_value}'")
+
                             # If AI answer matches option text, use the option value
                             if actual_value == option_text:
                                 mapped_value = option_value
-                                print(f"DEBUG: Conditional Field - Mapped AI answer '{actual_value}' to value '{mapped_value}'")
+                                print(
+                                    f"DEBUG: Conditional Field - Mapped AI answer '{actual_value}' to value '{mapped_value}'")
                                 break
                     else:
                         print(f"DEBUG: Conditional Field - No trigger_field_options found, using original value")
-                    
+
                     # Use mapped value if available, otherwise use original value
                     comparison_value = mapped_value if mapped_value else actual_value
-                    
+
                     # Use safe matching approaches only
                     condition_met = False
                     match_reason = ""
-                    
+
                     # 1. Direct text match (most reliable)
                     if comparison_value == expected_value_lower:
                         condition_met = True
                         match_reason = "exact_match"
-                    
+
                     # 2. Safe partial matching only for specific patterns
-                    elif len(expected_value_lower) >= 5 and expected_value_lower in comparison_value and comparison_value.count(expected_value_lower) == 1:
+                    elif len(
+                            expected_value_lower) >= 5 and expected_value_lower in comparison_value and comparison_value.count(
+                            expected_value_lower) == 1:
                         # Only allow partial matching for longer strings (5+ chars) that appear exactly once
                         condition_met = True
                         match_reason = "safe_contains_match"
-                    
+
                     # 3. Normalized text matching for compound words (e.g., "someoneIKnow" vs "someone i know")
                     elif len(expected_value_lower) >= 5:
                         # Normalize both strings by removing spaces, punctuation, and common words
                         import re
                         normalized_comparison = re.sub(r'[^\w]', '', comparison_value).lower()
                         normalized_expected = re.sub(r'[^\w]', '', expected_value_lower).lower()
-                        
+
                         # Check if normalized versions match or contain each other
                         if normalized_comparison == normalized_expected:
                             condition_met = True
@@ -6164,37 +6261,41 @@ For each field, check:
                         elif len(normalized_comparison) >= 8 and normalized_comparison in normalized_expected:
                             condition_met = True
                             match_reason = "normalized_reverse_contains_match"
-                    
-                    condition_results.append(f"{trigger_field_name}: {comparison_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
-                    
+
+                    condition_results.append(
+                        f"{trigger_field_name}: {comparison_value}=={expected_value_lower} -> {condition_met} ({match_reason})")
+
                     if not condition_met:
                         all_conditions_satisfied = False
-                        
-                    print(f"DEBUG: Conditional Field - AND condition: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}', met={condition_met} ({match_reason})")
-                
+
+                    print(
+                        f"DEBUG: Conditional Field - AND condition: '{trigger_field_name}': actual='{comparison_value}', expected='{expected_value_lower}', met={condition_met} ({match_reason})")
+
                 condition_satisfied = all_conditions_satisfied
                 print(f"DEBUG: Conditional Field - AND condition results: {'; '.join(condition_results)}")
                 print(f"DEBUG: Conditional Field - All AND conditions satisfied: {condition_satisfied}")
-            
+
             # condition_satisfied is already set in the logic above
-            
+
             # Apply reverse logic if needed
             if is_reverse_logic:
                 # For reverse logic, we want to hide when conditions ARE satisfied
                 should_hide = condition_satisfied
-                print(f"DEBUG: Conditional Field - Reverse logic: conditions_satisfied={condition_satisfied}, should_hide={should_hide}")
+                print(
+                    f"DEBUG: Conditional Field - Reverse logic: conditions_satisfied={condition_satisfied}, should_hide={should_hide}")
             else:
                 # For normal logic, we hide when conditions are NOT satisfied
                 should_hide = not condition_satisfied
-                print(f"DEBUG: Conditional Field - Normal logic: conditions_satisfied={condition_satisfied}, should_hide={should_hide}")
-            
+                print(
+                    f"DEBUG: Conditional Field - Normal logic: conditions_satisfied={condition_satisfied}, should_hide={should_hide}")
+
             if should_hide:
                 print(f"DEBUG: Conditional Field - Field '{field_name}' should be hidden (condition not met)")
             else:
                 print(f"DEBUG: Conditional Field - Field '{field_name}' should be visible (condition met)")
-                
+
             return should_hide
-            
+
         except Exception as e:
             print(f"DEBUG: Conditional Field - Error checking visibility for '{question.get('field_name')}': {str(e)}")
             return False
@@ -6204,11 +6305,12 @@ For each field, check:
         try:
             workflow_id = state.get("workflow_id", "unknown")
             print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Starting")
-            print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Total merged_qa_data items: {len(state.get('merged_qa_data', []))}")
+            print(
+                f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Total merged_qa_data items: {len(state.get('merged_qa_data', []))}")
 
             actions = []
             merged_data = state.get("merged_qa_data", [])
-            
+
             # 🚀 REMOVED: Legacy dependency analysis conditional rules no longer needed
             print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Legacy dependency analysis removed")
 
@@ -6218,24 +6320,26 @@ For each field, check:
                 # Filter merged data based on conditional context
                 original_count = len(merged_data)
                 filtered_merged_data = []
-                
+
                 for item in merged_data:
                     metadata = item.get("_metadata", {})
                     field_data = {
                         "field_name": metadata.get("field_name", ""),
                         "field_selector": metadata.get("field_selector", "")
                     }
-                    
+
                     if self._should_process_field(field_data, conditional_context):
                         filtered_merged_data.append(item)
                     else:
-                        print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Filtered out conditionally hidden field: {metadata.get('field_name', 'unknown')}")
-                
+                        print(
+                            f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Filtered out conditionally hidden field: {metadata.get('field_name', 'unknown')}")
+
                 merged_data = filtered_merged_data
-                print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Universal conditional filtering: {original_count} -> {len(merged_data)} items")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Universal conditional filtering: {original_count} -> {len(merged_data)} items")
             else:
                 print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - No universal conditional context found")
-            
+
             # 统计各种跳过原因
             skip_stats = {
                 "intervention_needed": 0,
@@ -6255,18 +6359,18 @@ For each field, check:
                 # Get answer data for processing
                 answer_data = question_data.get("answer", {})
                 data_array = answer_data.get("data", [])
-                
+
                 # Skip fields that need human intervention
                 needs_intervention = metadata.get('needs_intervention', False)
                 has_valid_answer = metadata.get('has_valid_answer', False)
                 is_interrupt = question_data.get("type") == "interrupt"
-                
+
                 # 🚀 NEW: Check if field is conditionally hidden (from answer data)
                 # Only consider a field conditionally hidden if ALL items are hidden AND none are checked
                 checked_items = [item for item in data_array if item.get("check") == 1]
                 hidden_items = [item for item in data_array if item.get("conditionally_hidden", False)]
                 is_conditionally_hidden = len(hidden_items) == len(data_array) and len(checked_items) == 0
-                
+
                 print(f"DEBUG: Action Generator - Processing {metadata.get('field_name', 'unknown')}")
                 print(f"DEBUG: Action Generator - Field type: {metadata.get('field_type', 'unknown')}")
                 print(f"DEBUG: Action Generator - Needs intervention: {needs_intervention}")
@@ -6280,15 +6384,16 @@ For each field, check:
                 # 🚀 CRITICAL FIX: For checkbox/radio fields, ALWAYS process individual data items using stored selectors
                 is_conditionally_skipped = metadata.get('conditional_skip', False)
                 field_type = metadata.get("field_type", "")
-                
+
                 # For checkbox/radio fields, we need to process individual data items using stored selectors
                 if field_type in ["checkbox", "radio"]:
                     # Check if there are any checked items in the data array
                     data_array = answer_data.get("data", [])
                     checked_items = [item for item in data_array if item.get("check") == 1]
-                    
+
                     if checked_items:
-                        print(f"DEBUG: Action Generator - Processing {field_type} field with {len(checked_items)} checked items")
+                        print(
+                            f"DEBUG: Action Generator - Processing {field_type} field with {len(checked_items)} checked items")
                         # Process individual checkbox/radio items using stored selectors
                         for data_item in checked_items:
                             action = {
@@ -6300,23 +6405,23 @@ For each field, check:
                             action = self._validate_action_type(action, field_type)
                             actions.append(action)
                             print(f"DEBUG: Action Generator - Generated {field_type} action for checked item: {action}")
-                        
+
                         skip_stats["processed"] += 1
                         continue  # Move to next field
                     elif needs_intervention:
                         print(f"DEBUG: Action Generator - Group needs intervention and no checked items, skipping")
                         skip_stats["intervention_needed"] += 1
                         continue
-                
+
                 # For non-checkbox/radio fields or when intervention is not the only issue
                 if (is_interrupt or not has_valid_answer or is_conditionally_skipped or is_conditionally_hidden) or \
-                   (needs_intervention and field_type not in ["checkbox", "radio"]):
+                        (needs_intervention and field_type not in ["checkbox", "radio"]):
                     skip_reason = "intervention needed" if needs_intervention else \
-                                "interrupt field" if is_interrupt else \
-                                "no valid answer" if not has_valid_answer else \
+                        "interrupt field" if is_interrupt else \
+                            "no valid answer" if not has_valid_answer else \
                                 "conditionally skipped" if is_conditionally_skipped else \
-                                "conditionally hidden"
-                    
+                                    "conditionally hidden"
+
                     # 更新统计信息
                     if needs_intervention:
                         skip_stats["intervention_needed"] += 1
@@ -6328,11 +6433,12 @@ For each field, check:
                         skip_stats["conditionally_skipped"] += 1
                     elif is_conditionally_hidden:
                         skip_stats["conditionally_hidden"] += 1
-                        
-                    print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - {skip_reason}")
-                    print(f"DEBUG: Action Generator - Field details - confidence: {metadata.get('confidence', 'N/A')}, reasoning: {metadata.get('reasoning', 'N/A')[:100]}...")
-                    continue
 
+                    print(
+                        f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - {skip_reason}")
+                    print(
+                        f"DEBUG: Action Generator - Field details - confidence: {metadata.get('confidence', 'N/A')}, reasoning: {metadata.get('reasoning', 'N/A')[:100]}...")
+                    continue
 
                 # Extract answer value from the data array
                 answer_value = self._extract_answer_from_data(answer_data)
@@ -6341,16 +6447,18 @@ For each field, check:
                 # Skip if no meaningful answer value
                 if not answer_value or answer_value.strip() == "":
                     skip_stats["empty_answer"] += 1
-                    print(f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - empty answer")
+                    print(
+                        f"DEBUG: Action Generator - Skipping field {metadata.get('field_name', 'unknown')} - empty answer")
                     print(f"DEBUG: Action Generator - Answer data: {answer_data}")
                     continue
-                
+
                 # 字段将被处理
                 skip_stats["processed"] += 1
 
                 # 🚀 NEW: Check if field is inside <details> element that needs to be expanded first
                 field_selector = metadata.get("field_selector", "")
-                details_action = self._check_and_create_details_expand_action(field_selector, state.get("form_html", ""))
+                details_action = self._check_and_create_details_expand_action(field_selector,
+                                                                              state.get("form_html", ""))
                 if details_action:
                     actions.append(details_action)
                     print(f"DEBUG: Action Generator - Added details expand action: {details_action}")
@@ -6367,17 +6475,19 @@ For each field, check:
                 if metadata.get("field_type") in ["text", "email", "password", "number", "tel", "url", "date", "time",
                                                   "datetime-local", "textarea", "select", "autocomplete"]:
                     data_array = answer_data.get("data", [])
-                    print(f"DEBUG: Action Generator - Processing input field {metadata.get('field_name')} with {len(data_array)} data items")
+                    print(
+                        f"DEBUG: Action Generator - Processing input field {metadata.get('field_name')} with {len(data_array)} data items")
                     actions_generated_for_field = 0
                     for data_item in data_array:
                         if data_item.get("check") == 1:
                             # 🚀 CRITICAL FIX: Determine action type based on individual data item's selector, not group metadata
                             field_selector = data_item.get("selector", "")
-                            
+
                             # Parse field type from selector to determine correct action type
                             actual_field_type = self._determine_field_type_from_selector(field_selector)
-                            print(f"DEBUG: Action Generator - Data item selector: {field_selector}, determined type: {actual_field_type}")
-                            
+                            print(
+                                f"DEBUG: Action Generator - Data item selector: {field_selector}, determined type: {actual_field_type}")
+
                             # 🚀 OPTIMIZATION: For country/location fields, prefer readable text over codes
                             field_name = metadata.get("field_name", "").lower()
                             field_selector_lower = field_selector.lower()
@@ -6423,15 +6533,17 @@ For each field, check:
                                 "type": action_type,
                                 "value": action_value if action_type == "input" else data_item.get("value", "")
                             }
-                            
+
                             # 🚀 NEW: Validate action type based on determined field type
                             action = self._validate_action_type(action, actual_field_type)
                             actions.append(action)
                             actions_generated_for_field += 1
-                            print(f"DEBUG: Action Generator - Generated {action['type']} action for {actual_field_type} field: {action}")
+                            print(
+                                f"DEBUG: Action Generator - Generated {action['type']} action for {actual_field_type} field: {action}")
                             # 🚀 CRITICAL FIX: Process ALL data items, not just the first one
                             # This ensures multiple related fields (e.g., issue date AND expiry date) are all handled
-                    print(f"DEBUG: Action Generator - Generated {actions_generated_for_field} actions for input field {metadata.get('field_name')}")
+                    print(
+                        f"DEBUG: Action Generator - Generated {actions_generated_for_field} actions for input field {metadata.get('field_name')}")
                     continue  # Skip traditional generation for input fields
 
                 # Create a compatible data structure for the existing action generator
@@ -6466,7 +6578,7 @@ For each field, check:
                     print(
                         f"DEBUG: Action Generator - Failed to generate action for {metadata.get('field_name', 'unknown')}: {str(action_error)}")
                     continue
-                    
+
             # 🚀 CRITICAL FIX: Always add submit button action at the end
             has_submit = any(
                 "submit" in action.get("selector", "").lower() or
@@ -6489,20 +6601,20 @@ For each field, check:
                 """Get the position of element based on question order in merged_data"""
                 try:
                     selector = action.get("selector", "")
-                    
+
                     # First try to find the action in merged_data order
                     for index, merged_item in enumerate(merged_data):
                         # Check if this action matches any data in this merged_item
                         answer_data = merged_item.get("data", {})
                         data_array = answer_data.get("data", [])
-                        
+
                         # Check if selector matches any data item in this merged question
                         for data_item in data_array:
                             item_selector = data_item.get("selector", "")
                             if item_selector == selector:
                                 print(f"DEBUG: Found action {selector} at merged_data position {index}")
                                 return index
-                    
+
                     # Fallback: try to extract field name and find in merged_data
                     field_name = ""
                     if selector.startswith("input[") and "name=" in selector:
@@ -6517,17 +6629,17 @@ For each field, check:
                         id_end = selector.find("]", id_start)
                         if id_start > 2 and id_end > id_start:
                             field_name = selector[id_start:id_end].strip('\'"')
-                    
+
                     if field_name:
                         # Find question with matching field name
                         for index, merged_item in enumerate(merged_data):
                             question = merged_item.get("question", {})
-                            if (question.get("field_name") == field_name or 
-                                field_name in question.get("field_name", "") or
-                                field_name in question.get("field_selector", "")):
+                            if (question.get("field_name") == field_name or
+                                    field_name in question.get("field_name", "") or
+                                    field_name in question.get("field_selector", "")):
                                 print(f"DEBUG: Found action {selector} by field name match at position {index}")
                                 return index
-                    
+
                     print(f"DEBUG: Element {selector} not found in merged_data, using fallback position 9999")
                     return 9999
 
@@ -6538,18 +6650,18 @@ For each field, check:
             # Sort actions by HTML position, keeping submit buttons at the end
             def get_action_sort_key(action):
                 selector = action.get("selector", "").lower()
-                
+
                 # Submit buttons always go last
                 if "submit" in selector or action.get("type") == "submit":
                     return 99999  # Always put submit buttons at the very end
-                
+
                 # Details expand actions (summary elements) should go before dependent fields
                 # Check if this is a details expand action
-                if ("summary" in selector and 
-                    ("aria-controls" in selector or action.get("type") == "click")):
+                if ("summary" in selector and
+                        ("aria-controls" in selector or action.get("type") == "click")):
                     # Find the lowest position of any field that might depend on this details
                     min_dependent_position = 99999
-                    
+
                     # Extract details ID from aria-controls attribute
                     details_id = None
                     if "aria-controls=" in selector:
@@ -6560,7 +6672,7 @@ For each field, check:
                                 details_id = selector[start:end]
                         except:
                             pass
-                    
+
                     # If we found details ID, look for fields that might be inside this details
                     if details_id:
                         for other_action in actions:
@@ -6571,13 +6683,13 @@ For each field, check:
                                 other_position = get_element_position_in_html(other_action)
                                 if other_position < min_dependent_position:
                                     min_dependent_position = other_position
-                    
+
                     # Place details expand action slightly before the first dependent field
                     if min_dependent_position < 99999:
                         return max(0, min_dependent_position - 1)
                     else:
                         return 0  # If no dependent fields found, put at the beginning
-                
+
                 # For all other actions, use HTML position
                 return get_element_position_in_html(action)
 
@@ -6589,13 +6701,16 @@ For each field, check:
             if conditional_context:
                 original_action_count = len(actions)
                 actions = self._filter_actions_by_conditions(actions, conditional_context)
-                print(f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Final conditional filtering: {original_action_count} -> {len(actions)} actions")
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: Action Generator - Final conditional filtering: {original_action_count} -> {len(actions)} actions")
 
             state["form_actions"] = actions
-            print(f"DEBUG: Action Generator - Generated {len(actions)} actions total (including submit) after all filtering")
+            print(
+                f"DEBUG: Action Generator - Generated {len(actions)} actions total (including submit) after all filtering")
             print("DEBUG: Action Generator - Actions sorted by HTML element position order")
             print(f"DEBUG: Action Generator - Skip statistics: {skip_stats}")
-            print(f"DEBUG: Action Generator - Processing success rate: {skip_stats['processed']}/{len(merged_data)} ({skip_stats['processed']/len(merged_data)*100:.1f}% if merged_data else 0)" if merged_data else "No merged data")
+            print(
+                f"DEBUG: Action Generator - Processing success rate: {skip_stats['processed']}/{len(merged_data)} ({skip_stats['processed'] / len(merged_data) * 100:.1f}% if merged_data else 0)" if merged_data else "No merged data")
 
             # Debug: Print all generated actions in order
             for i, action in enumerate(actions, 1):
@@ -6615,13 +6730,13 @@ For each field, check:
         """Check if field is inside <details> element and create expand action if needed"""
         try:
             from bs4 import BeautifulSoup
-            
+
             # Track expanded details to avoid duplicates
             if not hasattr(self, '_expanded_details'):
                 self._expanded_details = set()
-            
+
             soup = BeautifulSoup(form_html, 'html.parser')
-            
+
             # Find the target field element
             field_element = None
             if field_selector.startswith("#"):
@@ -6643,15 +6758,15 @@ For each field, check:
                         field_element = soup.find(tag, {attr_part: True})
                 except:
                     pass
-                    
+
             if not field_element:
                 return None
-                
+
             # Check if field is inside a <details> element
             details_parent = field_element.find_parent('details')
             if not details_parent:
                 return None
-                
+
             # Get details element identifier to avoid duplicates
             details_id = details_parent.get('id', '')
             if not details_id:
@@ -6659,18 +6774,18 @@ For each field, check:
                 summary = details_parent.find('summary')
                 if summary:
                     details_id = summary.get_text(strip=True)[:50]  # First 50 chars as ID
-                    
+
             if details_id in self._expanded_details:
                 return None  # Already expanded this details element
-                
+
             # Find the summary element
             summary_element = details_parent.find('summary')
             if not summary_element:
                 return None
-                
+
             # Mark this details as expanded
             self._expanded_details.add(details_id)
-            
+
             # Create selector for summary element
             summary_selector = None
             if summary_element.get('id'):
@@ -6687,17 +6802,17 @@ For each field, check:
                     else:
                         # Last resort: generic summary selector (risky but better than nothing)
                         summary_selector = "summary"
-            
+
             # Create expand action
             expand_action = {
                 "selector": summary_selector,
                 "type": "click",
                 "value": ""
             }
-            
+
             print(f"DEBUG: Details expand action created - selector: {summary_selector}")
             return expand_action
-            
+
         except Exception as e:
             print(f"DEBUG: Error in _check_and_create_details_expand_action: {str(e)}")
             return None
@@ -7212,22 +7327,22 @@ For each field, check:
                 """Clean circular references from data structure"""
                 if seen is None:
                     seen = set()
-                
+
                 # Recursion depth protection
                 if current_depth > max_depth:
                     return f"<max_depth_reached_at_{max_depth}>"
-                
+
                 # Handle different types
                 if obj is None or isinstance(obj, (str, int, float, bool)):
                     return obj
-                
+
                 # Check for circular reference using object id
                 obj_id = id(obj)
                 if obj_id in seen:
                     return f"<circular_reference_detected>"
-                
+
                 seen.add(obj_id)
-                
+
                 try:
                     if isinstance(obj, dict):
                         cleaned = {}
@@ -7317,7 +7432,7 @@ For each field, check:
                                 "processed_at": datetime.utcnow().isoformat(),
                                 "step_key": state["step_key"],
                                 "question": str(usage.get("question", ""))[:500],  # Limit length
-                                "answer": str(usage.get("answer", ""))[:500],     # Limit length
+                                "answer": str(usage.get("answer", ""))[:500],  # Limit length
                                 "source": str(usage.get("dummy_data_source", "unknown"))[:100]  # Limit length
                             }
                             simple_records.append(simple_record)
@@ -7357,8 +7472,8 @@ For each field, check:
                     "metadata": save_data["metadata"]
                 }
                 cache_success = self.cross_page_cache.cache_page_data(
-                    state["workflow_id"], 
-                    state["step_key"], 
+                    state["workflow_id"],
+                    state["step_key"],
                     cache_data
                 )
                 if cache_success:
@@ -7553,17 +7668,18 @@ For each field, check:
     async def process_form_async(self, workflow_id: str, step_key: str, form_html: str, profile_data: Dict[str, Any],
                                  profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """🚀 FIXED: True async version using LangGraph workflow with ainvoke + recursion protection"""
-        
+
         # 🚀 CRITICAL FIX: Add recursion protection and retry mechanism
         max_retries = 3
         current_retry = 0
-        
+
         while current_retry < max_retries:
             try:
                 # Reset details expansion tracking for new form
                 self._expanded_details = set()
-                
-                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Starting TRUE LangGraph async execution (retry {current_retry + 1}/{max_retries})")
+
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Starting TRUE LangGraph async execution (retry {current_retry + 1}/{max_retries})")
                 print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - HTML length: {len(form_html)}")
                 print(
                     f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Profile data keys: {list(profile_data.keys()) if profile_data else 'None'}")
@@ -7578,57 +7694,59 @@ For each field, check:
                     """Clean input data to prevent circular references from the start"""
                     if not isinstance(data, dict):
                         return data
-                    
+
                     cleaned = {}
                     for key, value in data.items():
                         if isinstance(value, dict):
-                            # Recursively clean nested dictionaries 
+                            # Recursively clean nested dictionaries
                             cleaned[key] = clean_input_data(value)
                         elif isinstance(value, list):
                             # Clean list items
-                            cleaned[key] = [clean_input_data(item) if isinstance(item, dict) else item for item in value]
+                            cleaned[key] = [clean_input_data(item) if isinstance(item, dict) else item for item in
+                                            value]
                         else:
                             cleaned[key] = value
                     return cleaned
-                
+
                 # 🚀 CRITICAL FIX: Clean input data before state creation
                 clean_profile_data = clean_input_data(profile_data or {})
                 clean_profile_dummy_data = clean_input_data(profile_dummy_data or {})
-                
+
                 initial_state = FormAnalysisState(
                     workflow_id=workflow_id,
                     step_key=step_key,
                     form_html=form_html,
                     profile_data=clean_profile_data,
                     profile_dummy_data=clean_profile_dummy_data,
-                parsed_form=None,
-                detected_fields=[],
-                field_groups_info=None,  # 🚀 FIXED: Initialize basic radio/checkbox field grouping
-                field_questions=[],
-                ai_answers=[],
-                merged_qa_data=[],
-                form_actions=[],
-                llm_generated_actions=[],
-                saved_step_data=None,
-                dummy_data_usage=[],
-                consistency_issues=None,   # 🚀 NEW: Initialize consistency issues
-                conditional_context=None,  # 🚀 NEW: Initialize conditional context
-                # 🚀 NEW: Initialize conditional field analysis state
-                field_selections=None,
-                active_field_groups=None,
-                conditionally_filtered_questions=None,
-                # 🚀 NEW: Initialize semantic question analysis state
-                semantic_question_groups=None,
-                question_semantic_analysis=None,
-                semantically_filtered_questions=None,
-                analysis_complete=False,
-                error_details=None,
-                messages=[]
-            )
+                    parsed_form=None,
+                    detected_fields=[],
+                    field_groups_info=None,  # 🚀 FIXED: Initialize basic radio/checkbox field grouping
+                    field_questions=[],
+                    ai_answers=[],
+                    merged_qa_data=[],
+                    form_actions=[],
+                    llm_generated_actions=[],
+                    saved_step_data=None,
+                    dummy_data_usage=[],
+                    consistency_issues=None,  # 🚀 NEW: Initialize consistency issues
+                    conditional_context=None,  # 🚀 NEW: Initialize conditional context
+                    # 🚀 NEW: Initialize conditional field analysis state
+                    field_selections=None,
+                    active_field_groups=None,
+                    conditionally_filtered_questions=None,
+                    # 🚀 NEW: Initialize semantic question analysis state
+                    semantic_question_groups=None,
+                    question_semantic_analysis=None,
+                    semantically_filtered_questions=None,
+                    analysis_complete=False,
+                    error_details=None,
+                    messages=[]
+                )
 
                 # 🚀 FIXED: Use true LangGraph async execution with proper config
-                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Running LangGraph workflow with ainvoke")
-                
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Running LangGraph workflow with ainvoke")
+
                 # Provide config for checkpointer - required for async execution
                 import uuid
                 thread_id = str(uuid.uuid4())
@@ -7637,7 +7755,7 @@ For each field, check:
                         "thread_id": thread_id  # Use UUID for thread isolation
                     }
                 }
-                
+
                 print(f"[workflow_id:{workflow_id}] DEBUG: Using thread_id: {thread_id}")
                 result = await self.app.ainvoke(initial_state, config=config)
 
@@ -7684,28 +7802,31 @@ For each field, check:
             except Exception as workflow_error:
                 current_retry += 1
                 error_message = str(workflow_error)
-                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Retry {current_retry}/{max_retries} - Error: {error_message}")
-                
+                print(
+                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Retry {current_retry}/{max_retries} - Error: {error_message}")
+
                 # 🚀 CRITICAL: Check for specific recursion/circular reference errors
                 if "recursion" in error_message.lower() or "circular" in error_message.lower():
-                    print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Detected recursion/circular reference error")
+                    print(
+                        f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Detected recursion/circular reference error")
                     # Force a clean slate for the next retry
                     import gc
                     gc.collect()
-                    
+
                     # If this is the last retry, return graceful failure
                     if current_retry >= max_retries:
-                        print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Max retries reached for recursion error")
+                        print(
+                            f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Max retries reached for recursion error")
                         return {
                             "success": False,
                             "error": f"LangGraph workflow failed after {max_retries} retries due to recursion/circular reference: {error_message}",
                             "data": [],
                             "actions": []
                         }
-                    
+
                     # Continue to next retry
                     continue
-                
+
                 # For other errors, fail fast
                 print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Non-recursion error, failing fast")
                 return {
@@ -7714,7 +7835,7 @@ For each field, check:
                     "data": [],
                     "actions": []
                 }
-        
+
         # If we exit the while loop without returning, all retries failed
         print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - All retries exhausted")
         return {
@@ -7742,41 +7863,40 @@ For each field, check:
                 return state
 
             print(f"DEBUG: AI Answerer Async - Processing {len(field_questions)} questions with advanced optimizations")
-            
+
             # 🚀 NEW: Check for cross-page data before processing
             try:
                 # Check if current page has questions about "other/additional" items
                 has_cross_page_questions = any(
-                    any(keyword in question.get("question", "").lower() for keyword in 
-                        ["other", "additional", "another", "more", "还有", "其他", "另外"]) 
+                    any(keyword in question.get("question", "").lower() for keyword in
+                        ["other", "additional", "another", "more", "还有", "其他", "另外"])
                     for question in field_questions
                 )
-                
+
                 if has_cross_page_questions:
                     print(f"DEBUG: AI Answerer Async - Detected cross-page questions, analyzing previous data")
-                    
+
                     # Analyze address completion for address-related questions
-                    if any(keyword in question.get("question", "").lower() for keyword in 
+                    if any(keyword in question.get("question", "").lower() for keyword in
                            ["address", "lived", "residence", "地址", "居住"] for question in field_questions):
-                        
+
                         address_analysis = self.cross_page_cache.analyze_address_completion(
                             workflow_id, step_key, profile_data
                         )
-                        
+
                         print(f"DEBUG: AI Answerer Async - Address analysis: "
                               f"{len(address_analysis.get('filled_addresses', []))} filled, "
                               f"{len(address_analysis.get('remaining_addresses', []))} remaining, "
                               f"has_other: {address_analysis.get('has_other_addresses', False)}")
-                        
+
                         # Store analysis in state for later use
                         state["cross_page_analysis"] = address_analysis
-                        
+
                         # Apply contextual answers for specific questions
                         for question in field_questions:
                             question_text = question.get("question", "").lower()
-                            if any(keyword in question_text for keyword in 
+                            if any(keyword in question_text for keyword in
                                    ["other address", "lived at any other", "还有", "其他地址"]):
-                                
                                 # Add contextual information to the question
                                 question["cross_page_context"] = {
                                     "has_other_addresses": address_analysis.get("has_other_addresses", False),
@@ -7784,9 +7904,10 @@ For each field, check:
                                     "remaining_addresses": address_analysis.get("remaining_addresses", []),
                                     "reasoning": f"Based on previous pages: {len(address_analysis.get('filled_addresses', []))} addresses filled, {len(address_analysis.get('remaining_addresses', []))} remaining"
                                 }
-                                
-                                print(f"DEBUG: AI Answerer Async - Added cross-page context to question: {question.get('field_name', 'unknown')}")
-                
+
+                                print(
+                                    f"DEBUG: AI Answerer Async - Added cross-page context to question: {question.get('field_name', 'unknown')}")
+
             except Exception as cross_page_error:
                 print(f"DEBUG: AI Answerer Async - Cross-page analysis failed: {str(cross_page_error)}")
                 # Continue processing without cross-page data
@@ -7807,7 +7928,7 @@ For each field, check:
                     try:
                         # Get cross-page context for remaining questions
                         cross_page_context = state.get("cross_page_analysis", {})
-                        
+
                         batch_answers = await self._batch_analyze_fields_async(remaining_questions, profile_data,
                                                                                profile_dummy_data, cross_page_context)
                         # Combine exact matches with batch results
@@ -7831,7 +7952,7 @@ For each field, check:
                 try:
                     # Get cross-page context for batch processing
                     cross_page_context = state.get("cross_page_analysis", {})
-                    
+
                     batch_answers = await self._batch_analyze_fields_async(field_questions, profile_data,
                                                                            profile_dummy_data, cross_page_context)
 
@@ -7849,7 +7970,8 @@ For each field, check:
                                                q["field_name"] not in processed_field_names]
 
                         if remaining_questions:
-                            print(f"DEBUG: AI Answerer Async - ⚠️ {len(remaining_questions)} questions remaining, but individual processing removed")
+                            print(
+                                f"DEBUG: AI Answerer Async - ⚠️ {len(remaining_questions)} questions remaining, but individual processing removed")
                             print("DEBUG: AI Answerer Async - Using batch answers only")
                             # 🚀 REMOVED: Individual processing fallback
                             answers = batch_answers
@@ -7858,7 +7980,8 @@ For each field, check:
 
                 except Exception as batch_error:
                     print(f"DEBUG: AI Answerer Async - ❌ Batch processing failed: {str(batch_error)}")
-                    print("DEBUG: AI Answerer Async - ⚠️ Individual processing fallback removed - generating empty answers")
+                    print(
+                        "DEBUG: AI Answerer Async - ⚠️ Individual processing fallback removed - generating empty answers")
 
                     # 🚀 REMOVED: Individual processing fallback
                     # Instead of calling single-question methods, generate empty answers
@@ -7875,7 +7998,7 @@ For each field, check:
                             "used_dummy_data": False
                         }
                         answers.append(empty_answer)
-                        
+
                     print(f"DEBUG: AI Answerer Async - Generated {len(answers)} empty answers as fallback")
 
             # Process results and handle any exceptions
@@ -7936,7 +8059,7 @@ For each field, check:
 
         return state
 
-# 🚀 REMOVED: _generate_ai_answer_async method - now using batch processing only
+    # 🚀 REMOVED: _generate_ai_answer_async method - now using batch processing only
 
     async def _llm_action_generator_node_async(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Generate actions directly from answer.data for maximum accuracy"""
@@ -7981,13 +8104,14 @@ For each field, check:
 
                         # 🚀 CRITICAL FIX: Determine action type based on individual data item's selector, not group field_type
                         actual_field_type = self._determine_field_type_from_selector(selector)
-                        print(f"DEBUG: LLM Action Generator - Data item selector: {selector}, determined type: {actual_field_type}")
-                        
+                        print(
+                            f"DEBUG: LLM Action Generator - Data item selector: {selector}, determined type: {actual_field_type}")
+
                         # Determine action type based on actual field type from selector
                         if actual_field_type in ["radio", "checkbox"]:
                             action_type = "click"
                         elif actual_field_type in ["text", "email", "password", "number", "tel", "url", "date", "time",
-                                            "datetime-local", "textarea", "select"]:
+                                                   "datetime-local", "textarea", "select"]:
                             action_type = "input"
                         else:
                             action_type = "input"  # Default fallback
@@ -8025,8 +8149,9 @@ For each field, check:
             # Instead, trust the selectors generated during field detection and Q&A merger
             validated_actions = final_actions
             validation_errors = []
-            
-            print(f"DEBUG: LLM Action Generator Async - Skipping validation to prevent selector corruption, using {len(validated_actions)} actions directly")
+
+            print(
+                f"DEBUG: LLM Action Generator Async - Skipping validation to prevent selector corruption, using {len(validated_actions)} actions directly")
 
             # Store the actions without validation
             state["llm_generated_actions"] = validated_actions
@@ -8070,17 +8195,18 @@ For each field, check:
     def _validate_action_type(self, action: Dict[str, Any], field_type: str) -> Dict[str, Any]:
         """Validate and fix action type based on field type"""
         action_type = action.get("type", "")
-        
+
         # CRITICAL FIX: Ensure radio and checkbox always use click type
         if field_type in ["radio", "checkbox"]:
             if action_type != "click":
                 print(f"WARNING: Fixed incorrect action type for {field_type} field. Was '{action_type}', now 'click'")
                 action["type"] = "click"
-        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local", "textarea", "select", "autocomplete"]:
+        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local",
+                            "textarea", "select", "autocomplete"]:
             if action_type != "input":
                 print(f"WARNING: Fixed incorrect action type for {field_type} field. Was '{action_type}', now 'input'")
                 action["type"] = "input"
-        
+
         return action
 
     def _determine_field_type_from_selector(self, selector: str) -> str:
@@ -8088,7 +8214,7 @@ For each field, check:
         try:
             if not selector:
                 return "unknown"
-            
+
             # Extract type attribute from selector
             if '[type="radio"]' in selector or 'type="radio"' in selector:
                 return "radio"
@@ -8119,21 +8245,21 @@ For each field, check:
             else:
                 # Default to text for unspecified input types
                 return "text"
-                
+
         except Exception as e:
             print(f"ERROR: Failed to determine field type from selector '{selector}': {str(e)}")
             return "unknown"
 
     def _create_standardized_action(self, selector: str, field_type: str, value: str = "") -> Dict[str, Any]:
         """Create a standardized action with correct type based on field type
-        
+
         This is the RECOMMENDED way to create actions to ensure consistency.
-        
+
         Args:
             selector: CSS selector for the element
             field_type: Type of the form field (radio, checkbox, text, etc.)
             value: Value for the action
-            
+
         Returns:
             Dict with standardized action format
         """
@@ -8141,7 +8267,8 @@ For each field, check:
         if field_type in ["radio", "checkbox"]:
             action_type = "click"
             action_value = value  # Keep value for radio/checkbox
-        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local", "textarea", "select", "autocomplete"]:
+        elif field_type in ["text", "email", "password", "number", "tel", "url", "date", "time", "datetime-local",
+                            "textarea", "select", "autocomplete"]:
             action_type = "input"
             action_value = value
         else:
@@ -8149,13 +8276,13 @@ For each field, check:
             action_type = "input"
             action_value = value
             print(f"WARNING: Unknown field type '{field_type}', defaulting to 'input' action")
-        
+
         action = {
             "selector": selector,
             "type": action_type,
             "value": action_value
         }
-        
+
         # Validate the action
         return self._validate_action_type(action, field_type)
 
@@ -8263,7 +8390,7 @@ For each field, check:
 
             # Determine which profile data to use
             profile_data_to_use = state["profile_data"] if state["profile_data"] else state["profile_dummy_data"]
-            
+
             # Prepare simplified prompt for non-form pages
             prompt = f"""
             # Role 
@@ -8271,17 +8398,17 @@ For each field, check:
 
             # HTML Content:
             {state["form_html"]}
-            
+
             # Profile data (use this for analysis):
             {profile_data_to_use}
-            
+
             # Available profile dummy data (fallback):
             {state["profile_dummy_data"]}
 
             # Instructions:
             Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
             **IMPORTANT**: Combine the HTML content analysis with the profile data to make intelligent decisions about which buttons/links to click.
-            
+
             # Analysis Strategy:
             1. **Use profile data for context**: If profile data is available, use it to understand user's current state and determine appropriate actions
             2. **Fallback to dummy data**: If profile data is empty or insufficient, use profile dummy data for analysis
@@ -8355,7 +8482,7 @@ For each field, check:
         return state
 
     async def _batch_analyze_fields_async(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
-                                          profile_dummy_data: Dict[str, Any] = None, 
+                                          profile_dummy_data: Dict[str, Any] = None,
                                           cross_page_context: Dict[str, Any] = None) -> List[
         Dict[str, Any]]:
         """🚀 OPTIMIZATION 2: Batch LLM call with caching - analyze multiple fields in one request"""
@@ -8382,15 +8509,17 @@ For each field, check:
 
             # 🚀 NEW: Enhanced contextual reasoning (no confidence boost)
             enhanced_reasoning = self._enhanced_contextual_reasoning(questions, profile_data, profile_dummy_data)
-            
+
             print(f"DEBUG: Enhanced Reasoning - Analysis completed")
-            print(f"DEBUG: Enhanced Reasoning - Confident answers: {enhanced_reasoning['confidence_boost']['confident_answers']}/{enhanced_reasoning['confidence_boost']['total_questions']}")
+            print(
+                f"DEBUG: Enhanced Reasoning - Confident answers: {enhanced_reasoning['confidence_boost']['confident_answers']}/{enhanced_reasoning['confidence_boost']['total_questions']}")
 
             # Create batch analysis prompt with enhanced context
             fields_data = []
             for i, question in enumerate(questions):
-                reasoning_chain = enhanced_reasoning["reasoning_chains"][i] if i < len(enhanced_reasoning["reasoning_chains"]) else None
-                
+                reasoning_chain = enhanced_reasoning["reasoning_chains"][i] if i < len(
+                    enhanced_reasoning["reasoning_chains"]) else None
+
                 field_data = {
                     "index": i,
                     "field_name": question['field_name'],
@@ -8401,7 +8530,7 @@ For each field, check:
                     "selector": question['field_selector'],
                     "options": question.get('options', [])  # Include options for radio/checkbox fields
                 }
-                
+
                 # Add reasoning chain information if available
                 if reasoning_chain and reasoning_chain["final_confidence"] > 0:
                     field_data["pre_reasoning"] = {
@@ -8409,7 +8538,7 @@ For each field, check:
                         "steps": reasoning_chain["steps"],
                         "decision_path": reasoning_chain["decision_path"]
                     }
-                
+
                 fields_data.append(field_data)
 
             # 🚀 OPTIMIZATION: Simplified prompt to reduce token usage with cross-page context
@@ -8429,6 +8558,13 @@ For each field, check:
             {json.dumps(cross_page_context, indent=1, ensure_ascii=False) if cross_page_context else "None"}
 
             # Instructions:
+            **IMPORTANT - Data Usage Priority:**
+            1. **PRIMARY DATA**: Always try to use User Data (profile_data) first
+            2. **FALLBACK DATA**: If User Data is insufficient, incomplete, or you're not confident about the match, use Dummy Data as fallback
+            3. **CONFIDENCE ASSESSMENT**: If User Data exists but seems uncertain/incomplete for a field, prefer Dummy Data for that specific field
+            4. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
+            
+            **Field Analysis Rules:**
             1. Use semantic matching - understand field meaning, not just names
             2. For negative statements: "I do not have X" + "hasX: false" = answer "true"
             3. For options: answer must be exact option text/value, not original data
@@ -8440,7 +8576,7 @@ For each field, check:
               * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
               * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
               * This applies to any field that semantically represents a phone country code
-            8. 🚀 NEW: Cross-page context usage:
+            8. 🚀 Cross-page context usage:
               * For questions about "other/additional/more" items, use cross-page context
               * If context shows previous addresses/items filled, answer "yes/no" accordingly
               * For "Have you lived at any other addresses?": check filled_addresses vs remaining_addresses
@@ -8456,18 +8592,18 @@ For each field, check:
                 "field_match_type": "exact|semantic|inferred|none"
               }}
             ]
-            
+
             **Character Limits**: For each field, check:
             - "maxlength" attribute in field data: maxlength="500" means answer must be ≤ 500 characters
             - Validation error messages: "maximum 500 characters", "Required field"
             - Character count displays: "X characters remaining of Y characters"
-            
+
             **Content Adaptation for Limits**:
             - If data exceeds character limits, prioritize key information and summarize
             - For 500 char limit: Include purpose + key dates + essential details only
             - Remove redundant phrases, verbose language, unnecessary details
             - Maintain factual accuracy while staying within constraints
-            
+
             **Constraint Examples**:
             - Field with maxlength="500" → Answer MUST be ≤ 500 characters
             - Validation showing "maximum 500 characters" → Shorten existing content
@@ -8507,7 +8643,7 @@ For each field, check:
                 else:
                     # Try to get content from the response object
                     response_content = str(response)
-                
+
                 results = robust_json_parse(response_content)
 
                 if not isinstance(results, list):
@@ -8527,41 +8663,45 @@ For each field, check:
 
                             # 🚀 FIXED: Use ONLY original AI confidence assessment - no artificial boost
                             original_confidence = result.get("confidence", 0)
-                            
+
                             # Check if this field had pre-reasoning (for context only, not confidence boost)
                             field_data = fields_data[index] if index < len(fields_data) else {}
                             pre_reasoning = field_data.get("pre_reasoning", {})
                             pre_confidence = pre_reasoning.get("confidence", 0) if pre_reasoning else 0
-                            
+
                             # Use ONLY the original AI confidence - no pre-reasoning boost
                             final_confidence = original_confidence
-                            
+
                             # 🚀 AGGRESSIVE: Significantly lower intervention threshold for better UX
                             needs_intervention = result.get("needs_intervention", True)
                             reasoning = result.get("reasoning", "").lower()
-                            
+
                             # Special cases where AI should be more confident
-                            is_geographical = any(keyword in reasoning for keyword in ["country", "geographic", "italy", "europe", "schengen", "eea"])
+                            is_geographical = any(keyword in reasoning for keyword in
+                                                  ["country", "geographic", "italy", "europe", "schengen", "eea"])
                             has_dummy_data = used_dummy_data or "dummy" in reasoning
                             is_semantic_match = "semantic" in reasoning or "match" in reasoning
                             has_answer = bool(result.get("answer", "").strip())
-                            
+
                             # 🚀 REMOVED: No more artificial intervention threshold adjustments
                             # Use AI's original needs_intervention assessment without modification
                             # final_confidence and other factors should not override AI's judgment
-                            print(f"DEBUG: 🚀 PURE AI ASSESSMENT - Field '{question['field_name']}' confidence: {final_confidence}, needs_intervention: {needs_intervention} (AI decision preserved)")
-                            
+                            print(
+                                f"DEBUG: 🚀 PURE AI ASSESSMENT - Field '{question['field_name']}' confidence: {final_confidence}, needs_intervention: {needs_intervention} (AI decision preserved)")
+
                             # Only log additional context for debugging, but don't change intervention decision
                             if is_geographical or has_dummy_data or is_semantic_match:
-                                print(f"DEBUG: Field '{question['field_name']}' confidence: {final_confidence}, still needs intervention")
-                            
+                                print(
+                                    f"DEBUG: Field '{question['field_name']}' confidence: {final_confidence}, still needs intervention")
+
                             formatted_result = {
                                 "question_id": question["id"],
                                 "field_selector": question["field_selector"],
                                 "field_name": question["field_name"],
                                 "answer": result.get("answer", ""),
                                 "confidence": final_confidence,
-                                "reasoning": result.get("reasoning", "Batch analysis result") + (f" [Enhanced reasoning confidence: {pre_confidence}]" if pre_confidence > 0 else ""),
+                                "reasoning": result.get("reasoning", "Batch analysis result") + (
+                                    f" [Enhanced reasoning confidence: {pre_confidence}]" if pre_confidence > 0 else ""),
                                 "needs_intervention": needs_intervention,
                                 "data_source_path": result.get("data_source_path", ""),
                                 "field_match_type": result.get("field_match_type", "none"),
@@ -8597,9 +8737,11 @@ For each field, check:
                 # 🚀 METHOD 2 & 3: Apply historical pattern learning and contextual confidence adjustment
                 pattern_analysis = self._historical_pattern_learning(questions, profile_data)
                 final_results = self._contextual_confidence_adjustment(questions, formatted_results, profile_data)
-                
-                print(f"DEBUG: Pattern Learning - Found {len(pattern_analysis['successful_geographical_inferences'])} geographic patterns")
-                print(f"DEBUG: Pattern Learning - Found {len(pattern_analysis['successful_duration_comparisons'])} duration patterns")
+
+                print(
+                    f"DEBUG: Pattern Learning - Found {len(pattern_analysis['successful_geographical_inferences'])} geographic patterns")
+                print(
+                    f"DEBUG: Pattern Learning - Found {len(pattern_analysis['successful_duration_comparisons'])} duration patterns")
 
                 # 🚀 OPTIMIZATION 3: Save to cache for future use
                 self._save_to_cache(cache_key, final_results, "batch")
@@ -8609,7 +8751,8 @@ For each field, check:
             except Exception as parse_error:
                 print(f"DEBUG: Batch Analysis - Parse error: {str(parse_error)}")
                 # Use the response_content we already extracted
-                print(f"DEBUG: Raw response: {response_content[:500] if 'response_content' in locals() else str(response)[:500]}...")
+                print(
+                    f"DEBUG: Raw response: {response_content[:500] if 'response_content' in locals() else str(response)[:500]}...")
                 raise parse_error
 
         except Exception as e:
@@ -8714,18 +8857,18 @@ For each field, check:
             return None
 
     def _enhanced_contextual_reasoning(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
-                                     profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+                                       profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """🚀 NEW: Enhanced contextual reasoning with multi-layer confidence system"""
-        
+
         # Layer 1: Knowledge Base Reasoning
         knowledge_base = {
             "geographical": {
                 "eea_countries": [
-                    "austria", "belgium", "bulgaria", "croatia", "cyprus", "czech republic", 
-                    "denmark", "estonia", "finland", "france", "germany", "greece", 
-                    "hungary", "iceland", "ireland", "italy", "latvia", "liechtenstein", 
-                    "lithuania", "luxembourg", "malta", "netherlands", "norway", 
-                    "poland", "portugal", "romania", "slovakia", "slovenia", "spain", 
+                    "austria", "belgium", "bulgaria", "croatia", "cyprus", "czech republic",
+                    "denmark", "estonia", "finland", "france", "germany", "greece",
+                    "hungary", "iceland", "ireland", "italy", "latvia", "liechtenstein",
+                    "lithuania", "luxembourg", "malta", "netherlands", "norway",
+                    "poland", "portugal", "romania", "slovakia", "slovenia", "spain",
                     "sweden", "switzerland"
                 ],
                 "commonwealth": ["australia", "canada", "new zealand", "south africa"],
@@ -8739,29 +8882,29 @@ For each field, check:
                 }
             }
         }
-        
+
         # Layer 2: Context Enhancement
         enhanced_context = self._build_enhanced_context(profile_data, profile_dummy_data, knowledge_base)
-        
+
         # Layer 3: Reasoning Chain Analysis
         reasoning_chains = []
         for question in questions:
             chain = self._build_reasoning_chain(question, enhanced_context, knowledge_base)
             reasoning_chains.append(chain)
-        
-        # Calculate confidence boost  
+
+        # Calculate confidence boost
         confidence_boost_result = self._calculate_confidence_boost(reasoning_chains)
-        
+
         return {
             "enhanced_context": enhanced_context,
             "reasoning_chains": reasoning_chains,
             "confidence_boost": confidence_boost_result["confidence_boost"]  # Extract the nested confidence_boost
         }
 
-    def _build_enhanced_context(self, profile_data: Dict[str, Any], profile_dummy_data: Dict[str, Any], 
-                              knowledge_base: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_enhanced_context(self, profile_data: Dict[str, Any], profile_dummy_data: Dict[str, Any],
+                                knowledge_base: Dict[str, Any]) -> Dict[str, Any]:
         """Build enhanced context with cross-references and semantic understanding"""
-        
+
         enhanced_context = {
             "direct_data": profile_data,
             "fallback_data": profile_dummy_data or {},
@@ -8769,17 +8912,18 @@ For each field, check:
             "cross_references": {},
             "semantic_mappings": {}
         }
-        
+
         # Infer additional context from existing data
         if profile_data:
             # Geographic inference
             if "country" in str(profile_data).lower():
                 for key, value in self._flatten_dict(profile_data).items():
-                    if isinstance(value, str) and any(country in value.lower() for country in knowledge_base["geographical"]["eea_countries"]):
+                    if isinstance(value, str) and any(
+                            country in value.lower() for country in knowledge_base["geographical"]["eea_countries"]):
                         enhanced_context["inferred_data"]["is_eea_country"] = True
                         enhanced_context["inferred_data"]["geographic_region"] = "european_economic_area"
                         enhanced_context["cross_references"]["country_to_region"] = value
-            
+
             # Duration inference
             duration_pattern = r'(\d+)\s*(year|month|day)'
             for key, value in self._flatten_dict(profile_data).items():
@@ -8789,17 +8933,17 @@ For each field, check:
                         num, unit = match.groups()
                         enhanced_context["inferred_data"][f"{key}_numeric"] = int(num)
                         enhanced_context["inferred_data"][f"{key}_unit"] = unit
-        
+
         return enhanced_context
 
-    def _build_reasoning_chain(self, question: Dict[str, Any], enhanced_context: Dict[str, Any], 
-                             knowledge_base: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_reasoning_chain(self, question: Dict[str, Any], enhanced_context: Dict[str, Any],
+                               knowledge_base: Dict[str, Any]) -> Dict[str, Any]:
         """Build reasoning chain for a specific question"""
-        
+
         field_name = question.get('field_name', '')
         field_type = question.get('field_type', '')
         options = question.get('options', [])
-        
+
         reasoning_chain = {
             "question": question,
             "steps": [],
@@ -8807,7 +8951,7 @@ For each field, check:
             "final_confidence": 0,
             "decision_path": []
         }
-        
+
         # Step 1: Direct data matching (no confidence assignment)
         direct_matches = self._find_direct_matches(question, enhanced_context["direct_data"])
         if direct_matches:
@@ -8816,16 +8960,16 @@ For each field, check:
                 "data": direct_matches,
                 "note": "Found direct data match - context only"
             })
-        
+
         # Step 2: Semantic inference (no confidence assignment)
         semantic_matches = self._find_semantic_matches(question, enhanced_context)
         if semantic_matches:
             reasoning_chain["steps"].append({
-                "type": "semantic_inference", 
+                "type": "semantic_inference",
                 "data": semantic_matches,
                 "note": "Found semantic match - context only"
             })
-        
+
         # Step 3: Knowledge-based reasoning (no confidence assignment)
         knowledge_matches = self._apply_knowledge_reasoning(question, enhanced_context, knowledge_base)
         if knowledge_matches:
@@ -8834,22 +8978,22 @@ For each field, check:
                 "data": knowledge_matches,
                 "note": "Applied knowledge reasoning - context only"
             })
-        
+
         # Don't assign artificial confidence - let AI decide
         reasoning_chain["final_confidence"] = 0  # Will be set by AI, not by pre-reasoning
-        
+
         return reasoning_chain
 
     def _find_direct_matches(self, question: Dict[str, Any], data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Find direct data matches"""
         field_name = question.get('field_name', '').lower()
-        
+
         # Simple direct matching
         flattened = self._flatten_dict(data)
         for key, value in flattened.items():
             if field_name in key.lower() or key.lower() in field_name:
                 return {"key": key, "value": value, "match_type": "direct"}
-        
+
         return None
 
     def _flatten_dict(self, d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -8863,24 +9007,25 @@ For each field, check:
                 items.append((new_key, v))
         return dict(items)
 
-    def _find_semantic_matches(self, question: Dict[str, Any], enhanced_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _find_semantic_matches(self, question: Dict[str, Any], enhanced_context: Dict[str, Any]) -> Optional[
+        Dict[str, Any]]:
         """Find semantic matches for a question"""
         field_name = question.get('field_name', '').lower()
-        
+
         # Check inferred data
         inferred_data = enhanced_context.get("inferred_data", {})
         for key, value in inferred_data.items():
             if field_name in key.lower() or any(word in key.lower() for word in field_name.split('_')):
                 return {"key": key, "value": value, "match_type": "semantic"}
-        
+
         return None
 
-    def _apply_knowledge_reasoning(self, question: Dict[str, Any], enhanced_context: Dict[str, Any], 
-                                 knowledge_base: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _apply_knowledge_reasoning(self, question: Dict[str, Any], enhanced_context: Dict[str, Any],
+                                   knowledge_base: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Apply knowledge-based reasoning"""
         field_name = question.get('field_name', '').lower()
         options = question.get('options', [])
-        
+
         # Apply geographical knowledge
         if 'country' in field_name and options:
             geographical = knowledge_base.get('geographical', {})
@@ -8888,7 +9033,7 @@ For each field, check:
                 option_text = option.get('text', '').lower()
                 if option_text in geographical.get('eea_countries', []):
                     return {"key": "geographical_inference", "value": option_text, "match_type": "knowledge"}
-        
+
         return None
 
     def _calculate_confidence_boost(self, reasoning_chains: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -8896,17 +9041,17 @@ For each field, check:
         total_confidence = 0
         valid_chains = 0
         confident_answers = 0
-        
+
         for chain in reasoning_chains:
             if chain.get('final_confidence', 0) > 0:
                 total_confidence += chain['final_confidence']
                 valid_chains += 1
                 if chain.get('final_confidence', 0) >= 70:
                     confident_answers += 1
-        
+
         avg_confidence = total_confidence / valid_chains if valid_chains > 0 else 0
         overall_boost = min(10, valid_chains * 2)  # Max 10 point boost
-        
+
         return {
             "average_confidence": avg_confidence,
             "valid_chains": valid_chains,
@@ -8923,33 +9068,34 @@ For each field, check:
         """Find the primary question from a group of related questions"""
         if not grouped_questions:
             return {}
-        
+
         # Priority order: required fields > text inputs > radio/select > checkboxes
         priority_order = {'text': 4, 'email': 4, 'tel': 4, 'select': 3, 'radio': 2, 'checkbox': 1}
-        
+
         # Sort by priority and required status
         sorted_questions = sorted(grouped_questions, key=lambda q: (
             q.get('required', False),  # Required fields first
             priority_order.get(q.get('field_type', ''), 0),  # Then by field type priority
             -len(q.get('field_label', ''))  # Then by label length (longer labels often more descriptive)
         ), reverse=True)
-        
+
         return sorted_questions[0]
 
     def _determine_group_answer_type(self, grouped_questions: List[Dict[str, Any]]) -> str:
         """Determine the answer type for a group of questions"""
         if not grouped_questions:
             return "unknown"
-        
+
         field_types = [q.get('field_type', '') for q in grouped_questions]
-        
+
         if 'radio' in field_types:
             return "radio"
         elif 'checkbox' in field_types:
-            return "checkbox"  
+            return "checkbox"
         elif 'select' in field_types:
             return "select"
-        elif any(ft in ['text', 'email', 'tel', 'url', 'number', 'password', 'date', 'time', 'datetime-local'] for ft in field_types):
+        elif any(ft in ['text', 'email', 'tel', 'url', 'number', 'password', 'date', 'time', 'datetime-local','autocomplete'] for ft in
+                 field_types):
             return "input"
         else:
             return "unknown"
@@ -8958,7 +9104,7 @@ For each field, check:
         """Combine options from all questions in a group"""
         all_options = []
         seen_values = set()
-        
+
         for question in grouped_questions:
             options = question.get('options', [])
             for option in options:
@@ -8966,13 +9112,13 @@ For each field, check:
                 if value and value not in seen_values:
                     all_options.append(option)
                     seen_values.add(value)
-        
+
         return all_options
 
     def _check_answer_consistency(self, merged_data: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         """Check consistency of answers across related fields"""
         consistency_issues = []
-        
+
         try:
             # Check for radio button/checkbox group conflicts
             radio_groups = {}
@@ -8981,7 +9127,7 @@ For each field, check:
                 field_type = question.get('field_type', '')
                 field_name = question.get('field_name', '')
                 answer = item.get('answer', '')
-                
+
                 # Group radio buttons by name prefix
                 if field_type in ['radio', 'checkbox']:
                     group_name = field_name.split('[')[0] if '[' in field_name else field_name
@@ -8992,11 +9138,12 @@ For each field, check:
                         'answer': answer,
                         'item': item
                     })
-            
+
             # Check for conflicts within radio groups
             for group_name, group_items in radio_groups.items():
-                selected_count = sum(1 for item in group_items if item['answer'] and item['answer'].lower() not in ['false', 'no', ''])
-                
+                selected_count = sum(
+                    1 for item in group_items if item['answer'] and item['answer'].lower() not in ['false', 'no', ''])
+
                 if selected_count > 1:
                     # Multiple selections in radio group
                     consistency_issues.append({
@@ -9005,24 +9152,25 @@ For each field, check:
                         'field_name': group_name,
                         'affected_fields': [item['field_name'] for item in group_items]
                     })
-            
+
             # Check for conflicting values (e.g., "Yes" and "No" to same logical question)
             field_patterns = {}
             for item in merged_data:
                 question = item.get('question', {})
                 field_name = question.get('field_name', '')
                 answer = item.get('answer', '')
-                
+
                 # Look for opposing field patterns
-                base_name = field_name.lower().replace('_yes', '').replace('_no', '').replace('[yes]', '').replace('[no]', '')
+                base_name = field_name.lower().replace('_yes', '').replace('_no', '').replace('[yes]', '').replace(
+                    '[no]', '')
                 if base_name not in field_patterns:
                     field_patterns[base_name] = {}
-                
+
                 if 'yes' in field_name.lower() or answer.lower() == 'yes':
                     field_patterns[base_name]['yes'] = True
                 elif 'no' in field_name.lower() or answer.lower() == 'no':
                     field_patterns[base_name]['no'] = True
-            
+
             # Check for Yes/No conflicts
             for base_name, patterns in field_patterns.items():
                 if patterns.get('yes') and patterns.get('no'):
@@ -9031,32 +9179,34 @@ For each field, check:
                         'message': f'Conflicting Yes/No answers for {base_name}',
                         'field_name': base_name
                     })
-            
+
             return consistency_issues
-            
+
         except Exception as e:
             print(f"ERROR: Failed to check answer consistency: {str(e)}")
             return [{'type': 'consistency_check_error', 'message': str(e)}]
 
-    def _historical_pattern_learning(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _historical_pattern_learning(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> Dict[
+        str, Any]:
         """Learn from historical patterns to improve future predictions"""
         try:
             successful_geographical_inferences = []
             successful_duration_comparisons = []
-            
+
             # Simple geographical pattern learning
             for question in questions:
                 field_name = question.get('field_name', '').lower()
                 if 'country' in field_name or 'region' in field_name:
                     # Check if we have country data that could inform geographical questions
                     for key, value in self._flatten_dict(profile_data).items():
-                        if isinstance(value, str) and any(country in value.lower() for country in ["italy", "germany", "france", "spain"]):
+                        if isinstance(value, str) and any(
+                                country in value.lower() for country in ["italy", "germany", "france", "spain"]):
                             successful_geographical_inferences.append({
                                 'question': question,
                                 'pattern': f'Country {value} maps to European region',
                                 'note': 'Geographic pattern identified (no confidence boost)'
                             })
-            
+
             # Duration comparison pattern learning
             for question in questions:
                 field_name = question.get('field_name', '').lower()
@@ -9068,13 +9218,13 @@ For each field, check:
                             'pattern': 'Duration values need range comparison',
                             'note': 'Duration pattern identified (no confidence boost)'
                         })
-            
+
             return {
                 'successful_geographical_inferences': successful_geographical_inferences,
                 'successful_duration_comparisons': successful_duration_comparisons,
                 'total_patterns': len(successful_geographical_inferences) + len(successful_duration_comparisons)
             }
-            
+
         except Exception as e:
             print(f"ERROR: Failed historical pattern learning: {str(e)}")
             return {
@@ -9083,50 +9233,48 @@ For each field, check:
                 'total_patterns': 0
             }
 
-    def _contextual_confidence_adjustment(self, questions: List[Dict[str, Any]], results: List[Dict[str, Any]], 
-                                         profile_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _contextual_confidence_adjustment(self, questions: List[Dict[str, Any]], results: List[Dict[str, Any]],
+                                          profile_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Preserve original AI confidence assessment without artificial adjustments"""
         try:
             # 🚀 FIXED: Preserve original AI confidence - no artificial boosts
             adjusted_results = []
-            
+
             for result in results:
                 adjusted_result = result.copy()
                 # Keep original confidence as-is
                 original_confidence = result.get('confidence', 0)
-                
+
                 # Add context information to reasoning but don't change confidence
                 reasoning = result.get('reasoning', '').lower()
                 if any(keyword in reasoning for keyword in ['italy', 'europe', 'geographical', 'country']):
                     adjusted_result['reasoning'] += " [Geographic context]"
-                
+
                 if 'exact match' in reasoning:
                     adjusted_result['reasoning'] += " [Exact match]"
-                
+
                 if 'semantic' in reasoning:
                     adjusted_result['reasoning'] += " [Semantic match]"
-                
+
                 adjusted_results.append(adjusted_result)
-            
+
             return adjusted_results
-            
+
         except Exception as e:
             print(f"ERROR: Failed contextual confidence adjustment: {str(e)}")
             return results
 
-
-
-    def _validate_and_improve_action_selector(self, action: Dict[str, Any], html_content: str, 
-                                             current_attempt: int = 1) -> Dict[str, Any]:
+    def _validate_and_improve_action_selector(self, action: Dict[str, Any], html_content: str,
+                                              current_attempt: int = 1) -> Dict[str, Any]:
         """Validate and improve action selector"""
         try:
             selector = action.get('selector', '')
             action_type = action.get('action_type', '')
-            
+
             # Basic validation - if selector exists in HTML
             if selector and selector in html_content:
                 return action
-            
+
             # Try to improve the selector
             field_name = action.get('field_name', '')
             if field_name:
@@ -9139,18 +9287,18 @@ For each field, check:
                     f'#{field_name}',
                     f'.{field_name}'
                 ]
-                
+
                 for improved_selector in improved_selectors:
                     if improved_selector in html_content:
                         action['selector'] = improved_selector
                         action['validation_improved'] = True
                         return action
-            
+
             # If we can't improve it, mark as needs manual review
             action['needs_manual_review'] = True
             action['validation_failed'] = True
             return action
-            
+
         except Exception as e:
             print(f"ERROR: Failed to validate action selector: {str(e)}")
             action['validation_error'] = str(e)
@@ -9173,13 +9321,13 @@ For each field, check:
         }
         return mapping.get(field_type.lower(), 'text')
 
-    async def _generate_ai_answer_async(self, question: Dict[str, Any], profile_data: Dict[str, Any], 
-                                       profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def _generate_ai_answer_async(self, question: Dict[str, Any], profile_data: Dict[str, Any],
+                                        profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate AI answer for a single question (async version)"""
         try:
             # For now, fall back to synchronous batch processing with single question
             results = await self._batch_analyze_fields_async([question], profile_data, profile_dummy_data)
-            
+
             if results and len(results) > 0:
                 return results[0]
             else:
@@ -9197,7 +9345,7 @@ For each field, check:
                     "used_dummy_data": False,
                     "source_name": ""
                 }
-                
+
         except Exception as e:
             print(f"ERROR: Failed to generate AI answer async: {str(e)}")
             return {
