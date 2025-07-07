@@ -798,8 +798,13 @@ async def process_form(
             if not current_step:
                 raise HTTPException(status_code=404, detail="No pending steps found")
 
+            # 🚀 完整的首次访问激活逻辑
             # 更新工作流当前步骤
             workflow_instance.current_step_key = current_step.step_key
+            # 激活步骤状态
+            current_step.status = StepStatus.ACTIVE
+            # 设置开始时间
+            current_step.started_at = datetime.now()
             db.commit()
 
         # 处理数据字段映射：只使用 fill_data 和 profile_dummy_data
