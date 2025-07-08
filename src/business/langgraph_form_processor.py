@@ -5201,27 +5201,37 @@ class LangGraphFormProcessor:
                 is_required_field_empty = False
                 for question in valid_questions:
                     if question.get("required", False):
-                        # Check if this required field has any valid answer data
-                        field_selector = question.get("field_selector", "")
-                        field_name = question.get("field_name", "")
-                        field_has_answer = False
+                        # 🚀 NEW: Check if this field is conditionally hidden
+                        is_conditionally_hidden = self._check_conditional_field_visibility(
+                            question, questions, answers, state.get("form_html", "")
+                        )
+                        
+                        # Only process if not conditionally hidden
+                        if not is_conditionally_hidden:
+                            # Check if this required field has any valid answer data
+                            field_selector = question.get("field_selector", "")
+                            field_name = question.get("field_name", "")
+                            field_has_answer = False
 
-                        for data_item in all_field_data:
-                            item_selector = data_item.get("selector", "")
-                            # Check if this data item belongs to the required field
-                            if (field_selector and field_selector == item_selector) or \
-                                    (field_name and field_name in item_selector):
-                                # For checkbox/radio: check=1 means selected
-                                # For input: non-empty value means filled
-                                if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
-                                    field_has_answer = True
-                                    break
+                            for data_item in all_field_data:
+                                item_selector = data_item.get("selector", "")
+                                # Check if this data item belongs to the required field
+                                if (field_selector and field_selector == item_selector) or \
+                                        (field_name and field_name in item_selector):
+                                    # For checkbox/radio: check=1 means selected
+                                    # For input: non-empty value means filled
+                                    if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
+                                        field_has_answer = True
+                                        break
 
-                        if not field_has_answer:
-                            is_required_field_empty = True
+                            if not field_has_answer:
+                                is_required_field_empty = True
+                                print(
+                                    f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
+                                break
+                        else:
                             print(
-                                f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
-                            break
+                                f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' is conditionally hidden, skipping empty check")
 
                 # Enhanced interrupt logic:
                 # 1. Original logic: needs intervention AND no valid answer
@@ -5337,19 +5347,29 @@ class LangGraphFormProcessor:
                         field_should_interrupt = should_interrupt  # Use global interrupt status as default
 
                         if field_question.get("required", False):
-                            # Check if this required field has any valid answer
-                            field_has_answer = False
-                            for data_item in field_answer_data:
-                                # For checkbox/radio: check=1 means selected
-                                # For input: non-empty value means filled
-                                if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
-                                    field_has_answer = True
-                                    break
+                            # 🚀 NEW: Check if this individual field is conditionally hidden
+                            field_is_conditionally_hidden = self._check_conditional_field_visibility(
+                                field_question, questions, answers, state.get("form_html", "")
+                            )
+                            
+                            # Only process if not conditionally hidden
+                            if not field_is_conditionally_hidden:
+                                # Check if this required field has any valid answer
+                                field_has_answer = False
+                                for data_item in field_answer_data:
+                                    # For checkbox/radio: check=1 means selected
+                                    # For input: non-empty value means filled
+                                    if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
+                                        field_has_answer = True
+                                        break
 
-                            if not field_has_answer:
-                                field_should_interrupt = True
+                                if not field_has_answer:
+                                    field_should_interrupt = True
+                                    print(
+                                        f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
+                            else:
                                 print(
-                                    f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
+                                    f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' is conditionally hidden, skipping individual field empty check")
 
                         # Add interrupt field at question level ONLY if field_should_interrupt is True
                         if field_should_interrupt:
