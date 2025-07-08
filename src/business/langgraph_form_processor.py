@@ -1532,7 +1532,10 @@ class StepAnalyzer:
             # Generate enhanced selector based on available information
             if element_id:
                 # Use ID-based selector with element type
-                enhanced_selector = f'{element_type}[id="{element_id}"]'
+                if field_type not in ["autocomplete"]:
+                    enhanced_selector = f'{element_type}[id="{element_id}"][type="{field_type}"]'
+                else:
+                    enhanced_selector = f'{element_type}[id="{element_id}"]'
             elif field_name:
                 # Generate attribute-based selector for radio/checkbox without value
                 if field_type in ["radio", "checkbox"]:
@@ -3088,11 +3091,11 @@ class LangGraphFormProcessor:
             # No longer filtering with dependency analysis - using all detected fields
             filtered_fields = detected_fields
 
-            # 🚀 STEP 2: Apply universal conditional filtering (TEMPORARILY DISABLED)
+            # 🚀 STEP 2: Apply universal conditional filtering (RE-ENABLED)
             ai_answers = state.get("ai_answers", [])
             form_html = state.get("form_html", "")
             conditional_context = self._build_conditional_context(detected_fields, ai_answers, form_html)
-            # DISABLED: filtered_fields = self._filter_fields_by_conditions(filtered_fields, conditional_context)
+            filtered_fields = self._filter_fields_by_conditions(filtered_fields, conditional_context)
 
             print(
                 f"[workflow_id:{workflow_id}] DEBUG: Question Generator - Filtered {len(detected_fields)} fields to {len(filtered_fields)} after decision tree and conditional filtering")
@@ -3170,8 +3173,8 @@ class LangGraphFormProcessor:
                     print(
                         f"DEBUG: Question Generator - Failed to generate question for {field_name} (ID: {field_id})")
 
-            # 🚀 NEW: Apply conditional filtering to generated questions (TEMPORARILY DISABLED)
-            # DISABLED: all_questions = self._filter_questions_by_conditions(all_questions, conditional_context)
+            # 🚀 NEW: Apply conditional filtering to generated questions (RE-ENABLED)
+            all_questions = self._filter_questions_by_conditions(all_questions, conditional_context)
 
             # Sort questions by their HTML element position
             try:
@@ -5816,6 +5819,28 @@ class LangGraphFormProcessor:
         if not field_name:
             return True
 
+        # 🚀 NEW: Check if field is inside collapsed <details> elements using HTML soup
+        html_soup = conditional_context.get("html_soup")
+        if html_soup:
+            field_element = None
+            field_selector = field.get("field_selector", "")
+            
+            # Find the field element
+            if field_selector and field_selector.startswith('#'):
+                field_element = html_soup.find(id=field_selector[1:])
+            elif field_name:
+                field_element = html_soup.find(attrs={"name": field_name})
+            
+            if field_element:
+                # Check if field is inside collapsed <details> elements
+                details_parents = field_element.find_parents('details')
+                if details_parents:
+                    for details_element in details_parents:
+                        # If any parent <details> element doesn't have the 'open' attribute, field is hidden
+                        if not details_element.get('open'):
+                            print(f"DEBUG: Field Filter - Field '{field_name}' is inside collapsed <details> element, marking as hidden")
+                            return False
+
         dependency_map = conditional_context.get("dependency_map", {})
 
         # 🚀 FIXED: If field has no conditional rules, it should be processed (default visible)
@@ -5949,6 +5974,16 @@ class LangGraphFormProcessor:
 
             if not field_element:
                 return False
+
+            # 🚀 NEW: Check if field is inside collapsed <details> elements
+            details_parents = field_element.find_parents('details')
+            if details_parents:
+                for details_element in details_parents:
+                    # If any parent <details> element doesn't have the 'open' attribute, field is hidden
+                    if not details_element.get('open'):
+                        print(f"DEBUG: Conditional Field - Field '{field_name}' is inside collapsed <details> element, marking as hidden")
+                        return True
+                print(f"DEBUG: Conditional Field - Field '{field_name}' is inside <details> elements but all are open")
 
             # Check if the field or its container has conditional attributes
             conditional_container = field_element.find_parent(attrs={"data-toggled-by": True})
