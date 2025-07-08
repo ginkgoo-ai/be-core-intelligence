@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import re
@@ -6579,22 +6578,32 @@ class LangGraphFormProcessor:
                         f"DEBUG: Action Generator - Failed to generate action for {metadata.get('field_name', 'unknown')}: {str(action_error)}")
                     continue
 
-            # 🚀 CRITICAL FIX: Always add submit button action at the end
-            has_submit = any(
-                "submit" in action.get("selector", "").lower() or
-                action.get("type") == "submit" or
-                ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
-                for action in actions
+            # 🚀 ENHANCED: Check for interrupt questions before adding submit action
+            has_interrupt_questions = any(
+                merged_item.get("question", {}).get("type") == "interrupt"
+                for merged_item in merged_data
             )
 
-            if not has_submit:
-                print("DEBUG: Action Generator - No submit action found, searching for submit button")
-                submit_action = self._find_and_create_submit_action(state["form_html"])
-                if submit_action:
-                    actions.append(submit_action)
-                    print(f"DEBUG: Action Generator - Added submit action: {submit_action}")
-                else:
-                    print("DEBUG: Action Generator - No submit button found in HTML")
+            if has_interrupt_questions:
+                print("DEBUG: Action Generator - Found interrupt questions, skipping submit action generation")
+                print(f"DEBUG: Action Generator - Interrupt questions detected: {sum(1 for item in merged_data if item.get('question', {}).get('type') == 'interrupt')}")
+            else:
+                # 🚀 CRITICAL FIX: Only add submit button action if no interrupt questions
+                has_submit = any(
+                    "submit" in action.get("selector", "").lower() or
+                    action.get("type") == "submit" or
+                    ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
+                    for action in actions
+                )
+
+                if not has_submit:
+                    print("DEBUG: Action Generator - No submit action found, searching for submit button")
+                    submit_action = self._find_and_create_submit_action(state["form_html"])
+                    if submit_action:
+                        actions.append(submit_action)
+                        print(f"DEBUG: Action Generator - Added submit action: {submit_action}")
+                    else:
+                        print("DEBUG: Action Generator - No submit button found in HTML")
 
             # 🚀 IMPROVED: Sort actions by merged_data order (page question order)
             def get_element_position_in_html(action):
@@ -7050,25 +7059,36 @@ class LangGraphFormProcessor:
 
                     actions = validated_actions
 
-                    # Check if submit button action exists
-                    has_submit = any(
-                        "submit" in action.get("selector", "").lower() or
-                        action.get("type") == "submit" or
-                        ("button" in action.get("selector", "").lower() and "submit" in action.get("selector",
-                                                                                                   "").lower())
-                        for action in actions
+                    # 🚀 ENHANCED: Check for interrupt questions before adding submit action
+                    merged_qa_data = state.get("merged_qa_data", [])
+                    has_interrupt_questions = any(
+                        item.get("question", {}).get("type") == "interrupt"
+                        for item in merged_qa_data
                     )
 
-                    # If no submit action found, automatically add one by finding submit button in HTML
-                    if not has_submit:
-                        print(
-                            "DEBUG: LLM Action Generator - No submit action found, searching for submit button in HTML")
-                        submit_action = self._find_and_create_submit_action(state["form_html"])
-                        if submit_action:
-                            actions.append(submit_action)
-                            print(f"DEBUG: LLM Action Generator - Added submit action: {submit_action}")
-                        else:
-                            print("DEBUG: LLM Action Generator - No submit button found in HTML")
+                    if has_interrupt_questions:
+                        print("DEBUG: LLM Action Generator - Found interrupt questions, skipping submit action generation")
+                        print(f"DEBUG: LLM Action Generator - Interrupt questions detected: {sum(1 for item in merged_qa_data if item.get('question', {}).get('type') == 'interrupt')}")
+                    else:
+                        # Check if submit button action exists
+                        has_submit = any(
+                            "submit" in action.get("selector", "").lower() or
+                            action.get("type") == "submit" or
+                            ("button" in action.get("selector", "").lower() and "submit" in action.get("selector",
+                                                                                                       "").lower())
+                            for action in actions
+                        )
+
+                        # If no submit action found, automatically add one by finding submit button in HTML
+                        if not has_submit:
+                            print(
+                                "DEBUG: LLM Action Generator - No submit action found, searching for submit button in HTML")
+                            submit_action = self._find_and_create_submit_action(state["form_html"])
+                            if submit_action:
+                                actions.append(submit_action)
+                                print(f"DEBUG: LLM Action Generator - Added submit action: {submit_action}")
+                            else:
+                                print("DEBUG: LLM Action Generator - No submit button found in HTML")
 
                     # Store the LLM-generated actions in the dedicated field
                     state["llm_generated_actions"] = actions
@@ -7855,7 +7875,7 @@ class LangGraphFormProcessor:
             field_questions = state["field_questions"]
             workflow_id = state.get("workflow_id", "unknown")
             step_key = state.get("step_key", "unknown")
-
+            form_html = state.get("form_html")
             if not field_questions:
                 print("DEBUG: AI Answerer Async - No questions to process")
                 state["ai_answers"] = []
@@ -7869,7 +7889,7 @@ class LangGraphFormProcessor:
                 # Check if current page has questions about "other/additional" items
                 has_cross_page_questions = any(
                     any(keyword in question.get("question", "").lower() for keyword in
-                        ["other", "additional", "another", "more", "还有", "其他", "另外"])
+                        ["other", "additional", "another"])
                     for question in field_questions
                 )
 
@@ -7878,7 +7898,7 @@ class LangGraphFormProcessor:
 
                     # Analyze address completion for address-related questions
                     if any(keyword in question.get("question", "").lower() for keyword in
-                           ["address", "lived", "residence", "地址", "居住"] for question in field_questions):
+                           ["address", "lived", "residence"] for question in field_questions):
 
                         address_analysis = self.cross_page_cache.analyze_address_completion(
                             workflow_id, step_key, profile_data
@@ -7913,93 +7933,57 @@ class LangGraphFormProcessor:
                 # Continue processing without cross-page data
                 pass
 
-            # 🚀 OPTIMIZATION 4: Try early return for exact matches first (fastest)
-            early_return_result = self._can_use_early_return(field_questions, profile_data)
+            try:
+                # Get cross-page context for batch processing
+                cross_page_context = state.get("cross_page_analysis", {})
 
-            if early_return_result:
-                exact_matches = early_return_result["exact_matches"]
-                remaining_questions = early_return_result["remaining_questions"]
+                batch_answers = await self._batch_analyze_fields_async(form_html, field_questions, profile_data,
+                                                                       profile_dummy_data, cross_page_context)
 
-                print(
-                    f"DEBUG: AI Answerer Async - Early return: {len(exact_matches)} exact matches, {len(remaining_questions)} need LLM processing")
-
-                if remaining_questions:
-                    # Process remaining questions with batch optimization
-                    try:
-                        # Get cross-page context for remaining questions
-                        cross_page_context = state.get("cross_page_analysis", {})
-
-                        batch_answers = await self._batch_analyze_fields_async(remaining_questions, profile_data,
-                                                                               profile_dummy_data, cross_page_context)
-                        # Combine exact matches with batch results
-                        answers = exact_matches + batch_answers
-                    except Exception as batch_error:
-                        print(f"DEBUG: AI Answerer Async - Batch processing for remaining failed: {str(batch_error)}")
-                        # Fallback to individual processing for remaining questions
-                        tasks = [self._generate_ai_answer_async(q, profile_data, profile_dummy_data) for q in
-                                 remaining_questions]
-                        individual_answers = await asyncio.gather(*tasks, return_exceptions=True)
-                        valid_individual = [ans for ans in individual_answers if not isinstance(ans, Exception)]
-                        answers = exact_matches + valid_individual
+                # Check if batch processing was successful
+                if len(batch_answers) == len(field_questions):
+                    print(
+                        f"DEBUG: AI Answerer Async - Batch processing successful for all {len(batch_answers)} fields")
+                    answers = batch_answers
                 else:
-                    # All questions had exact matches
-                    answers = exact_matches
-            else:
-                # 🚀 OPTIMIZATION 2: Try batch processing first (much faster)
-                batch_answers = []
-                remaining_questions = []
+                    print(
+                        f"DEBUG: AI Answerer Async - Batch processing partial success: {len(batch_answers)}/{len(field_questions)}")
+                    # Identify questions that need individual processing
+                    processed_field_names = {ans.get("field_name") for ans in batch_answers}
+                    remaining_questions = [q for q in field_questions if
+                                           q["field_name"] not in processed_field_names]
 
-                try:
-                    # Get cross-page context for batch processing
-                    cross_page_context = state.get("cross_page_analysis", {})
-
-                    batch_answers = await self._batch_analyze_fields_async(field_questions, profile_data,
-                                                                           profile_dummy_data, cross_page_context)
-
-                    # Check if batch processing was successful
-                    if len(batch_answers) == len(field_questions):
+                    if remaining_questions:
                         print(
-                            f"DEBUG: AI Answerer Async - Batch processing successful for all {len(batch_answers)} fields")
+                            f"DEBUG: AI Answerer Async - ⚠️ {len(remaining_questions)} questions remaining, but individual processing removed")
+                        print("DEBUG: AI Answerer Async - Using batch answers only")
+                        # 🚀 REMOVED: Individual processing fallback
                         answers = batch_answers
                     else:
-                        print(
-                            f"DEBUG: AI Answerer Async - Batch processing partial success: {len(batch_answers)}/{len(field_questions)}")
-                        # Identify questions that need individual processing
-                        processed_field_names = {ans.get("field_name") for ans in batch_answers}
-                        remaining_questions = [q for q in field_questions if
-                                               q["field_name"] not in processed_field_names]
+                        answers = batch_answers
 
-                        if remaining_questions:
-                            print(
-                                f"DEBUG: AI Answerer Async - ⚠️ {len(remaining_questions)} questions remaining, but individual processing removed")
-                            print("DEBUG: AI Answerer Async - Using batch answers only")
-                            # 🚀 REMOVED: Individual processing fallback
-                            answers = batch_answers
-                        else:
-                            answers = batch_answers
+            except Exception as batch_error:
+                print(f"DEBUG: AI Answerer Async - ❌ Batch processing failed: {str(batch_error)}")
+                print(
+                    "DEBUG: AI Answerer Async - ⚠️ Individual processing fallback removed - generating empty answers")
 
-                except Exception as batch_error:
-                    print(f"DEBUG: AI Answerer Async - ❌ Batch processing failed: {str(batch_error)}")
-                    print(
-                        "DEBUG: AI Answerer Async - ⚠️ Individual processing fallback removed - generating empty answers")
+                # 🚀 REMOVED: Individual processing fallback
+                # Instead of calling single-question methods, generate empty answers
+                answers = []
+                for question in field_questions:
+                    empty_answer = {
+                        "question_id": question.get("id", ""),
+                        "field_selector": question.get("field_selector", ""),
+                        "field_name": question.get("field_name", ""),
+                        "answer": "",
+                        "confidence": 0,
+                        "reasoning": "Batch processing failed, individual processing removed",
+                        "needs_intervention": True,
+                        "used_dummy_data": False
+                    }
+                    answers.append(empty_answer)
 
-                    # 🚀 REMOVED: Individual processing fallback
-                    # Instead of calling single-question methods, generate empty answers
-                    answers = []
-                    for question in field_questions:
-                        empty_answer = {
-                            "question_id": question.get("id", ""),
-                            "field_selector": question.get("field_selector", ""),
-                            "field_name": question.get("field_name", ""),
-                            "answer": "",
-                            "confidence": 0,
-                            "reasoning": "Batch processing failed, individual processing removed",
-                            "needs_intervention": True,
-                            "used_dummy_data": False
-                        }
-                        answers.append(empty_answer)
-
-                    print(f"DEBUG: AI Answerer Async - Generated {len(answers)} empty answers as fallback")
+                print(f"DEBUG: AI Answerer Async - Generated {len(answers)} empty answers as fallback")
 
             # Process results and handle any exceptions
             valid_answers = []
@@ -8127,22 +8111,32 @@ class LangGraphFormProcessor:
                         final_actions.append(action)
                         print(f"DEBUG: Generated action from data: {action}")
 
-            # Add submit button action
-            has_submit = any(
-                "submit" in action.get("selector", "").lower() or
-                action.get("type") == "submit" or
-                ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
-                for action in final_actions
+            # 🚀 ENHANCED: Check for interrupt questions before adding submit action
+            has_interrupt_questions = any(
+                item.get("question", {}).get("type") == "interrupt"
+                for item in merged_qa_data
             )
 
-            if not has_submit:
-                print("DEBUG: LLM Action Generator Async - No submit action found, searching for submit button in HTML")
-                submit_action = self._find_and_create_submit_action(state["form_html"])
-                if submit_action:
-                    final_actions.append(submit_action)
-                    print(f"DEBUG: LLM Action Generator Async - Added submit action: {submit_action}")
-                else:
-                    print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
+            if has_interrupt_questions:
+                print("DEBUG: LLM Action Generator Async - Found interrupt questions, skipping submit action generation")
+                print(f"DEBUG: LLM Action Generator Async - Interrupt questions detected: {sum(1 for item in merged_qa_data if item.get('question', {}).get('type') == 'interrupt')}")
+            else:
+                # Add submit button action only if no interrupt questions
+                has_submit = any(
+                    "submit" in action.get("selector", "").lower() or
+                    action.get("type") == "submit" or
+                    ("button" in action.get("selector", "").lower() and "submit" in action.get("selector", "").lower())
+                    for action in final_actions
+                )
+
+                if not has_submit:
+                    print("DEBUG: LLM Action Generator Async - No submit action found, searching for submit button in HTML")
+                    submit_action = self._find_and_create_submit_action(state["form_html"])
+                    if submit_action:
+                        final_actions.append(submit_action)
+                        print(f"DEBUG: LLM Action Generator Async - Added submit action: {submit_action}")
+                    else:
+                        print("DEBUG: LLM Action Generator Async - No submit button found in HTML")
 
             # 🚀 DISABLED: Skip action validation as it's causing selector corruption
             # The validation process was generating corrupted selectors with duplicate attributes
@@ -8481,7 +8475,7 @@ class LangGraphFormProcessor:
 
         return state
 
-    async def _batch_analyze_fields_async(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
+    async def _batch_analyze_fields_async(self, form_html:str ,questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
                                           profile_dummy_data: Dict[str, Any] = None,
                                           cross_page_context: Dict[str, Any] = None) -> List[
         Dict[str, Any]]:
@@ -8543,8 +8537,11 @@ class LangGraphFormProcessor:
 
             # 🚀 OPTIMIZATION: Simplified prompt to reduce token usage with cross-page context
             prompt = f"""
-            Analyze form fields and provide answers based on user data.
+            First, analyze and understand the structure and semantics of HTML, then based on the extracted fields provide answers based on the user data.
 
+            # Html 
+            {form_html}
+            
             # Fields to analyze:
             {json.dumps(fields_data, indent=1, ensure_ascii=False)}
 
@@ -8581,6 +8578,7 @@ class LangGraphFormProcessor:
               * If context shows previous addresses/items filled, answer "yes/no" accordingly
               * For "Have you lived at any other addresses?": check filled_addresses vs remaining_addresses
               * High confidence (80+) for cross-page contextual answers with clear previous data
+            9. Please make a comprehensive judgment based on the context within the Html.
             Response format (JSON array):
             [
               {{
@@ -8759,102 +8757,6 @@ class LangGraphFormProcessor:
             print(f"DEBUG: Batch Analysis - Error: {str(e)}")
             # Fallback to individual processing
             return []
-
-    def _can_use_early_return(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any]) -> Optional[
-        List[Dict[str, Any]]]:
-        """🚀 OPTIMIZATION 4: Early return for simple exact matches"""
-        try:
-            if not questions or not profile_data:
-                return None
-
-            print(f"DEBUG: Early Return - Checking {len(questions)} fields for exact matches")
-
-            early_results = []
-            exact_matches = 0
-
-            for question in questions:
-                field_name = question.get("field_name", "").lower()
-                field_type = question.get("field_type", "").lower()
-
-                # Check for exact field name matches in profile data
-                exact_match_value = None
-                exact_match_path = None
-
-                # Direct field name match
-                if field_name in profile_data:
-                    exact_match_value = profile_data[field_name]
-                    exact_match_path = field_name
-
-                # Check nested structures for common patterns
-                if not exact_match_value:
-                    for key, value in profile_data.items():
-                        if isinstance(value, dict):
-                            # Check nested objects
-                            if field_name in value:
-                                exact_match_value = value[field_name]
-                                exact_match_path = f"{key}.{field_name}"
-                                break
-
-                            # Check for semantic matches in nested objects
-                            if field_name == "telephonenumber" and "telephoneNumber" in value:
-                                exact_match_value = value["telephoneNumber"]
-                                exact_match_path = f"{key}.telephoneNumber"
-                                break
-                            elif field_name == "email" and "primaryEmail" in value:
-                                exact_match_value = value["primaryEmail"]
-                                exact_match_path = f"{key}.primaryEmail"
-                                break
-
-                if exact_match_value and str(exact_match_value).strip():
-                    # Found exact match
-                    result = {
-                        "question_id": question["id"],
-                        "field_selector": question["field_selector"],
-                        "field_name": question["field_name"],
-                        "answer": str(exact_match_value),
-                        "confidence": 90,  # High confidence for exact matches (reduced from 95)
-                        "reasoning": f"Exact match found at {exact_match_path}",
-                        "needs_intervention": False,
-                        "data_source_path": exact_match_path,
-                        "field_match_type": "exact",
-                        "used_dummy_data": False,
-                        "source_name": "profile_data"
-                    }
-                    early_results.append(result)
-                    exact_matches += 1
-                else:
-                    # No exact match found, will need LLM processing
-                    early_results.append(None)
-
-            # Only use early return if we have a high percentage of exact matches
-            exact_match_ratio = exact_matches / len(questions)
-            if exact_match_ratio >= 0.4:  # 🚀 PERFORMANCE: Lowered to 40% for better early return rate
-                print(
-                    f"DEBUG: Early Return - Found {exact_matches}/{len(questions)} exact matches ({exact_match_ratio:.1%})")
-
-                # Fill in the None values with empty results for LLM processing
-                final_results = []
-                questions_for_llm = []
-
-                for i, result in enumerate(early_results):
-                    if result:
-                        final_results.append(result)
-                    else:
-                        questions_for_llm.append(questions[i])
-
-                # Return the exact matches and mark remaining questions for LLM processing
-                return {
-                    "exact_matches": final_results,
-                    "remaining_questions": questions_for_llm
-                }
-
-            print(
-                f"DEBUG: Early Return - Only {exact_matches}/{len(questions)} exact matches ({exact_match_ratio:.1%}), using full LLM processing")
-            return None
-
-        except Exception as e:
-            print(f"DEBUG: Early Return - Error: {str(e)}")
-            return None
 
     def _enhanced_contextual_reasoning(self, questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
                                        profile_dummy_data: Dict[str, Any] = None) -> Dict[str, Any]:
