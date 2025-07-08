@@ -1532,7 +1532,7 @@ class StepAnalyzer:
             # Generate enhanced selector based on available information
             if element_id:
                 # Use ID-based selector with element type
-                if field_type not in ["autocomplete"]:
+                if field_type not in ["autocomplete","select"]:
                     enhanced_selector = f'{element_type}[id="{element_id}"][type="{field_type}"]'
                 else:
                     enhanced_selector = f'{element_type}[id="{element_id}"]'
