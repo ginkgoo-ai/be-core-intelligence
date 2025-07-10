@@ -1532,7 +1532,7 @@ class StepAnalyzer:
             # Generate enhanced selector based on available information
             if element_id:
                 # Use ID-based selector with element type
-                if field_type not in ["autocomplete","select"]:
+                if field_type not in ["autocomplete","select","textarea"]:
                     enhanced_selector = f'{element_type}[id="{element_id}"][type="{field_type}"]'
                 else:
                     enhanced_selector = f'{element_type}[id="{element_id}"]'
@@ -3041,7 +3041,7 @@ class LangGraphFormProcessor:
                 "id": hidden_select.get("id", "") or hidden_select.get("name", ""),
                 "name": hidden_select.get("name", ""),
                 "type": "autocomplete",  # Special type for autocomplete fields
-                "selector": f"#{ui_input.get('id', '')}",  # Use UI input selector for interaction
+                "selector": f"input[id=\"{ui_input.get('id', '')}\"]",  # Use UI input selector for interaction
                 "hidden_selector": f"#{hidden_select.get('id', '')}",  # Store hidden select selector
                 "required": hidden_select.get("required") is not None or ui_input.get("aria-required") == "true",
                 "label": self.step_analyzer._find_field_label(ui_input) or self.step_analyzer._find_field_label(
@@ -4380,7 +4380,10 @@ class LangGraphFormProcessor:
                                 f"[workflow_id:{workflow_id}] DEBUG: Found parent exclusion trigger: {field_name} = {answer}")
                             parent_trigger_found = True
 
-                        # Exclude all parent-related questions
+                        # 🚀 CRITICAL FIX: Don't exclude the parentIsUnknown trigger field itself
+                        # This field should be processed and checked if it's the right choice
+
+                        # Exclude all parent-related questions EXCEPT the trigger field
                         pattern_excluded_count = 0
                         for i, question in enumerate(field_questions):
                             question_field_name = question.get("field_name", "")
@@ -4393,6 +4396,13 @@ class LangGraphFormProcessor:
                                 "parent.relationshipRef", "parent.relationship",
                                 "parent.hadAlwaysSameNationality", "parent.nationalityAtApplicantsBirthRef"
                             ]
+
+                            # 🚀 CRITICAL FIX: Don't exclude the parentIsUnknown trigger field itself
+                            if "parentIsUnknown" in question_field_name or (
+                                "parent" in question_field_name.lower() and "unknown" in question_field_name.lower()
+                            ):
+                                print(f"[workflow_id:{workflow_id}] DEBUG: Keeping parentIsUnknown trigger field: {question_field_name}")
+                                continue  # Don't exclude the trigger field
 
                             for pattern in parent_field_patterns:
                                 if pattern.lower() in question_field_name.lower():
@@ -5833,8 +5843,22 @@ class LangGraphFormProcessor:
             
             if field_element:
                 # Check if field is inside collapsed <details> elements
+                # BUT: Exception for control fields that should always be considered (like parentIsUnknown)
                 details_parents = field_element.find_parents('details')
                 if details_parents:
+                    # Check if this is a control field that should always be processed
+                    is_control_field = (
+                        "unknown" in field_name.lower() or 
+                        "isunknown" in field_name.lower() or
+                        "parentisunknown" in field_name.lower() or
+                        "nohave" in field_name.lower() or
+                        "donotrhave" in field_name.lower()
+                    )
+                    
+                    if is_control_field:
+                        print(f"DEBUG: Field Filter - Field '{field_name}' is a control field in <details>, should be processed")
+                        return True  # Always process control fields
+                    
                     for details_element in details_parents:
                         # If any parent <details> element doesn't have the 'open' attribute, field is hidden
                         if not details_element.get('open'):
@@ -5976,8 +6000,22 @@ class LangGraphFormProcessor:
                 return False
 
             # 🚀 NEW: Check if field is inside collapsed <details> elements
+            # BUT: Exception for control fields that should always be considered (like parentIsUnknown)
             details_parents = field_element.find_parents('details')
             if details_parents:
+                # Check if this is a control field that should always be processed
+                is_control_field = (
+                    "unknown" in field_name.lower() or 
+                    "isunknown" in field_name.lower() or
+                    "parentisunknown" in field_name.lower() or
+                    "nohave" in field_name.lower() or
+                    "donotrhave" in field_name.lower()
+                )
+                
+                if is_control_field:
+                    print(f"DEBUG: Conditional Field - Field '{field_name}' is a control field in <details>, should be processed")
+                    return False  # Don't hide control fields
+                
                 for details_element in details_parents:
                     # If any parent <details> element doesn't have the 'open' attribute, field is hidden
                     if not details_element.get('open'):
@@ -6448,6 +6486,15 @@ class LangGraphFormProcessor:
                     if checked_items:
                         print(
                             f"DEBUG: Action Generator - Processing {field_type} field with {len(checked_items)} checked items")
+                        
+                        # 🚀 CRITICAL FIX: Check if field is inside <details> element that needs to be expanded first
+                        field_selector = metadata.get("field_selector", "")
+                        details_action = self._check_and_create_details_expand_action(field_selector,
+                                                                                      state.get("form_html", ""))
+                        if details_action:
+                            actions.append(details_action)
+                            print(f"DEBUG: Action Generator - Added details expand action for {field_type}: {details_action}")
+                        
                         # Process individual checkbox/radio items using stored selectors
                         for data_item in checked_items:
                             action = {
@@ -6803,33 +6850,74 @@ class LangGraphFormProcessor:
 
             # Find the target field element
             field_element = None
+            print(f"DEBUG: Details expand - Looking for field with selector: {field_selector}")
+            
             if field_selector.startswith("#"):
                 element_id = field_selector[1:]
                 field_element = soup.find(id=element_id)
+                print(f"DEBUG: Details expand - Found element by ID: {field_element is not None}")
             elif field_selector.startswith("."):
                 class_name = field_selector[1:]
                 field_element = soup.find(class_=class_name)
+                print(f"DEBUG: Details expand - Found element by class: {field_element is not None}")
             elif "[" in field_selector and "]" in field_selector:
-                # Handle attribute selectors like input[name="parent.relationshipRef"]
+                # Handle attribute selectors like input[id="parentIsUnknown"][type="checkbox"]
                 try:
+                    # Extract tag name (everything before the first [)
                     tag = field_selector.split("[")[0]
-                    attr_part = field_selector.split("[")[1].split("]")[0]
-                    if "=" in attr_part:
-                        attr_name, attr_value = attr_part.split("=", 1)
-                        attr_value = attr_value.strip('"\'')
-                        field_element = soup.find(tag, {attr_name: attr_value})
+                    print(f"DEBUG: Details expand - Tag: {tag}")
+                    
+                    # Extract all attribute pairs
+                    attrs = {}
+                    import re
+                    attr_pattern = r'\[([^=]+)="([^"]+)"\]'
+                    matches = re.findall(attr_pattern, field_selector)
+                    
+                    for attr_name, attr_value in matches:
+                        attrs[attr_name] = attr_value
+                        print(f"DEBUG: Details expand - Attribute: {attr_name} = {attr_value}")
+                    
+                    if attrs:
+                        field_element = soup.find(tag, attrs)
+                        print(f"DEBUG: Details expand - Found element by attributes: {field_element is not None}")
                     else:
-                        field_element = soup.find(tag, {attr_part: True})
-                except:
+                        # Fallback to old logic for simple selectors
+                        attr_part = field_selector.split("[")[1].split("]")[0]
+                        if "=" in attr_part:
+                            attr_name, attr_value = attr_part.split("=", 1)
+                            attr_value = attr_value.strip('"\'')
+                            field_element = soup.find(tag, {attr_name: attr_value})
+                        else:
+                            field_element = soup.find(tag, {attr_part: True})
+                        print(f"DEBUG: Details expand - Found element by fallback: {field_element is not None}")
+                except Exception as e:
+                    print(f"DEBUG: Details expand - Error parsing selector: {str(e)}")
                     pass
 
             if not field_element:
-                return None
+                print(f"DEBUG: Details expand - Field element not found with BeautifulSoup find, trying CSS selector")
+                # Try using CSS selector as fallback
+                try:
+                    elements = soup.select(field_selector)
+                    if elements:
+                        field_element = elements[0]
+                        print(f"DEBUG: Details expand - Found element using CSS selector: {field_element is not None}")
+                    else:
+                        print(f"DEBUG: Details expand - No elements found with CSS selector: {field_selector}")
+                except Exception as e:
+                    print(f"DEBUG: Details expand - CSS selector failed: {str(e)}")
+                
+                if not field_element:
+                    print(f"DEBUG: Details expand - Field element not found for selector: {field_selector}")
+                    return None
 
             # Check if field is inside a <details> element
             details_parent = field_element.find_parent('details')
             if not details_parent:
+                print(f"DEBUG: Details expand - Field element not inside <details> element")
                 return None
+                
+            print(f"DEBUG: Details expand - Found field inside <details> element")
 
             # Get details element identifier to avoid duplicates
             details_id = details_parent.get('id', '')
@@ -6840,12 +6928,16 @@ class LangGraphFormProcessor:
                     details_id = summary.get_text(strip=True)[:50]  # First 50 chars as ID
 
             if details_id in self._expanded_details:
+                print(f"DEBUG: Details expand - Already expanded details with ID: {details_id}")
                 return None  # Already expanded this details element
 
             # Find the summary element
             summary_element = details_parent.find('summary')
             if not summary_element:
+                print(f"DEBUG: Details expand - No summary element found in details")
                 return None
+
+            print(f"DEBUG: Details expand - Found summary element: {summary_element.get_text(strip=True)[:50]}")
 
             # Mark this details as expanded
             self._expanded_details.add(details_id)
@@ -6864,8 +6956,16 @@ class LangGraphFormProcessor:
                     if aria_controls:
                         summary_selector = f"summary[aria-controls='{aria_controls}']"
                     else:
-                        # Last resort: generic summary selector (risky but better than nothing)
-                        summary_selector = "summary"
+                        # Enhanced fallback: try to create unique selector based on summary text
+                        summary_text = summary_element.get_text(strip=True)
+                        if summary_text and len(summary_text) > 5:
+                            # Use summary text as part of selector for better uniqueness
+                            # Escape special characters for CSS selector
+                            escaped_text = summary_text.replace('"', '\\"')[:30]  # First 30 chars
+                            summary_selector = f"summary:contains('{escaped_text}')"
+                        else:
+                            # Last resort: generic summary selector (risky but better than nothing)
+                            summary_selector = "summary"
 
             # Create expand action
             expand_action = {
@@ -6880,6 +6980,32 @@ class LangGraphFormProcessor:
         except Exception as e:
             print(f"DEBUG: Error in _check_and_create_details_expand_action: {str(e)}")
             return None
+
+    def _extract_answer_from_qa_data(self, qa_item: Dict[str, Any]) -> str:
+        """Extract answer from Q&A data item"""
+        try:
+            question_data = qa_item.get("question", {})
+            answer_data = question_data.get("answer", {})
+            
+            # Try to get answer from data array
+            data_array = answer_data.get("data", [])
+            selected_answers = []
+            
+            for data_item in data_array:
+                if data_item.get("check") == 1:  # Selected item
+                    value = data_item.get("value", "")
+                    if value:
+                        selected_answers.append(value)
+            
+            if selected_answers:
+                return ", ".join(selected_answers)
+            
+            # Fallback to direct answer field
+            return answer_data.get("answer", "")
+            
+        except Exception as e:
+            print(f"DEBUG: Error extracting answer from Q&A data: {str(e)}")
+            return ""
 
     def _extract_answer_from_data(self, answer_data: Dict[str, Any]) -> str:
         """Extract answer value from answer data structure"""
@@ -7377,7 +7503,26 @@ class LangGraphFormProcessor:
             existing_data = step.data or {}
             existing_history = existing_data.get("history", [])
 
-            # Create new operation record for history
+            # Create new operation record for history with detailed Q&A information
+            detailed_qa_history = []
+            merged_qa_data = state.get("merged_qa_data", [])
+            
+            for qa_item in merged_qa_data:
+                question_data = qa_item.get("question", {})
+                metadata = qa_item.get("_metadata", {})
+                
+                qa_record = {
+                    "question": question_data.get("data", "").get("name",""),
+                    "field_name": metadata.get("field_name", ""),
+                    "field_type": metadata.get("field_type", ""),
+                    "answer": self._extract_answer_from_qa_data(qa_item),
+                    "confidence": question_data.get("confidence", 0),
+                    "reasoning": question_data.get("reasoning", ""),
+                    "used_dummy_data": question_data.get("used_dummy_data", False),
+                    "field_selector": metadata.get("field_selector", "")
+                }
+                detailed_qa_history.append(qa_record)
+            
             new_operation = {
                 "processed_at": datetime.utcnow().isoformat(),
                 "workflow_id": state["workflow_id"],
@@ -7387,7 +7532,8 @@ class LangGraphFormProcessor:
                 "question_count": len(state.get("field_questions", [])),
                 "answer_count": len(state.get("ai_answers", [])),
                 "action_count": len(state.get("llm_generated_actions", [])),
-                "dummy_data_used_count": len(state.get("dummy_data_usage", []))
+                "dummy_data_used_count": len(state.get("dummy_data_usage", [])),
+                "detailed_qa_history": detailed_qa_history  # 🚀 NEW: 详细的问答历史记录
             }
 
             # Add error details if present
@@ -7983,6 +8129,43 @@ class LangGraphFormProcessor:
                                 print(
                                     f"DEBUG: AI Answerer Async - Added cross-page context to question: {question.get('field_name', 'unknown')}")
 
+                    # 🚀 NEW: Analyze travel history completion for travel-related questions
+                    if any(keyword in question.get("question", "").lower() for keyword in
+                           ["travel", "country", "countries", "addanother", "other countries"] for question in field_questions):
+
+                        travel_analysis = self._analyze_travel_history_completion(
+                            workflow_id, step_key, profile_data  # workflow_id here is actually workflow_instance_id
+                        )
+
+                        print(f"DEBUG: AI Answerer Async - Travel analysis: "
+                              f"{len(travel_analysis.get('filled_travel_entries', []))} filled, "
+                              f"{len(travel_analysis.get('remaining_travel_entries', []))} remaining, "
+                              f"has_more: {travel_analysis.get('has_more_travel_entries', False)}")
+
+                        # Store travel analysis in state for later use
+                        if "cross_page_analysis" not in state:
+                            state["cross_page_analysis"] = {}
+                        state["cross_page_analysis"].update(travel_analysis)
+
+                        # Apply contextual answers for travel-related questions
+                        for question in field_questions:
+                            question_text = question.get("question", "").lower()
+                            if any(keyword in question_text for keyword in
+                                   ["addanother", "other countries", "any other countries", "more countries"]):
+                                # Add contextual information to the question
+                                exclusion_analysis = travel_analysis.get("exclusion_analysis", {})
+                                question["cross_page_context"] = {
+                                    "has_more_travel_entries": travel_analysis.get("has_more_travel_entries", False),
+                                    "filled_travel_entries": travel_analysis.get("filled_travel_entries", []),
+                                    "remaining_travel_entries": travel_analysis.get("remaining_travel_entries", []),
+                                    "exclusion_analysis": exclusion_analysis,
+                                    "should_answer_false_for_exclusions": exclusion_analysis.get("should_answer_false_for_other_countries", False),
+                                    "reasoning": f"Based on previous pages: {len(travel_analysis.get('filled_travel_entries', []))} travel entries filled, {len(travel_analysis.get('remaining_travel_entries', []))} remaining,  Exclusion analysis: {exclusion_analysis.get('exclusion_reasoning', 'No exclusion analysis')}"
+                                }
+
+                                print(
+                                    f"DEBUG: AI Answerer Async - Added travel cross-page context to question: {question.get('field_name', 'unknown')}")
+
             except Exception as cross_page_error:
                 print(f"DEBUG: AI Answerer Async - Cross-page analysis failed: {str(cross_page_error)}")
                 # Continue processing without cross-page data
@@ -8532,8 +8715,7 @@ class LangGraphFormProcessor:
 
     async def _batch_analyze_fields_async(self, form_html:str ,questions: List[Dict[str, Any]], profile_data: Dict[str, Any],
                                           profile_dummy_data: Dict[str, Any] = None,
-                                          cross_page_context: Dict[str, Any] = None) -> List[
-        Dict[str, Any]]:
+                                          cross_page_context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """🚀 OPTIMIZATION 2: Batch LLM call with caching - analyze multiple fields in one request"""
         try:
             if not questions:
@@ -8619,21 +8801,62 @@ class LangGraphFormProcessor:
             **Field Analysis Rules:**
             1. Use semantic matching - understand field meaning, not just names
             2. For negative statements: "I do not have X" + "hasX: false" = answer "true"
-            3. For options: answer must be exact option text/value, not original data
-            4. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
-            5. For countries: European countries → "European Economic Area" or "schengen"
-            6. Confidence: 90+ for perfect match, 80+ for strong semantic match
-            7. For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
+            3. 🚀 CRITICAL: For "parentIsUnknown" or "I do not have my parents' details" checkboxes:
+              * If familyDetails.parents is missing, empty, or provideDetails is false → answer "true"
+              * If no parent information exists in profile data → answer "true"
+              * This field should be checked when user lacks parent details
+              * Confidence: 80+ for clear absence of parent data
+            4. For options: answer must be exact option text/value, not original data
+            5. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
+            6. For countries: European countries → "European Economic Area" or "schengen"
+            7. 🚀 CRITICAL: EU Passport Recognition Logic:
+              * check identityDocuments.passport to answer question
+              * For questions asking about "EU passport", "European passport", or "passport type"
+              * If user has passport from EU/EEA countries, answer "Yes" or "EU passport"
+              * EU/EEA countries include: Austria, Belgium, Bulgaria, Croatia, Cyprus, Czechia, Denmark, Estonia, Finland, France, Germany, Greece, Hungary, Iceland, Ireland, Italy, Latvia, Liechtenstein, Lithuania, Luxembourg, Malta, Netherlands, Norway, Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden
+              * Example: Greek passport → EU passport (Greece is EU member)
+              * Example: Italian passport → EU passport (Italy is EU member)
+              * Example: Norwegian passport → EU passport (Norway is EEA member)
+              * Confidence: 95+ for clear EU/EEA country passport identification
+            8. 🚀 CRITICAL: Biometric Information Country Selection:
+              * For questions about "biometric information", "biometric appointment", "provide biometrics", or "select country to provide biometrics"
+              * Use user's current residential address country, NOT nationality
+              * Check contactInformation.currentAddress.country for current residence
+              * Example: User nationality = Turkish, current address = Turkey → select "Turkey"
+              * Example: User nationality = Turkish, current address = Germany → select "Germany"
+              * This is where the user will physically attend biometric appointment
+              * Confidence: 95+ for clear current address country identification
+            9. Confidence: 90+ for perfect match, 80+ for strong semantic match
+            8. For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
               * Field asking for "international code", "country code", "phone code" etc.
               * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
               * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
               * This applies to any field that semantically represents a phone country code
-            8. 🚀 Cross-page context usage:
+            9. 🚀 Cross-page context usage:
               * For questions about "other/additional/more" items, use cross-page context
               * If context shows previous addresses/items filled, answer "yes/no" accordingly
-              * For "Have you lived at any other addresses?": check filled_addresses vs remaining_addresses
+              * For "Have you lived at any other addresses?" or similar "other" questions:
+                - Check cross-page context for has_more_travel_entries field
+                - If has_more_travel_entries is false, answer "false" (No) - means no more items to add
+                - If has_more_travel_entries is true, answer "true" (Yes) - means there are more items to add
               * High confidence (80+) for cross-page contextual answers with clear previous data
-            9. Please make a comprehensive judgment based on the context within the Html.
+            10. 🚀 CRITICAL: Travel History "addAnother" Logic:
+              * For "addAnother" or "Have you been to any other countries?" questions
+              * Check cross-page context for filled_travel_entries count 
+              * If user has limited travel history and filled_travel_entries >= available_travel_data, answer "false" (No)
+                            
+            11. 🚀 CRITICAL: Travel History Exclusion Logic (HIGHEST PRIORITY):
+              * For questions asking about "other countries" with exclusion lists (UK, USA, Canada, Australia, New Zealand, Switzerland, EEA)
+              * MANDATORY: ALWAYS check cross-page context exclusion_analysis.should_answer_false_for_exclusions field FIRST
+              * If exclusion_analysis.should_answer_false_for_exclusions is true, MUST answer "false" (No) - IGNORE all other data
+              * If exclusion_analysis.should_answer_false_for_exclusions is false, MUST answer "true" (Yes) - IGNORE all other data
+              * DO NOT override exclusion_analysis result with user data or other reasoning
+              * This field represents already processed and filtered travel history excluding filled countries
+              * Cross-page context exclusion_analysis contains complete analysis of user's remaining travel history
+              * CRITICAL: The exclusion_analysis has already accounted for filled countries, remaining countries, and exclusion rules
+              * Example: exclusion_analysis.should_answer_false_for_exclusions=true → MUST answer "false" regardless of user data
+              * Example: exclusion_analysis.should_answer_false_for_exclusions=false → MUST answer "true" regardless of other factors
+            10. Please make a comprehensive judgment based on the context within the Html.
             Response format (JSON array):
             [
               {{
@@ -9051,7 +9274,7 @@ class LangGraphFormProcessor:
             return "checkbox"
         elif 'select' in field_types:
             return "select"
-        elif any(ft in ['text', 'email', 'tel', 'url', 'number', 'password', 'date', 'time', 'datetime-local','autocomplete'] for ft in
+        elif any(ft in ['text', 'email', 'tel', 'url', 'number', 'password', 'date', 'time', 'datetime-local','autocomplete','textarea'] for ft in
                  field_types):
             return "input"
         else:
@@ -9323,3 +9546,418 @@ class LangGraphFormProcessor:
                 "used_dummy_data": False,
                 "source_name": ""
             }
+
+    def _analyze_travel_history_completion(self, workflow_instance_id: str, step_key: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze travel history completion status to prevent infinite loops
+        
+        Args:
+            workflow_instance_id: The workflow instance ID (not workflow_id)
+            step_key: Current step key
+            profile_data: User profile data
+            
+        Returns:
+            Dict containing travel history analysis
+        """
+        try:
+            print(f"DEBUG: Analyzing travel history completion for workflow_instance_id: {workflow_instance_id}")
+            
+            # Get all saved step data for this workflow instance
+            from src.model.workflow_entities import StepInstance
+            
+            # Query all steps for this workflow instance
+            saved_steps = self.db.query(StepInstance).filter(
+                StepInstance.workflow_instance_id == workflow_instance_id,
+                StepInstance.step_key == step_key
+            ).all()
+            
+            filled_travel_entries = []
+            travel_step_keys = []
+            all_answered_questions = []
+            
+            # Analyze saved step data for travel history entries using history records
+            for step in saved_steps:
+                if step.data:
+                    step_data = step.data
+                    
+                    # Extract history which contains detailed Q&A information
+                    history_records = step_data.get("history", [])
+                    
+                    # Process each history record
+                    for history_record in history_records:
+                        detailed_qa_history = history_record.get("detailed_qa_history", [])
+                        
+                        # Check if this step contains travel history data
+                        if self._is_travel_history_step_by_qa_history(step.step_key, detailed_qa_history):
+                            if step.step_key not in travel_step_keys:
+                                travel_step_keys.append(step.step_key)
+                            
+                            # Extract travel entry information from Q&A history
+                            travel_entry = self._extract_travel_entry_from_qa_history(detailed_qa_history)
+                            if travel_entry:
+                                filled_travel_entries.append(travel_entry)
+                                print(f"DEBUG: Found travel entry in step {step.step_key}: {travel_entry}")
+                        
+                        # Collect all answered questions for analysis
+                        for qa_record in detailed_qa_history:
+                            if qa_record.get("question"):
+                                all_answered_questions.append({
+                                    "step_key": step.step_key,
+                                    "question": qa_record.get("question"),
+                                    "field_name": qa_record.get("field_name", ""),
+                                    "answer": qa_record.get("answer", ""),
+                                    "processed_at": history_record.get("processed_at")
+                                })
+
+            
+            # Analyze user's total travel history from profile data
+            total_travel_data = self._extract_total_travel_data(profile_data)
+            
+            # Calculate remaining travel entries
+            remaining_travel_entries = []
+            if total_travel_data:
+                filled_countries = [entry.get("country") for entry in filled_travel_entries]
+                for travel_item in total_travel_data:
+                    country = travel_item.get("country")
+                    if country and country not in filled_countries:
+                        remaining_travel_entries.append(travel_item)
+            
+            # Determine if there are more travel entries to fill
+            has_more_travel_entries = len(remaining_travel_entries) > 0
+            
+            # 🚀 NEW: Analyze travel exclusion logic
+            exclusion_analysis = self._analyze_travel_exclusions(total_travel_data, all_answered_questions)
+            
+            analysis_result = {
+                "filled_travel_entries": filled_travel_entries,
+                "remaining_travel_entries": remaining_travel_entries,
+                "has_more_travel_entries": has_more_travel_entries,
+                "total_travel_count": len(total_travel_data) if total_travel_data else 0,
+                "filled_travel_count": len(filled_travel_entries),
+                "travel_step_keys": travel_step_keys,
+                "all_answered_questions": all_answered_questions,
+                "exclusion_analysis": exclusion_analysis
+            }
+            
+            print(f"DEBUG: Travel history analysis result: {analysis_result}")
+            return analysis_result
+            
+        except Exception as e:
+            print(f"DEBUG: Travel history analysis failed: {str(e)}")
+            # Return safe defaults
+            return {
+                "filled_travel_entries": [],
+                "remaining_travel_entries": [],
+                "has_more_travel_entries": False,
+                "total_travel_count": 0,
+                "filled_travel_count": 0,
+                "travel_step_keys": [],
+                "all_answered_questions": []
+            }
+
+    def _is_travel_history_step_by_qa_history(self, step_key: str, detailed_qa_history: List[Dict[str, Any]]) -> bool:
+        """Check if a step contains travel history data by analyzing Q&A history"""
+        try:
+            # Check step key patterns
+            if any(keyword in step_key.lower() for keyword in ["travel", "country", "worldtravel", "travelhistory"]):
+                return True
+            
+            # Check Q&A history for travel-related questions and fields
+            for qa_record in detailed_qa_history:
+                question = qa_record.get("question", "").lower()
+                field_name = qa_record.get("field_name", "").lower()
+                
+                # Check for travel-related keywords in questions
+                if any(keyword in question for keyword in ["travel", "country", "visit", "trip", "destination"]):
+                    return True
+                
+                # Check for travel-related field names
+                if any(keyword in field_name for keyword in ["travel", "country", "visit", "trip", "destination"]):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"DEBUG: Error checking travel history step by Q&A history: {str(e)}")
+            return False
+
+    def _extract_travel_entry_from_qa_history(self, detailed_qa_history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Extract travel entry information from Q&A history"""
+        try:
+            travel_entry = {}
+            
+            # Common travel-related field patterns
+            country_patterns = ["country", "countryname", "destination", "visitedcountry"]
+            date_patterns = ["datefrom", "dateto", "startdate", "enddate", "arrivaldate", "departuredate"]
+            purpose_patterns = ["purpose", "reasonfortravel", "travelpurpose"]
+            
+            for qa_record in detailed_qa_history:
+                field_name = qa_record.get("field_name", "").lower()
+                answer = qa_record.get("answer", "")
+                
+                # Extract country information
+                if any(pattern in field_name for pattern in country_patterns):
+                    travel_entry["country"] = answer
+                
+                # Extract date information
+                elif any(pattern in field_name for pattern in date_patterns):
+                    if "from" in field_name or "start" in field_name or "arrival" in field_name:
+                        travel_entry["date_from"] = answer
+                    elif "to" in field_name or "end" in field_name or "departure" in field_name:
+                        travel_entry["date_to"] = answer
+                
+                # Extract purpose information
+                elif any(pattern in field_name for pattern in purpose_patterns):
+                    travel_entry["purpose"] = answer
+            
+            # Only return if we found at least a country
+            if travel_entry.get("country"):
+                return travel_entry
+            
+            return None
+            
+        except Exception as e:
+            print(f"DEBUG: Error extracting travel entry from Q&A history: {str(e)}")
+            return None
+
+    def _analyze_travel_exclusions(self, total_travel_data: List[Dict[str, Any]], all_answered_questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze travel exclusion logic for 'other countries' questions"""
+        try:
+            # Define excluded countries/regions
+            excluded_countries = {
+                "uk", "united kingdom", "britain", "great britain", "england", "scotland", "wales", "northern ireland",
+                "usa", "united states", "america", "united states of america",
+                "canada",
+                "australia", 
+                "new zealand",
+                "switzerland",
+                # EEA countries
+                "austria", "belgium", "bulgaria", "croatia", "cyprus", "republic of cyprus", "czechia", "czech republic",
+                "denmark", "estonia", "finland", "france", "germany", "greece", "hungary", "iceland", "ireland",
+                "italy", "latvia", "liechtenstein", "lithuania", "luxembourg", "malta", "netherlands", "norway",
+                "poland", "portugal", "romania", "slovakia", "slovenia", "spain", "sweden"
+            }
+            
+            # 🚀 NEW: Extract already filled countries from Q&A history
+            filled_countries = set()
+            for qa_record in all_answered_questions:
+                question = qa_record.get("question", "").lower()
+                answer = qa_record.get("answer", "").lower().strip()
+                
+                # Check for country-related questions (exclude addAnother questions)
+                if "country" in question and answer and "addanother" not in question and "other countries" not in question:
+                    filled_countries.add(answer)
+                    print(f"DEBUG: Found filled country from Q&A history: {answer}")
+            
+            # 🚀 NEW: Filter out already filled countries from total travel data
+            remaining_travel_data = []
+            for travel_entry in total_travel_data:
+                country = travel_entry.get("country", "").lower().strip()
+                if country and country not in filled_countries:
+                    remaining_travel_data.append(travel_entry)
+                    print(f"DEBUG: Remaining travel entry: {country}")
+                elif country:
+                    print(f"DEBUG: Excluding already filled country: {country}")
+            
+            # Analyze remaining travel history (excluding already filled countries)
+            user_travel_countries = []
+            excluded_travels = []
+            non_excluded_travels = []
+            
+            # Extract countries from remaining travel data
+            for travel_entry in remaining_travel_data:
+                country = travel_entry.get("country", "").lower().strip()
+                if country:
+                    user_travel_countries.append(country)
+                    
+                    # Check if this country is in excluded list
+                    if country in excluded_countries:
+                        excluded_travels.append(travel_entry)
+                    else:
+                        non_excluded_travels.append(travel_entry)
+            
+            # 🚀 MODIFIED: Don't add countries from Q&A history as they are already filled
+            # We only care about remaining unfilled countries
+            
+            # Determine if user has ONLY excluded travels among remaining countries
+            all_travels_excluded = len(non_excluded_travels) == 0 and len(remaining_travel_data) == 0
+            has_non_excluded_travels = len(non_excluded_travels) > 0
+            
+            exclusion_analysis = {
+                "excluded_countries_list": list(excluded_countries),
+                "filled_countries": list(filled_countries),
+                "remaining_travel_data": remaining_travel_data,
+                "user_travel_countries": user_travel_countries,
+                "excluded_travels": excluded_travels,
+                "non_excluded_travels": non_excluded_travels,
+                "all_travels_excluded": all_travels_excluded,
+                "has_non_excluded_travels": has_non_excluded_travels,
+                "should_answer_false_for_other_countries": all_travels_excluded,
+                "exclusion_reasoning": self._build_exclusion_reasoning(excluded_travels, non_excluded_travels, all_travels_excluded, filled_countries, remaining_travel_data)
+            }
+            
+            print(f"DEBUG: Travel Exclusion Analysis - Excluded travels: {len(excluded_travels)}, Non-excluded: {len(non_excluded_travels)}, All excluded: {all_travels_excluded}")
+            
+            return exclusion_analysis
+            
+        except Exception as e:
+            print(f"ERROR: Failed to analyze travel exclusions: {str(e)}")
+            return {
+                "excluded_countries_list": [],
+                "user_travel_countries": [],
+                "excluded_travels": [],
+                "non_excluded_travels": [],
+                "all_travels_excluded": False,
+                "has_non_excluded_travels": False,
+                "should_answer_false_for_other_countries": False,
+                "exclusion_reasoning": "Error analyzing exclusions"
+            }
+
+    def _build_exclusion_reasoning(self, excluded_travels: List[Dict[str, Any]], non_excluded_travels: List[Dict[str, Any]], all_travels_excluded: bool, filled_countries: set = None, remaining_travel_data: List[Dict[str, Any]] = None) -> str:
+        """Build reasoning text for exclusion analysis"""
+        try:
+            filled_countries = filled_countries or set()
+            remaining_travel_data = remaining_travel_data or []
+            
+            reasoning_parts = []
+            
+            # Add information about already filled countries
+            if filled_countries:
+                reasoning_parts.append(f"Already filled countries: {', '.join(filled_countries)}")
+            
+            # Add information about remaining travel data
+            if remaining_travel_data:
+                remaining_countries = [travel.get("country", "") for travel in remaining_travel_data]
+                reasoning_parts.append(f"Remaining unfilled countries: {', '.join(remaining_countries)}")
+            
+            # Determine final answer logic
+            if all_travels_excluded:
+                if excluded_travels:
+                    excluded_countries = [travel.get("country", "") for travel in excluded_travels]
+                    reasoning_parts.append(f"All remaining travels are to excluded countries ({', '.join(excluded_countries)})")
+                else:
+                    reasoning_parts.append("No remaining travel entries found")
+                reasoning_parts.append("Should answer 'false' for 'other countries' questions")
+            elif len(non_excluded_travels) > 0:
+                non_excluded_countries = [travel.get("country", "") for travel in non_excluded_travels]
+                reasoning_parts.append(f"User has remaining travels to non-excluded countries ({', '.join(non_excluded_countries)})")
+                reasoning_parts.append("Should answer 'true' for 'other countries' questions")
+            else:
+                reasoning_parts.append("No remaining travel history found")
+                reasoning_parts.append("Should answer 'false' for 'other countries' questions")
+            
+            return ". ".join(reasoning_parts) + "."
+                
+        except Exception as e:
+            return f"Error building exclusion reasoning: {str(e)}"
+
+    def _is_travel_history_step(self, step_key: str, step_data: Dict[str, Any]) -> bool:
+        """Check if a step contains travel history data"""
+        try:
+            # Check step key patterns
+            if any(keyword in step_key.lower() for keyword in ["travel", "country", "worldtravel", "travelhistory"]):
+                return True
+            
+            # Check step data for travel-related fields
+            if isinstance(step_data, dict):
+                for key, value in step_data.items():
+                    if any(keyword in key.lower() for keyword in ["travel", "country", "visit", "trip"]):
+                        return True
+                    
+                    # Check nested data
+                    if isinstance(value, dict):
+                        for nested_key in value.keys():
+                            if any(keyword in nested_key.lower() for keyword in ["travel", "country", "visit", "trip"]):
+                                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"DEBUG: Error checking travel history step: {str(e)}")
+            return False
+
+    def _extract_travel_entry_from_step(self, step_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract travel entry information from step data"""
+        try:
+            travel_entry = {}
+            
+            # Common travel-related field patterns
+            country_fields = ["country", "countryName", "destination", "visitedCountry"]
+            date_fields = ["dateFrom", "dateTo", "startDate", "endDate", "arrivalDate", "departureDate"]
+            purpose_fields = ["purpose", "reasonForTravel", "travelPurpose"]
+            
+            # Extract country information
+            for field in country_fields:
+                if field in step_data:
+                    travel_entry["country"] = step_data[field]
+                    break
+            
+            # Extract date information
+            for field in date_fields:
+                if field in step_data:
+                    if "from" in field.lower() or "start" in field.lower() or "arrival" in field.lower():
+                        travel_entry["date_from"] = step_data[field]
+                    elif "to" in field.lower() or "end" in field.lower() or "departure" in field.lower():
+                        travel_entry["date_to"] = step_data[field]
+            
+            # Extract purpose information
+            for field in purpose_fields:
+                if field in step_data:
+                    travel_entry["purpose"] = step_data[field]
+                    break
+            
+            # Only return if we found at least a country
+            if travel_entry.get("country"):
+                return travel_entry
+            
+            return None
+            
+        except Exception as e:
+            print(f"DEBUG: Error extracting travel entry: {str(e)}")
+            return None
+
+    def _extract_total_travel_data(self, profile_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract total travel data from user profile"""
+        try:
+            travel_data = []
+            
+            # Common travel data paths in profile
+            travel_paths = [
+                "travelHistory",
+                "travel_history", 
+                "travels",
+                "worldTravelHistory",
+                "specificCountries.visits",
+                "travelDetails"
+            ]
+            
+            for path in travel_paths:
+                data = self._get_nested_value(profile_data, path)
+                if data.get("specificCountries") and data.get("specificCountries").get("visits"):
+                    travel_data.extend(data.get("specificCountries").get("visits"))
+                    break
+
+            
+            print(f"DEBUG: Extracted {len(travel_data)} total travel entries from profile")
+            return travel_data
+            
+        except Exception as e:
+            print(f"DEBUG: Error extracting total travel data: {str(e)}")
+            return []
+
+    def _get_nested_value(self, data: Dict[str, Any], path: str) -> Any:
+        """Get nested value from dictionary using dot notation"""
+        try:
+            keys = path.split('.')
+            current = data
+            
+            for key in keys:
+                if isinstance(current, dict) and key in current:
+                    current = current[key]
+                else:
+                    return None
+            
+            return current
+            
+        except Exception:
+            return None
