@@ -8809,14 +8809,17 @@ class LangGraphFormProcessor:
             4. For options: answer must be exact option text/value, not original data
             5. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
             6. For countries: European countries → "European Economic Area" or "schengen"
-            7. 🚀 CRITICAL: EU Passport Recognition Logic:
-              * check identityDocuments.passport to answer question
+            7. 🚀 CRITICAL: EU Passport Recognition Logic (MANDATORY):
+              * ALWAYS check identityDocuments.passport.issuingAuthority to answer question
               * For questions asking about "EU passport", "European passport", or "passport type"
-              * If user has passport from EU/EEA countries, answer "Yes" or "EU passport"
+              * RULE: If passport issuingAuthority is from EU/EEA countries, MUST answer "Yes" or "EU passport"
+              * IGNORE nationality - only passport issuingAuthority matters for passport type questions
               * EU/EEA countries include: Austria, Belgium, Bulgaria, Croatia, Cyprus, Czechia, Denmark, Estonia, Finland, France, Germany, Greece, Hungary, Iceland, Ireland, Italy, Latvia, Liechtenstein, Lithuania, Luxembourg, Malta, Netherlands, Norway, Poland, Portugal, Romania, Slovakia, Slovenia, Spain, Sweden
-              * Example: Greek passport → EU passport (Greece is EU member)
-              * Example: Italian passport → EU passport (Italy is EU member)
-              * Example: Norwegian passport → EU passport (Norway is EEA member)
+              * Example: issuingAuthority = "Germany" → MUST answer "Yes" (Germany is EU member)
+              * Example: issuingAuthority = "Greece" → MUST answer "Yes" (Greece is EU member)  
+              * Example: issuingAuthority = "Norway" → MUST answer "Yes" (Norway is EEA member)
+              * Example: issuingAuthority = "Turkey" → MUST answer "No" (Turkey is not EU/EEA member)
+              * CRITICAL: Passport issuing authority determines passport type, NOT user nationality
               * Confidence: 95+ for clear EU/EEA country passport identification
             8. 🚀 CRITICAL: Biometric Information Country Selection:
               * For questions about "biometric information", "biometric appointment", "provide biometrics", or "select country to provide biometrics"
