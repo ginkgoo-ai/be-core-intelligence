@@ -2571,13 +2571,20 @@ class LangGraphFormProcessor:
                     "actions": []
                 }
 
-            # 🚀 CRITICAL FIX: Prioritize precise form_actions over LLM-generated actions
+            # 🚀 INTELLIGENT ACTION SELECTION: Choose best actions based on page type and quality
             precise_actions = result.get("form_actions", [])
             llm_actions = result.get("llm_generated_actions", [])
-            final_actions = precise_actions if precise_actions else llm_actions
+            merged_qa_data = result.get("merged_qa_data", [])
+            
+            # Use intelligent selection logic
+            final_actions, selection_reason = self._select_best_actions(
+                precise_actions, llm_actions, form_html, merged_qa_data
+            )
 
-            print(
-                f"DEBUG: process_form - Using {'precise' if precise_actions else 'LLM'} actions: {len(final_actions)} total")
+            print(f"DEBUG: process_form - Intelligent action selection:")
+            print(f"DEBUG: process_form - Precise actions: {len(precise_actions)}, LLM actions: {len(llm_actions)}")
+            print(f"DEBUG: process_form - Selected: {len(final_actions)} actions, Reason: {selection_reason}")
+            print(f"DEBUG: process_form - Using {'precise' if selection_reason.startswith('form_') else 'LLM'} actions: {len(final_actions)} total")
 
             # Return successful result with merged Q&A data
             return {
@@ -2590,9 +2597,11 @@ class LangGraphFormProcessor:
                     "questions_generated": len(result.get("field_questions", [])),
                     "answers_generated": len(result.get("ai_answers", [])),
                     "actions_generated": len(final_actions),
-                    "action_source": "precise" if precise_actions else "llm",
+                    "action_source": "intelligent_selection",
+                    "action_selection_reason": selection_reason,
                     "precise_actions_count": len(precise_actions),
                     "llm_actions_count": len(llm_actions),
+                    "selected_actions_count": len(final_actions),
                     "workflow_id": workflow_id,
                     "step_key": step_key
                 }
@@ -7932,34 +7941,74 @@ class LangGraphFormProcessor:
         try:
             print("DEBUG: Processing non-form page (task list or navigation page)")
 
-            # Prepare simplified prompt for non-form pages
+            # 🚀 NEW: Get workflow instance information for context
+            workflow_id = state["workflow_id"]
+            try:
+                from src.database.workflow_repositories import WorkflowInstanceRepository
+                instance_repo = WorkflowInstanceRepository(self.db)
+                workflow_instance = instance_repo.get_instance_by_id(workflow_id)
+                
+                workflow_context = {}
+                if workflow_instance:
+                    workflow_context = {
+                        "unique_application_number": workflow_instance.unique_application_number,
+                        "case_id": workflow_instance.case_id,
+                        "user_id": workflow_instance.user_id,
+                        "current_step_key": workflow_instance.current_step_key,
+                        "status": str(workflow_instance.status) if workflow_instance.status else None
+                    }
+                    print(f"DEBUG: Non-form page - Retrieved workflow context: {workflow_context}")
+                else:
+                    print(f"DEBUG: Non-form page - No workflow instance found for ID: {workflow_id}")
+            except Exception as e:
+                print(f"DEBUG: Non-form page - Error getting workflow context: {str(e)}")
+                workflow_context = {}
+
+            # 🚀 ENHANCED: Prepare enhanced prompt with workflow context
             prompt = f"""
             # Role 
-            You are a web automation expert analyzing HTML pages for actionable elements.
+            You are a web automation expert analyzing HTML pages for actionable elements with workflow context.
 
             # HTML Content:
             {state["form_html"]}
 
+            # Workflow Context:
+            {json.dumps(workflow_context, indent=1, ensure_ascii=False)}
+
             # Instructions:
             Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
+            
+            **CRITICAL: Button Selection Logic for Dashboard Pages**
+            1. **Look for buttons with same ID but different formaction attributes**
+            2. **If multiple buttons with same ID exist, use formaction attribute to distinguish them**
+            3. **Match formaction paths with unique_application_number from workflow context**
+            4. **Generate selector using formaction, NOT just ID**: `button[formaction="specific-path"]`
+            5. **Example**: For buttons with same ID but different formaction:
+               - `button[formaction="/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK"]`
+               - `button[formaction="/dashboard/tasklist/3434-2085-7166-1778/PBS_DEPENDANT_PARTNER"]`
+               - Choose the one that contains the workflow's unique_application_number
+
             Focus on:
             1. **Task list items with "In progress" status** - these should be clicked
             2. **Links that represent next steps** in a workflow or application process
-            3. **Submit buttons or continue buttons**
-            4. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
+            3. **Buttons with formaction attributes** - use formaction for precise selection when unique_application_number matches
+            4. **Submit buttons or continue buttons**
+            5. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
 
             # Priority Rules:
-            - **HIGHEST PRIORITY**: Links or buttons with "In progress" status
-            - **SECOND PRIORITY**: Submit/Continue/Next buttons
-            - **THIRD PRIORITY**: Navigation links that advance the process
+            - **HIGHEST PRIORITY**: Buttons with formaction that contains unique_application_number from workflow context
+            - **SECOND PRIORITY**: Links or buttons with "In progress" status
+            - **THIRD PRIORITY**: Submit/Continue/Next buttons
+            - **FOURTH PRIORITY**: Navigation links that advance the process
             - **SKIP**: Disabled buttons, "Cannot start yet" items, or non-actionable elements
 
             # Response Format (JSON only):
             {{
               "actions": [
                 {{
-                  "selector": "a[href='/path/to/next/step']",
-                  "type": "click"
+                  "selector": "button[formaction='/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK']",
+                  "type": "click",
+                  "reasoning": "Selected button with formaction containing unique_application_number"
                 }}
               ]
             }}
@@ -7982,17 +8031,28 @@ class LangGraphFormProcessor:
                 llm_result = robust_json_parse(response.content)
 
                 if "actions" in llm_result and llm_result["actions"]:
-                    state["llm_generated_actions"] = llm_result["actions"]
-                    print(f"DEBUG: Non-form page - Generated {len(llm_result['actions'])} actions")
+                    actions = llm_result["actions"]
+                    
+                    # 🚀 NEW: Post-process actions to ensure formaction-based selectors
+                    enhanced_actions = []
+                    for action in actions:
+                        enhanced_action = self._enhance_button_selector_with_formaction(
+                            action, state["form_html"], workflow_context
+                        )
+                        enhanced_actions.append(enhanced_action)
+                    
+                    state["llm_generated_actions"] = enhanced_actions
+                    print(f"DEBUG: Non-form page - Generated {len(enhanced_actions)} enhanced actions")
 
                     # Log actions for debugging
-                    for i, action in enumerate(llm_result["actions"]):
-                        print(
-                            f"DEBUG: Non-form action {i + 1}: {action.get('selector', 'unknown')} -> {action.get('type', 'unknown')}")
+                    for i, action in enumerate(enhanced_actions):
+                        print(f"DEBUG: Non-form action {i + 1}: {action.get('selector', 'unknown')} -> {action.get('type', 'unknown')}")
+                        if action.get('reasoning'):
+                            print(f"DEBUG: Non-form reasoning {i + 1}: {action.get('reasoning')}")
 
                     state["messages"].append({
                         "type": "system",
-                        "content": f"Generated {len(llm_result['actions'])} actions for non-form page (task list/navigation)"
+                        "content": f"Generated {len(enhanced_actions)} enhanced actions for non-form page (task list/navigation)"
                     })
                 else:
                     print("DEBUG: Non-form page - No actions generated by LLM")
@@ -8515,13 +8575,20 @@ class LangGraphFormProcessor:
                         "actions": []
                     }
 
-                # 🚀 CRITICAL FIX: Prioritize precise form_actions over LLM-generated actions
+                # 🚀 INTELLIGENT ACTION SELECTION: Choose best actions based on page type and quality
                 precise_actions = result.get("form_actions", [])
                 llm_actions = result.get("llm_generated_actions", [])
-                final_actions = precise_actions if precise_actions else llm_actions
+                merged_qa_data = result.get("merged_qa_data", [])
+                
+                # Use intelligent selection logic
+                final_actions, selection_reason = self._select_best_actions(
+                    precise_actions, llm_actions, form_html, merged_qa_data
+                )
 
-                print(
-                    f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Using {'precise' if precise_actions else 'LLM'} actions: {len(final_actions)} total")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Intelligent action selection:")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Precise actions: {len(precise_actions)}, LLM actions: {len(llm_actions)}")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Selected: {len(final_actions)} actions, Reason: {selection_reason}")
+                print(f"[workflow_id:{workflow_id}] DEBUG: process_form_async - Using {'precise' if selection_reason.startswith('form_') else 'LLM'} actions: {len(final_actions)} total")
 
                 # Return successful result with merged Q&A data
                 return {
@@ -8534,9 +8601,11 @@ class LangGraphFormProcessor:
                         "questions_generated": len(result.get("field_questions", [])),
                         "answers_generated": len(result.get("ai_answers", [])),
                         "actions_generated": len(final_actions),
-                        "action_source": "precise" if precise_actions else "llm",
+                        "action_source": "intelligent_selection",
+                        "action_selection_reason": selection_reason,
                         "precise_actions_count": len(precise_actions),
                         "llm_actions_count": len(llm_actions),
+                        "selected_actions_count": len(final_actions),
                         "workflow_id": workflow_id,
                         "step_key": step_key
                     }
@@ -9154,48 +9223,90 @@ class LangGraphFormProcessor:
         try:
             print("DEBUG: Processing non-form page (task list or navigation page) - Async")
 
+            # 🚀 NEW: Get workflow instance information for context
+            workflow_id = state["workflow_id"]
+            try:
+                from src.database.workflow_repositories import WorkflowInstanceRepository
+                instance_repo = WorkflowInstanceRepository(self.db)
+                workflow_instance = instance_repo.get_instance_by_id(workflow_id)
+                
+                workflow_context = {}
+                if workflow_instance:
+                    workflow_context = {
+                        "unique_application_number": workflow_instance.unique_application_number,
+                        "case_id": workflow_instance.case_id,
+                        "user_id": workflow_instance.user_id,
+                        "current_step_key": workflow_instance.current_step_key,
+                        "status": str(workflow_instance.status) if workflow_instance.status else None
+                    }
+                    print(f"DEBUG: Non-form page async - Retrieved workflow context: {workflow_context}")
+                else:
+                    print(f"DEBUG: Non-form page async - No workflow instance found for ID: {workflow_id}")
+            except Exception as e:
+                print(f"DEBUG: Non-form page async - Error getting workflow context: {str(e)}")
+                workflow_context = {}
+
             # Determine which profile data to use
             profile_data = state["profile_data"]
-
             profile_dummy_data = state["profile_dummy_data"]
-            # Prepare simplified prompt for non-form pages
+            
+            # 🚀 ENHANCED: Prepare enhanced prompt with workflow context
             prompt = f"""
             # Role 
-            You are a web automation expert analyzing HTML pages for actionable elements.
+            You are a web automation expert analyzing HTML pages for actionable elements with workflow context.
 
             # HTML Content:
             {state["form_html"]}
 
-            # Profile data 
-            {profile_data}
+            # Workflow Context:
+            {json.dumps(workflow_context, indent=1, ensure_ascii=False)}
+
+            # Profile data:
+            {json.dumps(profile_data, indent=1, ensure_ascii=False)}
 
             # Available profile dummy data (fallback):
-            {profile_dummy_data}
+            {json.dumps(profile_dummy_data, indent=1, ensure_ascii=False)}
             
             # Instructions:
             Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
-            **IMPORTANT**: Combine the HTML content analysis with the profile data to make intelligent decisions about which buttons/links to click.
+            
+            **CRITICAL: Button Selection Logic for Dashboard Pages**
+            1. **Look for buttons with same ID but different formaction attributes**
+            2. **If multiple buttons with same ID exist, use formaction attribute to distinguish them**
+            3. **Match formaction paths with unique_application_number from workflow context**
+            4. **Generate selector using formaction, NOT just ID**: `button[formaction="specific-path"]`
+            5. **Example**: For buttons with same ID but different formaction:
+               - `button[formaction="/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK"]`
+               - `button[formaction="/dashboard/tasklist/3434-2085-7166-1778/PBS_DEPENDANT_PARTNER"]`
+               - Choose the one that contains the workflow's unique_application_number
+            
+            **IMPORTANT**: Combine the HTML content analysis with the profile data AND workflow context to make intelligent decisions about which buttons/links to click.
+            
             1. **PRIMARY DATA**: Always try to use User Data (profile_data) first
-            2. **FALLBACK DATA**: If User Data is insufficient, incomplete, or you're not confident about the match, use Dummy Data as fallback
-            3. **CONFIDENCE ASSESSMENT**: If User Data exists but seems uncertain/incomplete for a field, prefer Dummy Data for that specific field
-            4. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
+            2. **SECONDARY DATA**: Use Workflow Context (unique_application_number, case_id) for button selection
+            3. **FALLBACK DATA**: If User Data is insufficient, use Dummy Data as fallback
+            4. **CONFIDENCE ASSESSMENT**: If User Data exists but seems uncertain/incomplete, prefer Dummy Data for that specific field
+            5. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
             
             # Analysis Strategy:
-            1. **Use profile data for context**: If profile data is available, use it to understand user's current state and determine appropriate actions
-            2. **Fallback to dummy data**: If profile data is empty or insufficient, use profile dummy data for analysis
-            3. **Match content to user state**: Look for buttons/links that match the user's profile information, current process stage, or next logical steps
+            1. **Use workflow context for button selection**: If unique_application_number exists, match it with formaction paths
+            2. **Use profile data for context**: If profile data is available, use it to understand user's current state
+            3. **Fallback to dummy data**: If profile data is empty or insufficient, use profile dummy data for analysis
+            4. **Match content to user state**: Look for buttons/links that match the user's profile information, current process stage, or next logical steps
 
             Focus on:
             1. **Task list items with "In progress" status** - these should be clicked
             2. **Links that represent next steps** in a workflow or application process that match user's profile
-            3. **Submit buttons or continue buttons** that are contextually appropriate
-            4. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
-            5. **Profile-specific actions**: Buttons/links that relate to user's specific situation based on profile data
+            3. **Buttons with formaction attributes** - use formaction for precise selection when unique_application_number matches
+            4. **Submit buttons or continue buttons** that are contextually appropriate
+            5. **Skip items that have "Cannot start yet" or "Completed" status** (unless they need to be revisited)
+            6. **Profile-specific actions**: Buttons/links that relate to user's specific situation based on profile data
 
             # Priority Rules:
-            - **HIGHEST PRIORITY**: Links or buttons with "In progress" status that match user's profile context
-            - **SECOND PRIORITY**: Submit/Continue/Next buttons that are contextually appropriate for user's current state
-            - **THIRD PRIORITY**: Navigation links that advance the process and align with user's profile
+            - **HIGHEST PRIORITY**: Buttons with formaction that contains unique_application_number from workflow context
+            - **SECOND PRIORITY**: Links or buttons with "In progress" status that match user's profile context
+            - **THIRD PRIORITY**: Submit/Continue/Next buttons that are contextually appropriate for user's current state
+            - **FOURTH PRIORITY**: Navigation links that advance the process and align with user's profile
             - **SKIP**: Disabled buttons, "Cannot start yet" items, or actions that don't match user's profile/context
 
             # 🚀 CRITICAL: Account Creation vs Sign In Logic:
@@ -9210,13 +9321,20 @@ class LangGraphFormProcessor:
                - User needs to create a new account first
                - Look for selectors like: #create-an-account, [href*="register"], [href*="new"], button containing "Create"
 
+            # 🚀 CRITICAL: Dashboard Button Selection Examples:
+            **For dashboard pages with multiple buttons:**
+            1. **If HTML contains**: `<button id="continueApplicationButton" formaction="/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK">Continue</button>`
+            2. **And workflow context has**: `"unique_application_number": "3434-1617-4252-4148"`
+            3. **Generate selector**: `button[formaction="/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK"]`
+            4. **NOT**: `button[id="continueApplicationButton"]` (too generic)
+
             # Response Format (JSON only):
             {{
               "actions": [
                 {{
-                  "selector": "a[href='/path/to/next/step']",
+                  "selector": "button[formaction='/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK']",
                   "type": "click",
-                  "reasoning": "explanation"
+                  "reasoning": "Selected button with formaction containing unique_application_number 3434-1617-4252-4148 from workflow context"
                 }}
               ]
             }}
@@ -9237,17 +9355,28 @@ class LangGraphFormProcessor:
                 llm_result = robust_json_parse(response.content)
 
                 if "actions" in llm_result and llm_result["actions"]:
-                    state["llm_generated_actions"] = llm_result["actions"]
-                    print(f"DEBUG: Non-form page async - Generated {len(llm_result['actions'])} actions")
+                    actions = llm_result["actions"]
+                    
+                    # 🚀 NEW: Post-process actions to ensure formaction-based selectors
+                    enhanced_actions = []
+                    for action in actions:
+                        enhanced_action = self._enhance_button_selector_with_formaction(
+                            action, state["form_html"], workflow_context
+                        )
+                        enhanced_actions.append(enhanced_action)
+                    
+                    state["llm_generated_actions"] = enhanced_actions
+                    print(f"DEBUG: Non-form page async - Generated {len(enhanced_actions)} enhanced actions")
 
                     # Log actions for debugging
-                    for i, action in enumerate(llm_result["actions"]):
-                        print(
-                            f"DEBUG: Non-form async action {i + 1}: {action.get('selector', 'unknown')} -> {action.get('type', 'unknown')}")
+                    for i, action in enumerate(enhanced_actions):
+                        print(f"DEBUG: Non-form async action {i + 1}: {action.get('selector', 'unknown')} -> {action.get('type', 'unknown')}")
+                        if action.get('reasoning'):
+                            print(f"DEBUG: Non-form async reasoning {i + 1}: {action.get('reasoning')}")
 
                     state["messages"].append({
                         "type": "system",
-                        "content": f"Generated {len(llm_result['actions'])} actions for non-form page (task list/navigation) - async"
+                        "content": f"Generated {len(enhanced_actions)} enhanced actions for non-form page (task list/navigation) - async"
                     })
                 else:
                     print("DEBUG: Non-form page async - No actions generated by LLM")
@@ -10514,3 +10643,279 @@ class LangGraphFormProcessor:
             
         except Exception:
             return None
+
+    def _enhance_button_selector_with_formaction(self, action: Dict[str, Any], form_html: str, workflow_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enhance button selector to use formaction attribute when multiple buttons with same ID exist
+        
+        Args:
+            action: Original action with selector
+            form_html: HTML content to analyze
+            workflow_context: Workflow context containing unique_application_number
+            
+        Returns:
+            Enhanced action with improved selector
+        """
+        try:
+            selector = action.get("selector", "")
+            reasoning = action.get("reasoning", "")
+            
+            # Check if this is a button selector that might need formaction enhancement
+            if "button" in selector.lower() and "id=" in selector:
+                unique_app_number = workflow_context.get("unique_application_number")
+                
+                if unique_app_number:
+                    print(f"DEBUG: Enhancing button selector with unique_application_number: {unique_app_number}")
+                    
+                    # Parse HTML to find buttons with formaction
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(form_html, 'html.parser')
+                    
+                    # Find all buttons with formaction attributes
+                    buttons_with_formaction = soup.find_all('button', attrs={'formaction': True})
+                    
+                    print(f"DEBUG: Found {len(buttons_with_formaction)} buttons with formaction")
+                    
+                    # Look for a button whose formaction contains the unique_application_number
+                    matching_button = None
+                    for button in buttons_with_formaction:
+                        formaction = button.get('formaction', '')
+                        if unique_app_number in formaction:
+                            matching_button = button
+                            print(f"DEBUG: Found matching button with formaction: {formaction}")
+                            break
+                    
+                    if matching_button:
+                        formaction = matching_button.get('formaction')
+                        # Generate new selector using formaction
+                        enhanced_selector = f"button[formaction=\"{formaction}\"]"
+                        
+                        # Update action with enhanced selector
+                        action["selector"] = enhanced_selector
+                        action["reasoning"] = f"Enhanced selector using formaction for unique_application_number {unique_app_number}: {formaction}"
+                        
+                        print(f"DEBUG: Enhanced selector: {enhanced_selector}")
+                        return action
+                    else:
+                        print(f"DEBUG: No matching button found for unique_application_number: {unique_app_number}")
+                else:
+                    print("DEBUG: No unique_application_number in workflow context")
+            
+            # Return original action if no enhancement needed
+            return action
+            
+        except Exception as e:
+            print(f"DEBUG: Error enhancing button selector: {str(e)}")
+            # Return original action if enhancement fails
+            return action
+
+    def _select_best_actions(self, form_actions: List[Dict[str, Any]], llm_actions: List[Dict[str, Any]], 
+                           form_html: str, merged_qa_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
+        """
+        Intelligently select the best actions based on page type and action quality
+        
+        Args:
+            form_actions: Actions generated from form field processing
+            llm_actions: Actions generated by LLM analysis
+            form_html: HTML content for analysis
+            merged_qa_data: Merged Q&A data for context
+            
+        Returns:
+            Tuple of (selected_actions, reason_for_selection)
+        """
+        try:
+            print(f"DEBUG: Action Selection - Form actions: {len(form_actions)}, LLM actions: {len(llm_actions)}")
+            
+            # 1. Quick fallback: if one is empty, use the other
+            if not form_actions and llm_actions:
+                return llm_actions, "llm_only_available"
+            elif form_actions and not llm_actions:
+                return form_actions, "form_only_available"
+            elif not form_actions and not llm_actions:
+                return [], "no_actions_available"
+            
+            # 2. Analyze page type based on HTML content and detected fields
+            page_analysis = self._analyze_page_type(form_html, merged_qa_data)
+            print(f"DEBUG: Action Selection - Page analysis: {page_analysis}")
+            
+            # 3. Analyze action quality for both sets
+            form_action_quality = self._analyze_action_quality(form_actions, page_analysis)
+            llm_action_quality = self._analyze_action_quality(llm_actions, page_analysis)
+            
+            print(f"DEBUG: Action Selection - Form action quality: {form_action_quality}")
+            print(f"DEBUG: Action Selection - LLM action quality: {llm_action_quality}")
+            
+            # 4. Decision logic based on page type and action quality
+            selection_reason = ""
+            
+            # For dashboard/navigation pages, prefer LLM actions if they contain navigation elements
+            if page_analysis["page_type"] in ["dashboard", "navigation", "task_list"]:
+                if llm_action_quality["has_navigation_actions"] and llm_action_quality["score"] >= form_action_quality["score"]:
+                    selection_reason = "dashboard_page_llm_has_navigation"
+                    return llm_actions, selection_reason
+                elif form_action_quality["has_form_filling"] and not llm_action_quality["has_navigation_actions"]:
+                    selection_reason = "dashboard_page_form_has_filling"
+                    return form_actions, selection_reason
+            
+            # For traditional form pages, prefer form actions if they have good form filling
+            elif page_analysis["page_type"] == "form":
+                if form_action_quality["has_form_filling"] and form_action_quality["score"] >= llm_action_quality["score"]:
+                    selection_reason = "form_page_form_has_filling"
+                    return form_actions, selection_reason
+                elif llm_action_quality["score"] > form_action_quality["score"] * 1.5:  # LLM significantly better
+                    selection_reason = "form_page_llm_significantly_better"
+                    return llm_actions, selection_reason
+            
+            # Mixed pages or unclear: choose based on overall quality score
+            if llm_action_quality["score"] > form_action_quality["score"]:
+                selection_reason = "llm_higher_quality_score"
+                return llm_actions, selection_reason
+            else:
+                selection_reason = "form_higher_quality_score"
+                return form_actions, selection_reason
+                
+        except Exception as e:
+            print(f"DEBUG: Action Selection - Error during selection: {str(e)}")
+            # Fallback to original logic
+            return form_actions if form_actions else llm_actions, "error_fallback"
+    
+    def _analyze_page_type(self, form_html: str, merged_qa_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Analyze the page type based on HTML content and detected fields
+        
+        Returns:
+            Dict with page analysis results
+        """
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(form_html, 'html.parser')
+            
+            # Count different types of elements
+            form_elements = len(soup.find_all(['input', 'select', 'textarea'], type=lambda x: x not in ['submit', 'button']))
+            submit_buttons = len(soup.find_all(['input', 'button'], type='submit')) + len(soup.find_all('button', type=lambda x: x != 'button'))
+            navigation_links = len(soup.find_all('a', href=True))
+            formaction_buttons = len(soup.find_all('button', attrs={'formaction': True}))
+            
+            # Analyze task list indicators
+            task_indicators = soup.find_all(string=lambda text: text and any(
+                indicator in text.lower() for indicator in 
+                ['in progress', 'cannot start yet', 'completed', 'continue', 'start']
+            ))
+            
+            # Analyze detected field types from merged_qa_data
+            detected_field_types = set()
+            meaningful_fields = 0
+            for item in merged_qa_data:
+                metadata = item.get("_metadata", {})
+                field_type = metadata.get("field_type", "")
+                field_name = metadata.get("field_name", "")
+                
+                if field_type:
+                    detected_field_types.add(field_type)
+                    
+                # Count meaningful fields (not just hidden/search fields)
+                if field_type in ["text", "email", "number", "select", "radio", "checkbox", "textarea", "date"]:
+                    if not any(keyword in field_name.lower() for keyword in ["search", "filter", "hidden"]):
+                        meaningful_fields += 1
+            
+            # Determine page type
+            page_type = "unknown"
+            if formaction_buttons > 0 and len(task_indicators) > 0:
+                page_type = "dashboard"
+            elif navigation_links > form_elements and len(task_indicators) > 0:
+                page_type = "task_list"
+            elif meaningful_fields >= 3:  # Has substantial form content
+                page_type = "form"
+            elif navigation_links > form_elements:
+                page_type = "navigation"
+            elif form_elements > 0:
+                page_type = "mixed"
+            else:
+                page_type = "content"
+            
+            return {
+                "page_type": page_type,
+                "form_elements": form_elements,
+                "submit_buttons": submit_buttons,
+                "navigation_links": navigation_links,
+                "formaction_buttons": formaction_buttons,
+                "task_indicators": len(task_indicators),
+                "meaningful_fields": meaningful_fields,
+                "detected_field_types": list(detected_field_types)
+            }
+            
+        except Exception as e:
+            print(f"DEBUG: Page Type Analysis - Error: {str(e)}")
+            return {"page_type": "unknown", "error": str(e)}
+    
+    def _analyze_action_quality(self, actions: List[Dict[str, Any]], page_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze the quality and relevance of a set of actions
+        
+        Returns:
+            Dict with action quality metrics
+        """
+        try:
+            if not actions:
+                return {"score": 0, "has_form_filling": False, "has_navigation_actions": False, "has_submit": False}
+            
+            score = 0
+            has_form_filling = False
+            has_navigation_actions = False
+            has_submit = False
+            has_formaction_buttons = False
+            
+            for action in actions:
+                selector = action.get("selector", "").lower()
+                action_type = action.get("type", "")
+                value = action.get("value", "")
+                
+                # Form filling actions
+                if action_type == "input" and value:
+                    has_form_filling = True
+                    score += 2
+                elif action_type == "click" and any(field_type in selector for field_type in ["radio", "checkbox"]):
+                    has_form_filling = True
+                    score += 2
+                
+                # Navigation actions
+                if "href=" in selector or "formaction=" in selector:
+                    has_navigation_actions = True
+                    score += 3
+                    
+                # Formaction buttons (high value for dashboard pages)
+                if "formaction=" in selector:
+                    has_formaction_buttons = True
+                    score += 5  # Higher score for formaction buttons
+                
+                # Submit actions
+                if "submit" in selector or action_type == "submit":
+                    has_submit = True
+                    score += 1
+                
+                # Dashboard-specific indicators
+                if any(indicator in selector for indicator in ["continue", "dashboard", "tasklist"]):
+                    score += 4
+                
+                # Generic button clicks (lower value)
+                if action_type == "click" and "button" in selector:
+                    score += 1
+            
+            # Bonus points based on page type alignment
+            if page_analysis.get("page_type") == "dashboard" and has_formaction_buttons:
+                score += 10  # Big bonus for formaction buttons on dashboard
+            elif page_analysis.get("page_type") == "form" and has_form_filling:
+                score += 5   # Bonus for form filling on form pages
+            
+            return {
+                "score": score,
+                "has_form_filling": has_form_filling,
+                "has_navigation_actions": has_navigation_actions,
+                "has_submit": has_submit,
+                "has_formaction_buttons": has_formaction_buttons,
+                "action_count": len(actions)
+            }
+            
+        except Exception as e:
+            print(f"DEBUG: Action Quality Analysis - Error: {str(e)}")
+            return {"score": 0, "error": str(e)}
