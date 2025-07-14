@@ -52,6 +52,7 @@ class WorkflowInstance(Base):
     case_id = Column(String(50), nullable=True, comment="案例ID(一个案例可以包含多个工作流实例)")
     workflow_definition_id = Column(String(50), ForeignKey('workflow.workflow_definitions.workflow_definition_id'), 
                                    nullable=True, comment="工作流定义XID(外键,可选)")
+    unique_application_number = Column(String(100), nullable=True, comment="唯一申请号")
     status = Column(SQLEnum(WorkflowStatus), default=WorkflowStatus.PENDING, 
                    comment="状态(PENDING,IN_PROGRESS,PAUSED,COMPLETED,FAILED)")
     current_step_key = Column(String(100), nullable=True, comment="当前步骤键")

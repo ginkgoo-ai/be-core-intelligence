@@ -149,13 +149,14 @@ class WorkflowDefinitionRepository(BaseRepository):
 class WorkflowInstanceRepository(BaseRepository):
     """Workflow instance repository"""
     
-    def create_instance(self, user_id: str, case_id: str = None, workflow_definition_id: str = None) -> WorkflowInstance:
+    def create_instance(self, user_id: str, case_id: str = None, workflow_definition_id: str = None, unique_application_number: str = None) -> WorkflowInstance:
         """Create workflow instance"""
         instance = WorkflowInstance(
             workflow_instance_id=str(uuid.uuid4()),
             user_id=user_id,  # Simple string field, no validation
             case_id=case_id,
             workflow_definition_id=workflow_definition_id,
+            unique_application_number=unique_application_number,
             status=WorkflowStatus.PENDING
         )
         self.db.add(instance)
@@ -209,6 +210,28 @@ class WorkflowInstanceRepository(BaseRepository):
         instance = self.get_instance_by_id(instance_id)
         if instance:
             instance.progress_file_id = file_id
+            instance.updated_at = datetime.now()
+            return instance
+        return None
+    
+    def update_unique_application_number(self, instance_id: str, unique_application_number: str) -> Optional[WorkflowInstance]:
+        """Update workflow instance unique application number"""
+        instance = self.get_instance_by_id(instance_id)
+        if instance:
+            instance.unique_application_number = unique_application_number
+            instance.updated_at = datetime.now()
+            return instance
+        return None
+    
+    def update_instance(self, instance_id: str, **kwargs) -> Optional[WorkflowInstance]:
+        """Update workflow instance with provided fields"""
+        instance = self.get_instance_by_id(instance_id)
+        if instance:
+            # Update only provided fields
+            for key, value in kwargs.items():
+                if hasattr(instance, key) and value is not None:
+                    setattr(instance, key, value)
+            
             instance.updated_at = datetime.now()
             return instance
         return None

@@ -93,7 +93,8 @@ class WorkflowService:
             instance = self.instance_repo.create_instance(
                 user_id=payload.user_id,
                 case_id=payload.case_id,
-                workflow_definition_id=payload.workflow_definition_id
+                workflow_definition_id=payload.workflow_definition_id,
+                unique_application_number=payload.unique_application_number
             )
 
             logger.info(f"[workflow_id:{instance.workflow_instance_id}] Workflow instance created successfully")
@@ -125,6 +126,7 @@ class WorkflowService:
                 workflow_instance_id=instance.workflow_instance_id,
                 user_id=instance.user_id,
                 case_id=instance.case_id,
+                unique_application_number=instance.unique_application_number,
                 workflow_definition_id=instance.workflow_definition_id,
                 current_step_key=instance.current_step_key,
                 status=instance.status,
@@ -174,6 +176,7 @@ class WorkflowService:
             workflow_instance_id=instance.workflow_instance_id,
             user_id=instance.user_id,
             case_id=instance.case_id,
+            unique_application_number=instance.unique_application_number,
             status=instance.status,
             current_step_key=instance.current_step_key,
             progress_percentage=progress_percentage,
@@ -292,6 +295,85 @@ class WorkflowService:
             
         except Exception as e:
             raise e
+
+    def update_unique_application_number(self, workflow_id: str, unique_application_number: str) -> WorkflowInstanceSummary:
+        """Update unique application number for workflow instance"""
+        try:
+            # Check if workflow instance exists and update
+            instance = self.instance_repo.update_unique_application_number(workflow_id, unique_application_number)
+            if not instance:
+                raise ValueError(f"工作流实例 {workflow_id} 不存在")
+
+            self.db.commit()
+            logger.info(f"Updated unique application number for workflow {workflow_id}: {unique_application_number}")
+
+            # Calculate progress percentage
+            progress_percentage = self._calculate_workflow_progress(workflow_id)
+
+            return WorkflowInstanceSummary(
+                workflow_instance_id=instance.workflow_instance_id,
+                user_id=instance.user_id,
+                case_id=instance.case_id,
+                unique_application_number=instance.unique_application_number,
+                status=instance.status,
+                current_step_key=instance.current_step_key,
+                progress_percentage=progress_percentage,
+                created_at=instance.created_at,
+                updated_at=instance.updated_at,
+                completed_at=instance.completed_at,
+                progress_file_id=instance.progress_file_id,
+                dummy_data_usage=instance.dummy_data_usage
+            )
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"更新唯一申请号失败: {str(e)}")
+            raise e
+
+    def update_workflow_instance(self, workflow_id: str, update_data: 'WorkflowInstanceUpdatePayload') -> WorkflowInstanceSummary:
+        """Update workflow instance with provided data"""
+        try:
+            # Prepare update data (only include non-None values)
+            update_fields = {}
+            if update_data.case_id is not None:
+                update_fields['case_id'] = update_data.case_id
+            if update_data.unique_application_number is not None:
+                update_fields['unique_application_number'] = update_data.unique_application_number
+            if update_data.status is not None:
+                update_fields['status'] = update_data.status
+            if update_data.current_step_key is not None:
+                update_fields['current_step_key'] = update_data.current_step_key
+
+            # Update the instance
+            instance = self.instance_repo.update_instance(workflow_id, **update_fields)
+            if not instance:
+                raise ValueError(f"工作流实例 {workflow_id} 不存在")
+
+            self.db.commit()
+            logger.info(f"Updated workflow instance {workflow_id} with fields: {list(update_fields.keys())}")
+
+            # Calculate progress percentage
+            progress_percentage = self._calculate_workflow_progress(workflow_id)
+
+            return WorkflowInstanceSummary(
+                workflow_instance_id=instance.workflow_instance_id,
+                user_id=instance.user_id,
+                case_id=instance.case_id,
+                unique_application_number=instance.unique_application_number,
+                status=instance.status,
+                current_step_key=instance.current_step_key,
+                progress_percentage=progress_percentage,
+                created_at=instance.created_at,
+                updated_at=instance.updated_at,
+                completed_at=instance.completed_at,
+                progress_file_id=instance.progress_file_id,
+                dummy_data_usage=instance.dummy_data_usage
+            )
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"更新工作流实例失败: {str(e)}")
+            raise e
     
     def get_user_workflows(self, user_id: str, limit: int = 50) -> List[WorkflowInstanceSummary]:
         """Get user's workflow instances list"""
@@ -308,6 +390,7 @@ class WorkflowService:
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
                     case_id=instance.case_id,
+                    unique_application_number=instance.unique_application_number,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
                     progress_percentage=progress_percentage,
@@ -339,6 +422,7 @@ class WorkflowService:
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
                     case_id=instance.case_id,
+                    unique_application_number=instance.unique_application_number,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
                     progress_percentage=progress_percentage,
@@ -370,6 +454,7 @@ class WorkflowService:
                     workflow_instance_id=instance.workflow_instance_id,
                     user_id=instance.user_id,
                     case_id=instance.case_id,
+                    unique_application_number=instance.unique_application_number,
                     status=instance.status,
                     current_step_key=instance.current_step_key,
                     progress_percentage=progress_percentage,

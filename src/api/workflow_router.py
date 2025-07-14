@@ -10,10 +10,10 @@ from src.database.database_config import get_db_session
 from src.model.workflow_entities import WorkflowInstance, StepInstance, WorkflowStatus, StepStatus
 from src.model.workflow_schemas import (
     WorkflowInitiationPayload, WorkflowInstanceSummary, WorkflowInstanceDetail,
-    StepDataModel, StepStatusUpdate, NextStepInfo, AutosaveConfirmation, FormProcessResult,
-    FormDataResult, ProgressFileUploadRequest, ProgressFileUploadResult,
-    WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDefinitionDetail,
-    WorkflowDefinitionList, WorkflowTypeEnum
+    WorkflowInstanceUpdatePayload, StepDataModel, StepStatusUpdate, NextStepInfo,
+    AutosaveConfirmation, FormProcessResult, FormDataResult, ProgressFileUploadRequest,
+    ProgressFileUploadResult, WorkflowDefinitionCreate, WorkflowDefinitionUpdate,
+    WorkflowDefinitionDetail, WorkflowDefinitionList, WorkflowTypeEnum
 )
 
 # Create router
@@ -323,6 +323,30 @@ async def get_workflow_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取工作流状态失败: {str(e)}"
+        )
+
+
+@workflow_router.put("/{workflow_id}", response_model=WorkflowInstanceSummary)
+async def update_workflow_instance(
+        workflow_id: str,
+        update_data: WorkflowInstanceUpdatePayload,
+        service: WorkflowService = Depends(get_workflow_service)
+):
+    """Update workflow instance
+
+    更新工作流实例的基本信息，包括案例ID、唯一申请号、状态和当前步骤
+    """
+    try:
+        return service.update_workflow_instance(workflow_id, update_data)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新工作流实例失败: {str(e)}"
         )
 
 
@@ -809,6 +833,7 @@ async def process_form(
 
         # 处理数据字段映射：只使用 fill_data 和 profile_dummy_data
         profile_data = request.fill_data or {}
+        # profile_data = json.loads(dummy_data)
         profile_dummy_data = request.profile_dummy_data or {}
 
         print(
@@ -1030,4 +1055,34 @@ async def get_dummy_data_usage(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取虚拟数据使用记录失败: {str(e)}"
+        ) 
+
+
+class UniqueApplicationNumberUpdateRequest(BaseModel):
+    """Request model for updating unique application number"""
+    unique_application_number: str = Field(..., description="唯一申请号")
+
+
+@workflow_router.patch("/{workflow_id}/unique-application-number", response_model=WorkflowInstanceSummary)
+async def update_unique_application_number(
+        workflow_id: str,
+        request: UniqueApplicationNumberUpdateRequest,
+        service: WorkflowService = Depends(get_workflow_service)
+):
+    """Update unique application number for workflow instance
+
+    更新工作流实例的唯一申请号
+    """
+    try:
+        result = service.update_unique_application_number(workflow_id, request.unique_application_number)
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新唯一申请号失败: {str(e)}"
         ) 

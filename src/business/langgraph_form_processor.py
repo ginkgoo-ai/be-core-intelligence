@@ -262,14 +262,14 @@ class StepAnalyzer:
                 if current_step:
                     # 1. Complete current step
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
-                    current_step.completed_at = datetime.now(datetime.UTC)
+                    current_step.completed_at = datetime.utcnow()
                     print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
 
                     # 2. Activate next step
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
-                        next_step.started_at = datetime.now(datetime.UTC)
+                        next_step.started_at = datetime.utcnow()
                         print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
 
                         # 3. Update workflow instance's current step
@@ -405,6 +405,28 @@ class StepAnalyzer:
                 label_text = label_element.get_text(strip=True)
                 if label_text:
                     return label_text
+                    
+        # Strategy 3.5: For autocomplete fields, look for related labels with similar IDs
+        if field_id and "autocomplete" in element.get("class", []):
+            # Search for labels with similar IDs (e.g., nationality -> country-nationality)
+            soup_root = element
+            while soup_root.parent:
+                soup_root = soup_root.parent
+            
+            # Try different ID patterns
+            possible_label_ids = [
+                f"country-{field_id}",
+                f"{field_id}-title",
+                f"{field_id}-label",
+                field_id.replace("nationality", "country-nationality")
+            ]
+            
+            for label_id in possible_label_ids:
+                label_element = soup_root.find("label", {"for": label_id})
+                if label_element:
+                    label_text = label_element.get_text(strip=True)
+                    if label_text and label_text != "No search results.,,":
+                        return label_text
 
         # Strategy 4: Look for label that contains this element
         current = element
@@ -771,17 +793,79 @@ class StepAnalyzer:
                     if "(Required)" in legend_text or "Required" in legend_text:
                         fieldset_required = True
 
+            # 🚀 ENHANCED: Additional required detection methods
+            # Check for asterisk (*) in label text - common required indicator
+            asterisk_required = field_label and "*" in field_label
+            
+            # Check for form validation classes that indicate required fields
+            classes = element.get("class", [])
+            if isinstance(classes, str):
+                classes = classes.split()
+            class_required = any(cls in ["required", "mandatory", "govuk-required"] for cls in classes)
+            
+            # Check for data attributes that indicate required fields
+            data_required = element.get("data-required") == "true" or element.get("data-validate") == "required"
+            
+            # Check parent container for required indicators
+            container_required = False
+            parent = element.find_parent()
+            if parent:
+                # Look for error message containers (usually indicate required fields)
+                error_containers = parent.find_all(class_=lambda x: x and any(err in str(x).lower() for err in ["error", "required", "mandatory"]))
+                if error_containers:
+                    container_required = True
+                
+                # Look for hint text that mentions required
+                hint_elements = parent.find_all(class_=lambda x: x and "hint" in str(x).lower())
+                for hint in hint_elements:
+                    hint_text = hint.get_text(strip=True).lower()
+                    if "required" in hint_text or "must" in hint_text or "mandatory" in hint_text:
+                        container_required = True
+                        break
+            
+            # 🚀 ENHANCED: UK Government forms specific required detection
+            # Check for GOV.UK form patterns that indicate required fields
+            govuk_required = False
+            
+            # Method 1: Check for form group with error state (indicates required)
+            form_group = element.find_parent(class_=lambda x: x and "govuk-form-group" in str(x))
+            if form_group:
+                # Look for error state classes
+                form_group_classes = form_group.get("class", [])
+                if isinstance(form_group_classes, str):
+                    form_group_classes = form_group_classes.split()
+                if any("error" in cls for cls in form_group_classes):
+                    govuk_required = True
+            
+            # Method 2: For date inputs, check if it's part of a date group (usually required)
+            if element.get("name") in ["day", "month", "year"]:
+                date_input_parent = element.find_parent(class_=lambda x: x and "govuk-date-input" in str(x))
+                if date_input_parent:
+                    # Date inputs are typically required unless explicitly marked optional
+                    govuk_required = True
+            
+            # Method 3: Check for specific field types that are typically required
+            field_name = element.get("name", "").lower()
+            typically_required_fields = [
+                "residencenumber", "brp", "biometric", "passport", "visa", 
+                "firstname", "lastname", "surname", "email", "phone", 
+                "address", "postcode", "nationality", "country"
+            ]
+            if any(req_field in field_name for req_field in typically_required_fields):
+                govuk_required = True
+
             # 🚀 CRITICAL FIX: If label explicitly says "(optional)", override all other required indicators
             if label_optional:
                 is_required = False
                 print(
                     f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as OPTIONAL due to label text: '{field_label}'")
             else:
-                is_required = html_required or aria_required or label_required or fieldset_required
+                is_required = (html_required or aria_required or label_required or fieldset_required or 
+                              asterisk_required or class_required or data_required or container_required or govuk_required)
 
             if is_required:
                 print(
-                    f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as REQUIRED: html_required={html_required}, aria_required={aria_required}, label_required={label_required}, fieldset_required={fieldset_required}, label='{field_label}'")
+                    f"DEBUG: _extract_field_info - Field '{element.get('name', '')}' marked as REQUIRED: html_required={html_required}, aria_required={aria_required}, label_required={label_required}, fieldset_required={fieldset_required}, asterisk_required={asterisk_required}, class_required={class_required}, data_required={data_required}, container_required={container_required}, govuk_required={govuk_required}, label='{field_label}'")
 
             field_info = {
                 "id": field_id,  # Add unique ID for tracking
@@ -814,24 +898,38 @@ class StepAnalyzer:
                     search_scope = container
 
                     # If container is too small, search in document root
-                    while search_scope and len(
-                            search_scope.find_all('input', {'type': 'radio', 'name': radio_name})) < 2:
-                        search_scope = search_scope.find_parent()
-                        if not search_scope:
-                            # Search in the entire document
-                            search_scope = element
-                            while search_scope.parent:
-                                search_scope = search_scope.parent
-                            break
+                    # 🚀 ENHANCED: For deliveryMethod field, ensure we search the entire document
+                    if radio_name == 'deliveryMethod':
+                        # For security code delivery method, search entire document to find all options
+                        search_scope = element
+                        while search_scope.parent:
+                            search_scope = search_scope.parent
+                        print(f"DEBUG: _extract_field_info - deliveryMethod: searching entire document for all radio options")
+                    else:
+                        # Original logic for other radio fields
+                        while search_scope and len(
+                                search_scope.find_all('input', {'type': 'radio', 'name': radio_name})) < 2:
+                            search_scope = search_scope.find_parent()
+                            if not search_scope:
+                                # Search in the entire document
+                                search_scope = element
+                                while search_scope.parent:
+                                    search_scope = search_scope.parent
+                                break
 
                     related_radios = search_scope.find_all('input', {'type': 'radio',
                                                                      'name': radio_name}) if search_scope else []
+                    print(f"DEBUG: _extract_field_info - Found {len(related_radios)} radio buttons for '{radio_name}'")
+                    
                     options = []
-                    for radio in related_radios:
+                    for i, radio in enumerate(related_radios):
                         label_text = self._find_field_label(radio)
                         radio_value = radio.get("value", "")
+                        radio_id = radio.get("id", "")
                         # 🚀 CRITICAL FIX: Generate selector for each radio option
                         radio_selector = self._generate_selector(radio)
+                        print(f"DEBUG: _extract_field_info - Radio {i+1}: id='{radio_id}', value='{radio_value}', label='{label_text}', selector='{radio_selector}'")
+                        
                         if radio_value or label_text:  # Only include if has value or label
                             options.append({
                                 "value": radio_value or label_text,
@@ -1050,7 +1148,35 @@ class StepAnalyzer:
                                     print(f"DEBUG: Found details/summary for {field_name}: '{summary_text}'")
                                     return summary_text
 
-                    # Strategy 2: Look for fieldset legend that contains this field
+                    # Strategy 2: Special case for security code delivery method pages
+                    # Look for specific pattern: security code + delivery method + Helper legend
+                    main_heading = soup.find('h1')
+                    if main_heading:
+                        heading_text = main_heading.get_text(strip=True)
+                        # Check if this is a security code delivery method page
+                        if (heading_text and 
+                            'security code' in heading_text.lower() and
+                            'receive' in heading_text.lower() and
+                            field_name == 'deliveryMethod'):
+                            # Check if there's a "Helper" legend (indicates this special case)
+                            helper_legend = soup.find('legend', string=lambda text: text and 'helper' in text.lower())
+                            if helper_legend:
+                                print(f"DEBUG: Found security code delivery question for {field_name}: '{heading_text}'")
+                                return heading_text
+                    
+                    # Strategy 2b: Look for page main heading (h1) for general question patterns
+                    if main_heading:
+                        heading_text = main_heading.get_text(strip=True)
+                        if (heading_text and len(heading_text) > 5 and
+                                (heading_text.endswith('?') or 
+                                 any(pattern in heading_text.lower() for pattern in
+                                     ['how do you', 'what do you', 'do you want', 'which', 'where', 'when', 'who', 'why'])) and
+                                # Only use h1 if it's clearly a question and not just a page title
+                                not any(generic in heading_text.lower() for generic in ['sign in', 'create account', 'register', 'login'])):
+                            print(f"DEBUG: Found main heading question for {field_name}: '{heading_text}'")
+                            return heading_text
+
+                    # Strategy 3: Look for fieldset legend that contains this field (lower priority)
                     fieldsets = soup.find_all('fieldset')
                     for fieldset in fieldsets:
                         # Check if this fieldset contains our field
@@ -1059,11 +1185,13 @@ class StepAnalyzer:
                             legend = fieldset.find('legend')
                             if legend:
                                 legend_text = legend.get_text(strip=True)
-                                if legend_text and len(legend_text) > 3:
+                                if (legend_text and len(legend_text) > 3 and 
+                                    # Skip generic legends like "Helper" - these are not real questions
+                                    legend_text.lower() not in ['helper', 'options', 'choices', 'selection', 'details']):
                                     print(f"DEBUG: Found fieldset legend for {field_name}: '{legend_text}'")
                                     return legend_text
 
-                    # Strategy 3: Look for heading or label before the field group
+                    # Strategy 4: Look for heading or label before the field group
                     if field_name:
                         first_field = soup.find('input', {'name': field_name})
                         if first_field:
@@ -1089,7 +1217,7 @@ class StepAnalyzer:
 
                                 current = parent
 
-                    # Strategy 3b: Simple form-external question search
+                    # Strategy 5: Simple form-external question search
                     if field_name:
                         first_field = soup.find('input', {'name': field_name})
                         if first_field:
@@ -1139,11 +1267,11 @@ class StepAnalyzer:
                                     except (ValueError, AttributeError):
                                         continue
 
-                    # Strategy 4: Look for descriptive text near the field (Enhanced)
+                    # Strategy 6: Look for descriptive text near the field (Enhanced)
                     if field_name:
                         first_field = soup.find('input', {'name': field_name})
                         if first_field:
-                            # Strategy 4a: Look for preceding span/p/div with question patterns
+                            # Strategy 6a: Look for preceding span/p/div with question patterns
                             for sibling in first_field.find_all_previous(['span', 'p', 'div', 'h1', 'h2', 'h3']):
                                 text = sibling.get_text(strip=True)
                                 # Enhanced pattern matching for question-like text
@@ -1285,8 +1413,211 @@ class StepAnalyzer:
             "field_label": field_label,
             "question": question_text,
             "required": field.get("required", False),
-            "options": field.get("options", [])
+            "options": field.get("options", []),
+            # 🚀 NEW: Dual control metadata
+            "is_dual_control": field.get("is_dual_control", False),
+            "ui_input_id": field.get("ui_input_id", ""),
+            "hidden_select_id": field.get("hidden_select_id", ""),
+            "hidden_select_name": field.get("hidden_select_name", ""),
+            "hidden_selector": field.get("hidden_selector", "")
         }
+
+    def _generate_dual_control_actions(self, merged_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """🚀 NEW: Generate actions for dual control fields (autocomplete with hidden select)"""
+        actions = []
+        
+        try:
+            # Extract data from merged_data structure
+            metadata = merged_data.get("_metadata", {})
+            field_name = metadata.get("field_name", "")
+            options = metadata.get("options", [])
+            
+            # Get answer from the answer data
+            answer_data = merged_data.get("question", {}).get("answer", {}).get("data", [])
+            answer = ""
+            if answer_data and len(answer_data) > 0:
+                answer = answer_data[0].get("value", "")
+            
+            print(f"DEBUG: _generate_dual_control_actions - Processing {field_name} with answer: '{answer}'")
+            
+            if not answer or not options:
+                print(f"DEBUG: _generate_dual_control_actions - No answer or options for {field_name}")
+                return actions
+            
+            # Find matching option based on answer
+            selected_option = None
+            for option in options:
+                # Handle both new dual control structure and legacy structure
+                display_value = option.get("display_value", option.get("text", ""))
+                submit_value = option.get("submit_value", option.get("value", ""))
+                full_text = option.get("full_text", option.get("text", ""))
+                
+                # Match by display value, submit value, or full text
+                if (answer.lower() == display_value.lower() or 
+                    answer.lower() == submit_value.lower() or 
+                    answer.lower() == full_text.lower() or
+                    answer.lower() in display_value.lower() or
+                    answer.lower() in full_text.lower()):
+                    selected_option = option
+                    break
+            
+            if not selected_option:
+                print(f"DEBUG: _generate_dual_control_actions - No matching option found for answer: '{answer}'")
+                return actions
+            
+            # 🚀 DUAL ACTION GENERATION: Create three actions for dual control
+            ui_selector = selected_option.get("ui_selector", metadata.get("field_selector", ""))
+            hidden_selector = selected_option.get("hidden_selector", metadata.get("hidden_selector", ""))
+            display_value = selected_option.get("display_value", selected_option.get("text", ""))
+            submit_value = selected_option.get("submit_value", selected_option.get("value", ""))
+            full_text = selected_option.get("full_text", selected_option.get("text", ""))
+            
+            # Action 1: Input full text into UI input (what user sees, e.g., "Turkey - TUR")
+            if ui_selector:
+                ui_action = {
+                    "selector": ui_selector,
+                    "type": "input",
+                    "value": full_text or f"{display_value} - {submit_value}",
+                    "description": f"Enter '{full_text or display_value}' in autocomplete input"
+                }
+                actions.append(ui_action)
+                print(f"DEBUG: _generate_dual_control_actions - UI action: {ui_action}")
+            
+            # Action 2: Set submit value in hidden select (what gets submitted, e.g., "TUR")
+            if hidden_selector:
+                hidden_action = {
+                    "selector": hidden_selector,
+                    "type": "input",  # Use input type for hidden select
+                    "value": submit_value,
+                    "description": f"Set '{submit_value}' in hidden select"
+                }
+                actions.append(hidden_action)
+                print(f"DEBUG: _generate_dual_control_actions - Hidden action: {hidden_action}")
+            
+            # Action 3: Submit the form
+            submit_action = {
+                "selector": 'input[type="submit"]',
+                "type": "click",
+                "description": "Click submit button"
+            }
+            actions.append(submit_action)
+            print(f"DEBUG: _generate_dual_control_actions - Submit action: {submit_action}")
+            
+            print(f"DEBUG: _generate_dual_control_actions - Generated {len(actions)} actions for dual control field")
+            
+        except Exception as e:
+            print(f"DEBUG: _generate_dual_control_actions - Error: {str(e)}")
+        
+        return actions
+
+    def _generate_dual_control_actions_llm(self, merged_item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """🚀 NEW: Generate dual control actions for LLM action generator"""
+        actions = []
+        
+        try:
+            # Extract data from merged item
+            question_data = merged_item.get("question", {})
+            answer_data = question_data.get("answer", {})
+            metadata = merged_item.get("_metadata", {})
+            
+            field_name = metadata.get("field_name", "")
+            
+            print(f"DEBUG: _generate_dual_control_actions_llm - Processing {field_name}")
+            print(f"DEBUG: _generate_dual_control_actions_llm - Merged item structure: {list(merged_item.keys())}")
+            print(f"DEBUG: _generate_dual_control_actions_llm - Metadata keys: {list(metadata.keys())}")
+            print(f"DEBUG: _generate_dual_control_actions_llm - Answer data keys: {list(answer_data.keys())}")
+            
+            # Get data array from answer
+            data_array = answer_data.get("data", [])
+            
+            if not data_array:
+                print(f"DEBUG: _generate_dual_control_actions_llm - No data array for {field_name}")
+                return actions
+            
+            # Find the selected option
+            selected_option = None
+            for data_item in data_array:
+                if data_item.get("check") == 1:  # Selected option
+                    selected_option = data_item
+                    break
+            
+            if not selected_option:
+                print(f"DEBUG: _generate_dual_control_actions_llm - No selected option found for {field_name}")
+                # Use the first data item if no selected option
+                if data_array:
+                    selected_option = data_array[0]
+                    print(f"DEBUG: _generate_dual_control_actions_llm - Using first data item: {selected_option}")
+                else:
+                    return actions
+            
+            # Extract selectors and values
+            ui_selector = selected_option.get("selector", "")
+            display_value = selected_option.get("value", "")  # The display value is in 'value' field
+            
+            # Extract submit value from display value (e.g., "Turkey - TUR" -> "TUR")
+            submit_value = display_value
+            if " - " in display_value:
+                parts = display_value.split(" - ")
+                if len(parts) >= 2:
+                    submit_value = parts[-1]  # Get the last part (country code)
+            
+            # Build hidden selector from UI selector
+            hidden_selector = ""
+            if ui_selector and 'id="' in ui_selector:
+                # Extract field name from UI selector
+                start = ui_selector.find('id="') + 4
+                end = ui_selector.find('"', start)
+                if start > 3 and end > start:
+                    field_id = ui_selector[start:end]
+                    hidden_selector = f'select[id="{field_id}-select"]'
+            
+            # Also try to get hidden selector from metadata
+            if not hidden_selector:
+                hidden_selector = metadata.get("hidden_selector", "")
+            
+            print(f"DEBUG: _generate_dual_control_actions_llm - UI selector: {ui_selector}")
+            print(f"DEBUG: _generate_dual_control_actions_llm - Hidden selector: {hidden_selector}")
+            print(f"DEBUG: _generate_dual_control_actions_llm - Display value: {display_value}")
+            print(f"DEBUG: _generate_dual_control_actions_llm - Submit value: {submit_value}")
+            
+            # 🚀 DUAL ACTION GENERATION: Create three actions for dual control
+            
+            # Action 1: Input display value into UI input (what user sees)
+            if ui_selector and display_value:
+                ui_action = {
+                    "selector": ui_selector,
+                    "type": "input",
+                    "value": display_value
+                }
+                actions.append(ui_action)
+                print(f"DEBUG: _generate_dual_control_actions_llm - UI action: {ui_action}")
+            
+            # Action 2: Set submit value in hidden select (what gets submitted)
+            if hidden_selector and submit_value:
+                hidden_action = {
+                    "selector": hidden_selector,
+                    "type": "input",  # Use input type for hidden select
+                    "value": submit_value
+                }
+                actions.append(hidden_action)
+                print(f"DEBUG: _generate_dual_control_actions_llm - Hidden action: {hidden_action}")
+            
+            # Action 3: Submit the form
+            submit_action = {
+                "selector": 'input[type="submit"]',
+                "type": "click"
+            }
+            actions.append(submit_action)
+            print(f"DEBUG: _generate_dual_control_actions_llm - Submit action: {submit_action}")
+            
+            print(f"DEBUG: _generate_dual_control_actions_llm - Generated {len(actions)} actions for dual control field")
+            
+        except Exception as e:
+            print(f"DEBUG: _generate_dual_control_actions_llm - Error: {str(e)}")
+            import traceback
+            print(f"DEBUG: _generate_dual_control_actions_llm - Traceback: {traceback.format_exc()}")
+        
+        return actions
 
     def _generate_form_action(self, merged_data: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         """Generate form action from merged question-answer data - ALWAYS GENERATES ACTION"""
@@ -1302,6 +1633,24 @@ class StepAnalyzer:
         field_name = merged_data["field_name"]
         field_type = merged_data.get("field_type", "")
         options = merged_data.get("options", [])
+        
+        # 🚀 NEW: Check if this is a dual control field
+        is_dual_control = merged_data.get("is_dual_control", False)
+        if not is_dual_control:
+            # Check in metadata if not found at top level
+            metadata = merged_data.get("_metadata", {})
+            is_dual_control = metadata.get("is_dual_control", False)
+        
+        print(f"DEBUG: _generate_form_action - Field: {field_name}, Type: {field_type}, is_dual_control: {is_dual_control}")
+        
+        if is_dual_control and field_type == "autocomplete":
+            print(f"DEBUG: _generate_form_action - Calling _generate_dual_control_actions for {field_name}")
+            dual_actions = self._generate_dual_control_actions(merged_data)
+            if dual_actions:
+                print(f"DEBUG: _generate_form_action - Returning {len(dual_actions)} dual control actions")
+                return dual_actions
+            else:
+                print(f"DEBUG: _generate_form_action - No dual control actions generated, falling back to normal action")
 
         actions = []
 
@@ -1821,14 +2170,14 @@ class StepAnalyzer:
                 if current_step:
                     # 1. 完成当前步骤
                     self.step_repo.update_step_status(current_step.step_instance_id, StepStatus.COMPLETED_SUCCESS)
-                    current_step.completed_at = datetime.now(datetime.UTC)
+                    current_step.completed_at = datetime.utcnow()
                     print(f"[workflow_id:{workflow_id}] DEBUG: Completed current step {current_step_key}")
 
                     # 2. 激活下一个步骤
                     next_step = self.step_repo.get_step_by_key(workflow_id, next_step_key)
                     if next_step:
                         self.step_repo.update_step_status(next_step.step_instance_id, StepStatus.ACTIVE)
-                        next_step.started_at = datetime.now(datetime.UTC)
+                        next_step.started_at = datetime.utcnow()
                         print(f"[workflow_id:{workflow_id}] DEBUG: Activated next step {next_step_key}")
 
                         # 3. 更新工作流实例的当前步骤
@@ -2324,8 +2673,40 @@ class LangGraphFormProcessor:
                 for element in all_elements:
                     element_id = element.get("id", "")
                     element_name = element.get("name", "")
+                    element_classes = element.get("class", [])
+                    element_classes_str = " ".join(element_classes) if element_classes else ""
 
-                    # Look for autocomplete pattern: input with _ui suffix + corresponding select
+                    # Pattern 1: Standard autocomplete pattern (input + select with similar names)
+                    if (element.name == "input" and element.get("type", "text") == "text" and
+                        "autocomplete" in element_classes_str):
+                        
+                        # Look for corresponding select with similar ID/name
+                        base_name = element_id
+                        possible_select_ids = [
+                            f"{element_id}-select",
+                            f"{element_id}_select", 
+                            element_name + "-select" if element_name else None,
+                            element_name + "_select" if element_name else None
+                        ]
+                        
+                        hidden_select = None
+                        for other_elem in all_elements:
+                            if (other_elem.name == "select" and
+                                (other_elem.get("id") in possible_select_ids or
+                                 other_elem.get("name") == element_name)):
+                                hidden_select = other_elem
+                                break
+                        
+                        if hidden_select:
+                            print(f"DEBUG: Field Detector - Found autocomplete pair (Pattern 1): UI input '{element_id}' + hidden select '{hidden_select.get('id', '')}'")
+                            autocomplete_pairs[base_name] = {
+                                "ui_input": element,
+                                "hidden_select": hidden_select,
+                                "base_name": base_name
+                            }
+                            continue
+
+                    # Pattern 2: Legacy pattern with _ui suffix  
                     if (element.name == "input" and
                             element_id.endswith("_ui") and
                             element.get("class") and "ui-autocomplete-input" in str(element.get("class"))):
@@ -2344,8 +2725,7 @@ class LangGraphFormProcessor:
                                 break
 
                         if hidden_select:
-                            print(
-                                f"DEBUG: Field Detector - Found autocomplete pair: UI input '{element_id}' + hidden select '{hidden_select.get('id', '')}'")
+                            print(f"DEBUG: Field Detector - Found autocomplete pair (Pattern 2): UI input '{element_id}' + hidden select '{hidden_select.get('id', '')}'")
                             autocomplete_pairs[base_id] = {
                                 "ui_input": element,
                                 "hidden_select": hidden_select,
@@ -3040,27 +3420,47 @@ class LangGraphFormProcessor:
             field_info = {
                 "id": hidden_select.get("id", "") or hidden_select.get("name", ""),
                 "name": hidden_select.get("name", ""),
-                "type": "autocomplete",  # Special type for autocomplete fields
-                "selector": f"input[id=\"{ui_input.get('id', '')}\"]",  # Use UI input selector for interaction
+                "type": "autocomplete",  # 🚀 NEW: Use specific autocomplete type
+                "selector": f"input[id=\"{ui_input.get('id', '')}\"][type=\"text\"]",  # Use UI input selector for interaction
                 "hidden_selector": f"#{hidden_select.get('id', '')}",  # Store hidden select selector
+                "ui_input_id": ui_input.get("id", ""),  # 🚀 NEW: Store UI input ID
+                "hidden_select_id": hidden_select.get("id", ""),  # 🚀 NEW: Store hidden select ID
+                "hidden_select_name": hidden_select.get("name", ""),  # 🚀 NEW: Store hidden select name
+                "is_dual_control": True,  # 🚀 NEW: Flag for dual control handling
                 "required": hidden_select.get("required") is not None or ui_input.get("aria-required") == "true",
-                "label": self.step_analyzer._find_field_label(ui_input) or self.step_analyzer._find_field_label(
-                    hidden_select),
+                "label": self._find_autocomplete_label(ui_input, hidden_select),
                 "placeholder": ui_input.get("placeholder", ""),
                 "value": hidden_select.get("value", ""),
                 "options": []
             }
 
-            # Extract options from hidden select - for autocomplete, prioritize text over value
+            # Extract options from hidden select - for autocomplete, use text as input value
             raw_options = self.step_analyzer._extract_field_options(hidden_select)
-            # 🚀 FIXED: For autocomplete fields, modify options to use text as value
+            # 🚀 ENHANCED: Create comprehensive option mapping for dual control
             autocomplete_options = []
             for option in raw_options:
-                # For autocomplete, use text as the value (readable text like "Turkey")
+                option_text = option.get("text", "")
+                option_value = option.get("value", "")
+                
+                # Extract country name from "Country - CODE" format
+                if " - " in option_text:
+                    country_name = option_text.split(" - ")[0]
+                    country_code = option_text.split(" - ")[1] if len(option_text.split(" - ")) > 1 else option_value
+                else:
+                    country_name = option_text
+                    country_code = option_value
+                
+                # 🚀 NEW: Create dual mapping for autocomplete
                 autocomplete_options.append({
-                    "value": option.get("text", option.get("value", "")),  # Use text as value for autocomplete
-                    "text": option.get("text", option.get("value", "")),
-                    "original_value": option.get("original_value", option.get("value", ""))
+                    "display_value": country_name,    # What user sees/types in UI input
+                    "submit_value": option_value,     # What gets submitted (code)
+                    "full_text": option_text,        # Full display text for reference
+                    "ui_selector": field_info["selector"],  # Selector for UI input
+                    "hidden_selector": field_info["hidden_selector"],  # Selector for hidden select
+                    # Legacy fields for backward compatibility
+                    "value": country_name,
+                    "text": option_text,
+                    "code": option_value
                 })
             field_info["options"] = autocomplete_options
 
@@ -3068,12 +3468,89 @@ class LangGraphFormProcessor:
                 f"DEBUG: _extract_autocomplete_field_info - Autocomplete field: {field_info['name']} with {len(autocomplete_options)} options")
             print(
                 f"DEBUG: _extract_autocomplete_field_info - UI selector: {field_info['selector']}, Hidden selector: {field_info['hidden_selector']}")
+            print(
+                f"DEBUG: _extract_autocomplete_field_info - Dual control mode: {field_info['is_dual_control']}")
 
             return field_info
 
         except Exception as e:
             print(f"DEBUG: _extract_autocomplete_field_info - Error: {str(e)}")
             return None
+
+    def _find_autocomplete_label(self, ui_input, hidden_select):
+        """Find label for autocomplete field with enhanced logic"""
+        try:
+            # Strategy 1: Try to find label by UI input ID
+            ui_input_id = ui_input.get("id", "")
+            if ui_input_id:
+                # Look for direct label match
+                label = self.step_analyzer._find_field_label(ui_input)
+                if label and label != "No search results.,,":
+                    return label
+                
+                # Strategy 2: Look for related labels with pattern matching
+                soup_root = ui_input
+                while soup_root.parent:
+                    soup_root = soup_root.parent
+                
+                # Try different ID patterns for autocomplete fields
+                possible_label_ids = [
+                    f"country-{ui_input_id}",
+                    f"{ui_input_id}-title", 
+                    f"{ui_input_id}-label",
+                    ui_input_id.replace("nationality", "country-nationality")
+                ]
+                
+                for label_id in possible_label_ids:
+                    label_element = soup_root.find("label", {"for": label_id})
+                    if label_element:
+                        label_text = label_element.get_text(strip=True)
+                        if label_text and label_text != "No search results.,,":
+                            print(f"DEBUG: _find_autocomplete_label - Found label with ID '{label_id}': {label_text}")
+                            return label_text
+                
+                # Strategy 3: Look for h1 or legend in the same form/fieldset
+                fieldset = ui_input.find_parent("fieldset")
+                if fieldset:
+                    legend = fieldset.find("legend")
+                    if legend:
+                        # Look for h1 inside legend
+                        h1 = legend.find("h1")
+                        if h1:
+                            label_text = h1.get_text(strip=True)
+                            if label_text and label_text != "No search results.,,":
+                                print(f"DEBUG: _find_autocomplete_label - Found h1 in legend: {label_text}")
+                                return label_text
+                        
+                        # Use legend text as fallback
+                        legend_text = legend.get_text(strip=True)
+                        if legend_text and legend_text != "No search results.,,":
+                            print(f"DEBUG: _find_autocomplete_label - Found legend text: {legend_text}")
+                            return legend_text
+            
+            # Strategy 4: Try hidden select label as fallback
+            hidden_label = self.step_analyzer._find_field_label(hidden_select)
+            if hidden_label and hidden_label != "No search results.,,":
+                return hidden_label
+                
+            # Strategy 5: Extract from aria-labelledby
+            aria_labelledby = ui_input.get("aria-labelledby", "")
+            if aria_labelledby:
+                soup_root = ui_input
+                while soup_root.parent:
+                    soup_root = soup_root.parent
+                label_element = soup_root.find(attrs={"id": aria_labelledby})
+                if label_element:
+                    label_text = label_element.get_text(strip=True)
+                    if label_text and label_text != "No search results.,,":
+                        print(f"DEBUG: _find_autocomplete_label - Found aria-labelledby text: {label_text}")
+                        return label_text
+            
+            return "Nationality"  # Fallback for nationality fields
+            
+        except Exception as e:
+            print(f"DEBUG: _find_autocomplete_label - Error: {str(e)}")
+            return "Autocomplete Field"
 
     def _question_generator_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """🚀 ENHANCED: Smart question generator with AI-powered field filtering and grouping optimization"""
@@ -5191,12 +5668,18 @@ class LangGraphFormProcessor:
                             "selector": question.get("field_selector", ""),
                             "value": "",
                             "check": 0,  # Not checked/selected
-                            "conditionally_hidden": True
+                            "conditionally_hidden": True,
+                            "question_id": question.get("id", ""),  # 🚀 NEW: Add question mapping
+                            "field_name": question.get("field_name", "")  # 🚀 NEW: Add field name mapping
                         }]
                         print(f"DEBUG: Q&A Merger - Created hidden field data for '{question.get('field_name')}'")
                     else:
                         field_answer_data = self.step_analyzer._create_answer_data(question, ai_answer,
                                                                                    needs_intervention)
+                        # 🚀 NEW: Add question mapping to all answer data items
+                        for data_item in field_answer_data:
+                            data_item["question_id"] = question.get("id", "")
+                            data_item["field_name"] = question.get("field_name", "")
 
                     all_field_data.extend(field_answer_data)
 
@@ -5224,18 +5707,23 @@ class LangGraphFormProcessor:
                             # Check if this required field has any valid answer data
                             field_selector = question.get("field_selector", "")
                             field_name = question.get("field_name", "")
+                            field_type = question.get("field_type", "")
+                            question_id = question.get("id", "")
                             field_has_answer = False
 
-                            for data_item in all_field_data:
-                                item_selector = data_item.get("selector", "")
-                                # Check if this data item belongs to the required field
-                                if (field_selector and field_selector == item_selector) or \
-                                        (field_name and field_name in item_selector):
-                                    # For checkbox/radio: check=1 means selected
-                                    # For input: non-empty value means filled
-                                    if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
-                                        field_has_answer = True
-                                        break
+                            # 🚀 CRITICAL FIX: Filter all_field_data to only include data for current question
+                            current_question_data = [
+                                data_item for data_item in all_field_data 
+                                if (data_item.get("question_id") == question_id or 
+                                    data_item.get("field_name") == field_name)
+                            ]
+
+                            if field_type in ["radio", "checkbox"]:
+                                # For radio/checkbox: check if ANY option is selected (check=1)
+                                field_has_answer = any(data_item.get("check", 0) == 1 for data_item in current_question_data)
+                            else:
+                                # For input fields: check if any field has a value
+                                field_has_answer = any(data_item.get("value", "").strip() for data_item in current_question_data)
 
                             if not field_has_answer:
                                 is_required_field_empty = True
@@ -5292,27 +5780,35 @@ class LangGraphFormProcessor:
                         field_answer_data = []
                         field_selector = field_question.get("field_selector", "")
                         field_name = field_question.get("field_name", "")
+                        question_id = field_question.get("id", "")
 
+                        # 🚀 CRITICAL FIX: Use question mapping to find correct answer data
                         for data_item in all_field_data:
-                            item_selector = data_item.get("selector", "")
-
-                            # 🚀 CRITICAL FIX: More precise matching logic
-                            # 1. Exact selector match
-                            if field_selector and field_selector == item_selector:
+                            # Primary matching: question_id and field_name
+                            if (data_item.get("question_id") == question_id or 
+                                data_item.get("field_name") == field_name):
                                 field_answer_data.append(data_item)
-                            # 2. Field name match (for cases where selectors differ slightly)
-                            elif field_name and field_name in item_selector:
-                                field_answer_data.append(data_item)
-                            # 3. Partial selector match (fallback)
-                            elif field_selector and field_selector in item_selector:
-                                field_answer_data.append(data_item)
+                            # Fallback matching: selector-based (for backward compatibility)
+                            elif not field_answer_data:  # Only use fallback if no primary match found
+                                item_selector = data_item.get("selector", "")
+                                # 1. Exact selector match
+                                if field_selector and field_selector == item_selector:
+                                    field_answer_data.append(data_item)
+                                # 2. Field name match (for cases where selectors differ slightly)
+                                elif field_name and field_name in item_selector:
+                                    field_answer_data.append(data_item)
+                                # 3. Partial selector match (fallback)
+                                elif field_selector and field_selector in item_selector:
+                                    field_answer_data.append(data_item)
 
                         # If no specific data found, use empty data
                         if not field_answer_data:
                             field_answer_data = [{
                                 "selector": field_question.get("field_selector", ""),
                                 "value": "",
-                                "check": 0
+                                "check": 0,
+                                "question_id": field_question.get("id", ""),  # 🚀 NEW: Add question mapping
+                                "field_name": field_question.get("field_name", "")  # 🚀 NEW: Add field name mapping
                             }]
                             print(
                                 f"DEBUG: Q&A Merger - No answer data found for field '{field_name}', using empty data")
@@ -5352,7 +5848,13 @@ class LangGraphFormProcessor:
                                 "reasoning": combined_reasoning,
                                 "needs_intervention": overall_needs_intervention,
                                 "has_valid_answer": has_valid_answer,
-                                "grouped_fields": [q.get("field_name", "") for q in valid_questions]
+                                "grouped_fields": [q.get("field_name", "") for q in valid_questions],
+                                # 🚀 NEW: Dual control metadata
+                                "is_dual_control": field_question.get("is_dual_control", False),
+                                "ui_input_id": field_question.get("ui_input_id", ""),
+                                "hidden_select_id": field_question.get("hidden_select_id", ""),
+                                "hidden_select_name": field_question.get("hidden_select_name", ""),
+                                "hidden_selector": field_question.get("hidden_selector", "")
                             }
                         }
 
@@ -5369,12 +5871,17 @@ class LangGraphFormProcessor:
                             if not field_is_conditionally_hidden:
                                 # Check if this required field has any valid answer
                                 field_has_answer = False
-                                for data_item in field_answer_data:
-                                    # For checkbox/radio: check=1 means selected
-                                    # For input: non-empty value means filled
-                                    if data_item.get("check", 0) == 1 or data_item.get("value", "").strip():
-                                        field_has_answer = True
-                                        break
+                                individual_field_type = field_question.get("field_type", "")
+                                
+                                # 🚀 CRITICAL FIX: Simplified logic - field_answer_data already contains AI's answer
+                                if individual_field_type in ["radio", "checkbox"]:
+                                    # For radio/checkbox: check if ANY option is selected (check=1)
+                                    # field_answer_data already contains only the relevant data for this field
+                                    field_has_answer = any(data_item.get("check", 0) == 1 for data_item in field_answer_data)
+                                else:
+                                    # For input fields: check if any field has a value
+                                    # field_answer_data already contains only the relevant data for this field
+                                    field_has_answer = any(data_item.get("value", "").strip() for data_item in field_answer_data)
 
                                 if not field_has_answer:
                                     field_should_interrupt = True
@@ -5425,7 +5932,13 @@ class LangGraphFormProcessor:
                             "reasoning": combined_reasoning,
                             "needs_intervention": overall_needs_intervention,
                             "has_valid_answer": has_valid_answer,
-                            "grouped_fields": [q.get("field_name", "") for q in valid_questions]
+                            "grouped_fields": [q.get("field_name", "") for q in valid_questions],
+                            # 🚀 NEW: Dual control metadata
+                            "is_dual_control": primary_question.get("is_dual_control", False),
+                            "ui_input_id": primary_question.get("ui_input_id", ""),
+                            "hidden_select_id": primary_question.get("hidden_select_id", ""),
+                            "hidden_select_name": primary_question.get("hidden_select_name", ""),
+                            "hidden_selector": primary_question.get("hidden_selector", "")
                         }
                     }
 
@@ -6623,7 +7136,16 @@ class LangGraphFormProcessor:
                                 action_type = "click"
                             elif actual_field_type == "select":
                                 action_type = "input"
-                            elif actual_field_type == "autocomplete":
+                            elif metadata.get("field_type") == "autocomplete":
+                                # 🚀 NEW: Special handling for dual control autocomplete fields
+                                if metadata.get("is_dual_control"):
+                                    # Generate dual actions for autocomplete fields
+                                    dual_actions = self.step_analyzer._generate_dual_control_actions(item)
+                                    if dual_actions:
+                                        actions.extend(dual_actions)
+                                        actions_generated_for_field += len(dual_actions)
+                                        print(f"DEBUG: Action Generator - Generated {len(dual_actions)} dual actions for autocomplete field")
+                                        continue  # Skip regular action generation
                                 action_type = "input"
                             else:
                                 # For other field types (text, email, etc.), use input action
@@ -8309,8 +8831,20 @@ class LangGraphFormProcessor:
 
                 field_type = metadata.get("field_type", "")
                 field_name = metadata.get("field_name", "")
+                is_dual_control = metadata.get("is_dual_control", False)
 
-                print(f"DEBUG: Processing field '{field_name}' (type: {field_type})")
+                print(f"DEBUG: Processing field '{field_name}' (type: {field_type}, is_dual_control: {is_dual_control})")
+                print(f"DEBUG: Full metadata for field '{field_name}': {metadata}")
+                print(f"DEBUG: Metadata keys: {list(metadata.keys())}")
+
+                # 🚀 NEW: Check if this is a dual control field
+                if is_dual_control and field_type == "autocomplete":
+                    print(f"DEBUG: LLM Action Generator - Generating dual control actions for {field_name}")
+                    dual_actions = self.step_analyzer._generate_dual_control_actions_llm(item)
+                    if dual_actions:
+                        final_actions.extend(dual_actions)
+                        print(f"DEBUG: LLM Action Generator - Added {len(dual_actions)} dual control actions")
+                        continue  # Skip normal processing for dual control fields
 
                 # Get data array from answer
                 data_array = answer_data.get("data", [])
@@ -8621,8 +9155,9 @@ class LangGraphFormProcessor:
             print("DEBUG: Processing non-form page (task list or navigation page) - Async")
 
             # Determine which profile data to use
-            profile_data_to_use = state["profile_data"] if state["profile_data"] else state["profile_dummy_data"]
+            profile_data = state["profile_data"]
 
+            profile_dummy_data = state["profile_dummy_data"]
             # Prepare simplified prompt for non-form pages
             prompt = f"""
             # Role 
@@ -8631,16 +9166,20 @@ class LangGraphFormProcessor:
             # HTML Content:
             {state["form_html"]}
 
-            # Profile data (use this for analysis):
-            {profile_data_to_use}
+            # Profile data 
+            {profile_data}
 
             # Available profile dummy data (fallback):
-            {state["profile_dummy_data"]}
-
+            {profile_dummy_data}
+            
             # Instructions:
             Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
             **IMPORTANT**: Combine the HTML content analysis with the profile data to make intelligent decisions about which buttons/links to click.
-
+            1. **PRIMARY DATA**: Always try to use User Data (profile_data) first
+            2. **FALLBACK DATA**: If User Data is insufficient, incomplete, or you're not confident about the match, use Dummy Data as fallback
+            3. **CONFIDENCE ASSESSMENT**: If User Data exists but seems uncertain/incomplete for a field, prefer Dummy Data for that specific field
+            4. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
+            
             # Analysis Strategy:
             1. **Use profile data for context**: If profile data is available, use it to understand user's current state and determine appropriate actions
             2. **Fallback to dummy data**: If profile data is empty or insufficient, use profile dummy data for analysis
@@ -8659,12 +9198,25 @@ class LangGraphFormProcessor:
             - **THIRD PRIORITY**: Navigation links that advance the process and align with user's profile
             - **SKIP**: Disabled buttons, "Cannot start yet" items, or actions that don't match user's profile/context
 
+            # 🚀 CRITICAL: Account Creation vs Sign In Logic:
+            **For account creation/sign in pages:**
+            1. **Check for existing account information**: Look for loginInformation in profile data
+            2. **If loginInformation exists** (username, email, password, account details):
+               - Choose "Sign in" button/link instead of "Create account"
+               - User already has an account and should sign in
+               - Look for selectors like: #sign-in, [href*="sign"], [href*="login"], button containing "Sign in"
+            3. **If NO loginInformation exists**:
+               - Choose "Create account" button/link
+               - User needs to create a new account first
+               - Look for selectors like: #create-an-account, [href*="register"], [href*="new"], button containing "Create"
+
             # Response Format (JSON only):
             {{
               "actions": [
                 {{
                   "selector": "a[href='/path/to/next/step']",
-                  "type": "click"
+                  "type": "click",
+                  "reasoning": "explanation"
                 }}
               ]
             }}
@@ -8806,7 +9358,10 @@ class LangGraphFormProcessor:
               * If no parent information exists in profile data → answer "true"
               * This field should be checked when user lacks parent details
               * Confidence: 80+ for clear absence of parent data
-            4. For options: answer must be exact option text/value, not original data
+            4. 🚀 CRITICAL: Option Format Matching (MANDATORY):
+              * For fields with options array, answer MUST exactly match one of the provided options
+              * NEVER use raw user data if options are provided - ALWAYS use the complete option format
+              
             5. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
             6. For countries: European countries → "European Economic Area" or "schengen"
             7. 🚀 CRITICAL: EU Passport Recognition Logic (MANDATORY):
@@ -8859,18 +9414,8 @@ class LangGraphFormProcessor:
               * CRITICAL: The exclusion_analysis has already accounted for filled countries, remaining countries, and exclusion rules
               * Example: exclusion_analysis.should_answer_false_for_exclusions=true → MUST answer "false" regardless of user data
               * Example: exclusion_analysis.should_answer_false_for_exclusions=false → MUST answer "true" regardless of other factors
-            10. Please make a comprehensive judgment based on the context within the Html.
-            Response format (JSON array):
-            [
-              {{
-                "index": 0,
-                "answer": "value_or_empty",
-                "confidence": 0-100,
-                "reasoning": "brief_explanation",
-                "needs_intervention": true/false,
-                "field_match_type": "exact|semantic|inferred|none"
-              }}
-            ]
+            12. 🚀 CRITICAL: Needs intervention:
+              * If Security code answer is empty, always need intervention
 
             **Character Limits**: For each field, check:
             - "maxlength" attribute in field data: maxlength="500" means answer must be ≤ 500 characters
@@ -8903,6 +9448,11 @@ class LangGraphFormProcessor:
                 ...
             ]
 
+            **CRITICAL REMINDERS:**
+            1. 🚀 OPTION FORMAT MATCHING: When field has options array, answer MUST be exact option text
+               - NEVER truncate option text - use complete format including codes and suffixes
+            2. 🚀 SEMANTIC MATCHING: Match user data meaning to option text, not just exact strings
+            
             **IMPORTANT**: Return ONLY the JSON array, no other text. Process ALL {len(questions)} fields.
             """
 

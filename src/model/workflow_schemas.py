@@ -37,13 +37,22 @@ class WorkflowInitiationPayload(BaseModel):
     user_id: str = Field(..., description="用户ID")
     case_id: Optional[str] = Field(None, description="案例ID(可选)")
     workflow_definition_id: Optional[str] = Field(None, description="工作流定义ID(可选)")
+    unique_application_number: Optional[str] = Field(None, description="唯一申请号")
     initial_data: Optional[Dict[str, Any]] = Field(None, description="初始数据")
+
+class WorkflowInstanceUpdatePayload(BaseModel):
+    """Workflow instance update payload"""
+    case_id: Optional[str] = Field(None, description="案例ID")
+    unique_application_number: Optional[str] = Field(None, description="唯一申请号")
+    status: Optional[WorkflowStatusEnum] = Field(None, description="工作流状态")
+    current_step_key: Optional[str] = Field(None, description="当前步骤键")
 
 class WorkflowInstanceSummary(BaseModel):
     """Workflow instance summary"""
     workflow_instance_id: str = Field(..., description="工作流实例ID")
     user_id: str = Field(..., description="用户ID")
     case_id: Optional[str] = Field(None, description="案例ID")
+    unique_application_number: Optional[str] = Field(None, description="唯一申请号")
     status: WorkflowStatusEnum = Field(..., description="状态")
     current_step_key: Optional[str] = Field(None, description="当前步骤键")
     progress_percentage: float = Field(default=0.0, description="工作流进度百分比 (0-100)")
