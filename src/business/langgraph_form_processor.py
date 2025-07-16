@@ -841,8 +841,19 @@ class StepAnalyzer:
             if element.get("name") in ["day", "month", "year"]:
                 date_input_parent = element.find_parent(class_=lambda x: x and "govuk-date-input" in str(x))
                 if date_input_parent:
+                    # Check if the date group is marked as optional
+                    date_fieldset = date_input_parent.find_parent("fieldset")
+                    date_is_optional = False
+                    if date_fieldset:
+                        date_legend = date_fieldset.find("legend")
+                        if date_legend:
+                            date_legend_text = date_legend.get_text(strip=True).lower()
+                            if "(if applicable)" in date_legend_text or "(optional)" in date_legend_text:
+                                date_is_optional = True
+                    
                     # Date inputs are typically required unless explicitly marked optional
-                    govuk_required = True
+                    if not date_is_optional:
+                        govuk_required = True
             
             # Method 3: Check for specific field types that are typically required
             field_name = element.get("name", "").lower()
@@ -5734,11 +5745,11 @@ class LangGraphFormProcessor:
                                 # For input fields: check if any field has a value
                                 field_has_answer = any(data_item.get("value", "").strip() for data_item in current_question_data)
 
-                            if not field_has_answer:
-                                is_required_field_empty = True
-                                print(
-                                    f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
-                                break
+                        if not field_has_answer:
+                            is_required_field_empty = True
+                            print(
+                                f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' has no answer, marking for interrupt")
+                            break
                         else:
                             print(
                                 f"DEBUG: Q&A Merger - Required field '{question.get('field_name')}' is conditionally hidden, skipping empty check")
@@ -5799,16 +5810,16 @@ class LangGraphFormProcessor:
                                 field_answer_data.append(data_item)
                             # Fallback matching: selector-based (for backward compatibility)
                             elif not field_answer_data:  # Only use fallback if no primary match found
-                                item_selector = data_item.get("selector", "")
-                                # 1. Exact selector match
-                                if field_selector and field_selector == item_selector:
-                                    field_answer_data.append(data_item)
-                                # 2. Field name match (for cases where selectors differ slightly)
-                                elif field_name and field_name in item_selector:
-                                    field_answer_data.append(data_item)
-                                # 3. Partial selector match (fallback)
-                                elif field_selector and field_selector in item_selector:
-                                    field_answer_data.append(data_item)
+                             item_selector = data_item.get("selector", "")
+                            # 1. Exact selector match
+                            if field_selector and field_selector == item_selector:
+                                field_answer_data.append(data_item)
+                            # 2. Field name match (for cases where selectors differ slightly)
+                            elif field_name and field_name in item_selector:
+                                field_answer_data.append(data_item)
+                            # 3. Partial selector match (fallback)
+                            elif field_selector and field_selector in item_selector:
+                                field_answer_data.append(data_item)
 
                         # If no specific data found, use empty data
                         if not field_answer_data:
@@ -5892,10 +5903,10 @@ class LangGraphFormProcessor:
                                     # field_answer_data already contains only the relevant data for this field
                                     field_has_answer = any(data_item.get("value", "").strip() for data_item in field_answer_data)
 
-                                if not field_has_answer:
-                                    field_should_interrupt = True
-                                    print(
-                                        f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
+                            if not field_has_answer:
+                                field_should_interrupt = True
+                                print(
+                                    f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' has no answer, marking individual field for interrupt")
                             else:
                                 print(
                                     f"DEBUG: Q&A Merger - Required field '{field_question.get('field_name')}' is conditionally hidden, skipping individual field empty check")
@@ -7414,12 +7425,12 @@ class LangGraphFormProcessor:
                     else:
                         # Fallback to old logic for simple selectors
                         attr_part = field_selector.split("[")[1].split("]")[0]
-                        if "=" in attr_part:
-                            attr_name, attr_value = attr_part.split("=", 1)
-                            attr_value = attr_value.strip('"\'')
-                            field_element = soup.find(tag, {attr_name: attr_value})
-                        else:
-                            field_element = soup.find(tag, {attr_part: True})
+                    if "=" in attr_part:
+                        attr_name, attr_value = attr_part.split("=", 1)
+                        attr_value = attr_value.strip('"\'')
+                        field_element = soup.find(tag, {attr_name: attr_value})
+                    else:
+                        field_element = soup.find(tag, {attr_part: True})
                         print(f"DEBUG: Details expand - Found element by fallback: {field_element is not None}")
                 except Exception as e:
                     print(f"DEBUG: Details expand - Error parsing selector: {str(e)}")
@@ -7440,7 +7451,7 @@ class LangGraphFormProcessor:
                 
                 if not field_element:
                     print(f"DEBUG: Details expand - Field element not found for selector: {field_selector}")
-                    return None
+                return None
 
             # Check if field is inside a <details> element
             details_parent = field_element.find_parent('details')
@@ -9249,7 +9260,7 @@ class LangGraphFormProcessor:
             # Determine which profile data to use
             profile_data = state["profile_data"]
             profile_dummy_data = state["profile_dummy_data"]
-            
+
             # 🚀 ENHANCED: Prepare enhanced prompt with workflow context
             prompt = f"""
             # Role 
@@ -9266,7 +9277,7 @@ class LangGraphFormProcessor:
 
             # Available profile dummy data (fallback):
             {json.dumps(profile_dummy_data, indent=1, ensure_ascii=False)}
-            
+
             # Instructions:
             Analyze this HTML page and identify clickable elements that represent next steps or actions to take.
             
@@ -9287,7 +9298,7 @@ class LangGraphFormProcessor:
             3. **FALLBACK DATA**: If User Data is insufficient, use Dummy Data as fallback
             4. **CONFIDENCE ASSESSMENT**: If User Data exists but seems uncertain/incomplete, prefer Dummy Data for that specific field
             5. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
-            
+
             # Analysis Strategy:
             1. **Use workflow context for button selection**: If unique_application_number exists, match it with formaction paths
             2. **Use profile data for context**: If profile data is available, use it to understand user's current state
@@ -9487,13 +9498,22 @@ class LangGraphFormProcessor:
               * If no parent information exists in profile data → answer "true"
               * This field should be checked when user lacks parent details
               * Confidence: 80+ for clear absence of parent data
-            4. 🚀 CRITICAL: Option Format Matching (MANDATORY):
+            4. 🚀 CRITICAL: User Data Override Logic (MANDATORY):
+              * If HTML form field is empty/required but user data contains corresponding value:
+                - ALWAYS prioritize user data over empty form state
+                - Use user data to populate the field even if form shows as empty
+                - Example: Form shows "Address Line 1" as empty with error, but user data has "Oxford Street, London W1B 3AG" → answer "Oxford Street, London W1B 3AG"
+                - This ensures user data is used to correct form state issues
+                - Confidence: 85+ when user data clearly matches the field requirement
+              * Only keep field empty if user data is genuinely missing or inappropriate for the field
+              * Form validation errors should NOT prevent using valid user data
+            5. 🚀 CRITICAL: Option Format Matching (MANDATORY):
               * For fields with options array, answer MUST exactly match one of the provided options
               * NEVER use raw user data if options are provided - ALWAYS use the complete option format
               
-            5. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
-            6. For countries: European countries → "European Economic Area" or "schengen"
-            7. 🚀 CRITICAL: EU Passport Recognition Logic (MANDATORY):
+            6. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
+            7. For countries: European countries → "European Economic Area" or "schengen"
+            8. 🚀 CRITICAL: EU Passport Recognition Logic (MANDATORY):
               * ALWAYS check identityDocuments.passport.issuingAuthority to answer question
               * For questions asking about "EU passport", "European passport", or "passport type"
               * RULE: If passport issuingAuthority is from EU/EEA countries, MUST answer "Yes" or "EU passport"
@@ -9505,7 +9525,7 @@ class LangGraphFormProcessor:
               * Example: issuingAuthority = "Turkey" → MUST answer "No" (Turkey is not EU/EEA member)
               * CRITICAL: Passport issuing authority determines passport type, NOT user nationality
               * Confidence: 95+ for clear EU/EEA country passport identification
-            8. 🚀 CRITICAL: Biometric Information Country Selection:
+            9. 🚀 CRITICAL: Biometric Information Country Selection:
               * For questions about "biometric information", "biometric appointment", "provide biometrics", or "select country to provide biometrics"
               * Use user's current residential address country, NOT nationality
               * Check contactInformation.currentAddress.country for current residence
@@ -9513,13 +9533,13 @@ class LangGraphFormProcessor:
               * Example: User nationality = Turkish, current address = Germany → select "Germany"
               * This is where the user will physically attend biometric appointment
               * Confidence: 95+ for clear current address country identification
-            9. Confidence: 90+ for perfect match, 80+ for strong semantic match
-            8. For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
+            10. Confidence: 90+ for perfect match, 80+ for strong semantic match
+            11. For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
               * Field asking for "international code", "country code", "phone code" etc.
               * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
               * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
               * This applies to any field that semantically represents a phone country code
-            9. 🚀 Cross-page context usage:
+            12. 🚀 Cross-page context usage:
               * For questions about "other/additional/more" items, use cross-page context
               * If context shows previous addresses/items filled, answer "yes/no" accordingly
               * For "Have you lived at any other addresses?" or similar "other" questions:
@@ -9527,12 +9547,12 @@ class LangGraphFormProcessor:
                 - If has_more_travel_entries is false, answer "false" (No) - means no more items to add
                 - If has_more_travel_entries is true, answer "true" (Yes) - means there are more items to add
               * High confidence (80+) for cross-page contextual answers with clear previous data
-            10. 🚀 CRITICAL: Travel History "addAnother" Logic:
+            13. 🚀 CRITICAL: Travel History "addAnother" Logic:
               * For "addAnother" or "Have you been to any other countries?" questions
               * Check cross-page context for filled_travel_entries count 
               * If user has limited travel history and filled_travel_entries >= available_travel_data, answer "false" (No)
                             
-            11. 🚀 CRITICAL: Travel History Exclusion Logic (HIGHEST PRIORITY):
+            14. 🚀 CRITICAL: Travel History Exclusion Logic (HIGHEST PRIORITY):
               * For questions asking about "other countries" with exclusion lists (UK, USA, Canada, Australia, New Zealand, Switzerland, EEA)
               * MANDATORY: ALWAYS check cross-page context exclusion_analysis.should_answer_false_for_exclusions field FIRST
               * If exclusion_analysis.should_answer_false_for_exclusions is true, MUST answer "false" (No) - IGNORE all other data
@@ -9543,8 +9563,18 @@ class LangGraphFormProcessor:
               * CRITICAL: The exclusion_analysis has already accounted for filled countries, remaining countries, and exclusion rules
               * Example: exclusion_analysis.should_answer_false_for_exclusions=true → MUST answer "false" regardless of user data
               * Example: exclusion_analysis.should_answer_false_for_exclusions=false → MUST answer "true" regardless of other factors
-            12. 🚀 CRITICAL: Needs intervention:
+            15. 🚀 CRITICAL: Needs intervention:
               * If Security code answer is empty, always need intervention
+              * 🚀 CRITICAL: Security Code Delivery Method Selection (MANDATORY):
+                - For fields asking about "security code", "delivery method", "receive code", or similar authentication-related choices
+                - Field names like "deliveryMethod", "securityDeliveryMethod", "codeDeliveryMethod", etc.
+                - If user data does not contain explicit preference for delivery method (SMS, email, etc.)
+                - MUST set needs_intervention: true to let user choose their preferred method
+                - Do NOT default to first option - user must explicitly choose their preferred contact method
+                - Only proceed with auto-selection IF user data clearly indicates preferred delivery method
+                - Example: If user data has no delivery preference → needs_intervention: true
+                - Example: If user data explicitly states "prefer SMS" → can auto-select SMS option
+                - This ensures users control their security code delivery method choice
 
             **Character Limits**: For each field, check:
             - "maxlength" attribute in field data: maxlength="500" means answer must be ≤ 500 characters
@@ -9581,7 +9611,7 @@ class LangGraphFormProcessor:
             1. 🚀 OPTION FORMAT MATCHING: When field has options array, answer MUST be exact option text
                - NEVER truncate option text - use complete format including codes and suffixes
             2. 🚀 SEMANTIC MATCHING: Match user data meaning to option text, not just exact strings
-            
+
             **IMPORTANT**: Return ONLY the JSON array, no other text. Process ALL {len(questions)} fields.
             """
 
