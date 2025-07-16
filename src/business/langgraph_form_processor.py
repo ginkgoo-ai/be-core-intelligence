@@ -5810,16 +5810,16 @@ class LangGraphFormProcessor:
                                 field_answer_data.append(data_item)
                             # Fallback matching: selector-based (for backward compatibility)
                             elif not field_answer_data:  # Only use fallback if no primary match found
-                             item_selector = data_item.get("selector", "")
-                            # 1. Exact selector match
-                            if field_selector and field_selector == item_selector:
-                                field_answer_data.append(data_item)
-                            # 2. Field name match (for cases where selectors differ slightly)
-                            elif field_name and field_name in item_selector:
-                                field_answer_data.append(data_item)
-                            # 3. Partial selector match (fallback)
-                            elif field_selector and field_selector in item_selector:
-                                field_answer_data.append(data_item)
+                                item_selector = data_item.get("selector", "")
+                                # 1. Exact selector match
+                                if field_selector and field_selector == item_selector:
+                                    field_answer_data.append(data_item)
+                                # 2. Field name match (for cases where selectors differ slightly)
+                                elif field_name and field_name in item_selector:
+                                    field_answer_data.append(data_item)
+                                # 3. Partial selector match (fallback)
+                                elif field_selector and field_selector in item_selector:
+                                    field_answer_data.append(data_item)
 
                         # If no specific data found, use empty data
                         if not field_answer_data:
