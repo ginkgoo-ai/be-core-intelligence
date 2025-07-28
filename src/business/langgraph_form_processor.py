@@ -4260,44 +4260,44 @@ class LangGraphFormProcessor:
         return state
 
     def _analyze_question_semantics_with_ai(self, questions: List[Dict], workflow_id: str) -> Dict[str, Any]:
-        """🚀 OPTIMIZED: 小批量AI语义分析 - 仅对复杂/不确定的字段使用AI"""
+        """🚀 OPTIMIZED: Small batch AI semantic analysis - Use AI only for complex/uncertain fields"""
 
-        # 只对复杂问题使用AI，减少token消耗
+        # Use AI only for complex questions to reduce token consumption
         if len(questions) > 10:
             print(f"[workflow_id:{workflow_id}] DEBUG: Too many questions ({len(questions)}), skipping AI analysis")
             return {"error": "Too many questions for AI analysis"}
 
         # Create prompt for AI semantic analysis
         prompt = f"""
-                # Task: 分析少量复杂表单问题之间的语义关系
+                # Task: Analyze semantic relationships between a small number of complex form questions
 
-                你正在分析签证申请表单中的复杂问题，识别问题之间的逻辑关系。
-                重点识别**互斥问题**和**条件依赖关系**。
+                You are analyzing complex questions in a visa application form, identifying logical relationships between questions.
+                Focus on identifying **mutually exclusive questions** and **conditional dependencies**.
 
-                ## 待分析问题 ({len(questions)}个):
+                ## Questions to analyze ({len(questions)} questions):
                 {json.dumps(questions, indent=2, ensure_ascii=False)}
 
-                ## 任务:
-                分析每个问题的语义含义并识别:
+                ## Task:
+                Analyze the semantic meaning of each question and identify:
 
-                1. **互斥组**: 不能同时回答的问题
-                   - 例如: "你有父母吗?" vs "你父亲的姓名是什么?"
-                   - 如果第一个问题回答"否"，第二个问题就变得无关紧要
+                1. **Mutually exclusive groups**: Questions that cannot be answered simultaneously
+                   - Example: "Do you have parents?" vs "What is your father's name?"
+                   - If the first question is answered "No", the second question becomes irrelevant
 
-                2. **条件依赖**: 依赖其他问题答案的问题
-                   - 例如: "你结婚了吗?" → "你配偶的姓名是什么?"
-                   - 只有第一个问题是"是"时，第二个问题才有意义
+                2. **Conditional dependencies**: Questions that depend on answers to other questions
+                   - Example: "Are you married?" → "What is your spouse's name?"
+                   - The second question is only meaningful if the first question is "Yes"
 
-                3. **语义分类**: 按语义含义对问题分组
-                   - 个人信息、家庭信息、就业、旅行历史等
+                3. **Semantic categorization**: Group questions by semantic meaning
+                   - Personal information, family information, employment, travel history, etc.
 
-                ## 输出格式:
-                返回JSON对象，结构如下:
+                ## Output format:
+                Return a JSON object with the following structure:
                 {{
                   "mutually_exclusive_groups": [
                     {{
                       "group_name": "parent_info_logic",
-                      "reasoning": "如果用户没有父母详细信息，具体父母问题就无关紧要",
+                      "reasoning": "If user doesn't have parent details, specific parent questions become irrelevant",
                       "trigger_question": {{"index": 5, "question": "What if I do not have my parents' details"}},
                       "excluded_questions": [
                         {{"index": 6, "question": "What is this person's relationship to you?"}},
@@ -4328,12 +4328,12 @@ class LangGraphFormProcessor:
                   ]
                 }}
 
-                专注于理解问题的**逻辑含义**，而不仅仅是HTML结构。
+                Focus on understanding the **logical meaning** of questions, not just HTML structure.
                 """
 
         try:
             messages = [
-                {"role": "system", "content": "你是分析表单逻辑和问题语义的专家，特别擅长签证申请表单分析。"},
+                {"role": "system", "content": "You are an expert in analyzing form logic and question semantics, especially skilled in visa application form analysis."},
                 {"role": "user", "content": prompt}
             ]
 
