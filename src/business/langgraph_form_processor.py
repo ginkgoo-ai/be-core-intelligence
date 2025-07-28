@@ -10013,16 +10013,8 @@ class LangGraphFormProcessor:
 
             # 🚀 CRITICAL: Account Creation vs Sign In Logic:
             **For account creation/sign in pages:**
-            1. **Check for existing account information**: Look for loginInformation in profile data
-            2. **If loginInformation exists** (username, email, password, account details):
-               - Choose "Sign in" button/link instead of "Create account"
-               - User already has an account and should sign in
-               - Look for selectors like: #sign-in, [href*="sign"], [href*="login"], button containing "Sign in"
-            3. **If NO loginInformation exists**:
-               - Choose "Create account" button/link
-               - User needs to create a new account first
-               - Look for selectors like: #create-an-account, [href*="register"], [href*="new"], button containing "Create"
-
+            1. always choose sign in 
+            
             # 🚀 CRITICAL: Dashboard Button Selection Examples:
             **For dashboard pages with multiple buttons:**
             1. **If HTML contains**: `<button id="continueApplicationButton" formaction="/dashboard/tasklist/3434-1617-4252-4148/SKILLED_WORK">Continue</button>`
