@@ -8772,6 +8772,55 @@ class LangGraphFormProcessor:
 
         return state
 
+    def _extract_interrupt_questions(self, merged_qa_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """🚀 NEW: Extract interrupt question groups from merged Q&A data"""
+        try:
+            interrupt_questions = []
+            
+            for qa_item in merged_qa_data:
+                question_data = qa_item.get("question", {})
+                metadata = qa_item.get("_metadata", {})
+                
+                # Check if this is an interrupt question
+                if question_data.get("type") == "interrupt":
+                    interrupt_info = {
+                        "question_id": metadata.get("id", ""),
+                        "question_text": question_data.get("data", {}).get("name", ""),
+                        "field_name": metadata.get("field_name", ""),
+                        "field_type": metadata.get("field_type", ""),
+                        "field_selector": metadata.get("field_selector", ""),
+                        "required": metadata.get("required", False),
+                        "confidence": metadata.get("confidence", 0),
+                        "reasoning": metadata.get("reasoning", ""),
+                        "needs_intervention": metadata.get("needs_intervention", True),
+                        "options": metadata.get("options", []),
+                        "grouped_fields": metadata.get("grouped_fields", []),
+                        "extracted_at": datetime.utcnow().isoformat()
+                    }
+                    
+                    # Extract answer data for interrupt question
+                    answer_data = question_data.get("answer", {}).get("data", [])
+                    interrupt_info["answer_options"] = []
+                    
+                    for data_item in answer_data:
+                        option_info = {
+                            "selector": data_item.get("selector", ""),
+                            "value": data_item.get("value", ""),
+                            "text": data_item.get("text", ""),
+                            "check": data_item.get("check", 0)
+                        }
+                        interrupt_info["answer_options"].append(option_info)
+                    
+                    interrupt_questions.append(interrupt_info)
+                    print(f"DEBUG: _extract_interrupt_questions - Found interrupt question: '{interrupt_info['question_text']}'")
+            
+            print(f"DEBUG: _extract_interrupt_questions - Extracted {len(interrupt_questions)} interrupt questions")
+            return interrupt_questions
+            
+        except Exception as e:
+            print(f"DEBUG: _extract_interrupt_questions - Error: {str(e)}")
+            return []
+
     def _result_saver_node(self, state: FormAnalysisState) -> FormAnalysisState:
         """Node: Save results to database"""
         try:
@@ -8885,12 +8934,17 @@ class LangGraphFormProcessor:
             clean_field_questions = clean_circular_references(state.get("field_questions", []))
             clean_dummy_usage = clean_circular_references(state.get("dummy_data_usage", []))
 
+            # 🚀 NEW: Extract current interrupt question groups
+            interrupt_questions = self._extract_interrupt_questions(state.get("merged_qa_data", []))
+            clean_interrupt_questions = clean_circular_references(interrupt_questions)
+
             # Prepare the main data structure in the expected format
             save_data = {
                 "form_data": clean_merged_qa_data,  # 合并的问答数据 - cleaned
                 "actions": clean_llm_actions,  # LLM生成的动作 - cleaned
                 "questions": clean_field_questions,  # 原始问题数据 - cleaned
                 "dummy_data_usage": clean_dummy_usage,  # 虚拟数据使用记录 - cleaned
+                "current_interrupt_questions": clean_interrupt_questions,  # 🚀 NEW: 当前最新的interrupt问题组
                 "metadata": {
                     "processed_at": datetime.utcnow().isoformat(),
                     "workflow_id": state["workflow_id"],
@@ -8901,6 +8955,7 @@ class LangGraphFormProcessor:
                     "answer_count": len(state.get("ai_answers", [])),
                     "action_count": len(state.get("llm_generated_actions", [])),
                     "dummy_data_used_count": len(state.get("dummy_data_usage", [])),
+                    "interrupt_questions_count": len(interrupt_questions),  # 🚀 NEW: interrupt问题数量
                     "data_cleaned": True,  # Mark that data was cleaned for debugging
                     "circular_ref_protection": True
                 },
@@ -8966,7 +9021,7 @@ class LangGraphFormProcessor:
             state["saved_step_data"] = save_data
 
             print(
-                f"DEBUG: Result Saver - Saved data for step {state['step_key']} with {len(save_data['form_data'])} form_data items, {len(save_data['actions'])} actions, and {len(updated_history)} history records")
+                f"DEBUG: Result Saver - Saved data for step {state['step_key']} with {len(save_data['form_data'])} form_data items, {len(save_data['actions'])} actions, {len(save_data['current_interrupt_questions'])} interrupt questions, and {len(updated_history)} history records")
 
             # 🚀 NEW: Cache current page data for cross-page relationships
             try:
