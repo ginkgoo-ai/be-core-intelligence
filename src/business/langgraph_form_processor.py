@@ -8603,6 +8603,19 @@ class LangGraphFormProcessor:
                     if element_name and not element_id:
                         selector_parts.append(f"[name='{element_name}']")
 
+                    # 🚀 NEW: Add class attribute for better precision when ID/name are missing
+                    element_class = submit_element.get("class")
+                    if element_class and not element_id and not element_name:
+                        # Convert class list to space-separated string if it's a list
+                        if isinstance(element_class, list):
+                            class_string = " ".join(element_class)
+                        else:
+                            class_string = str(element_class)
+                        
+                        # Use the full class string for precision
+                        selector_parts.append(f"[class='{class_string}']")
+                        print(f"DEBUG: Added class attribute to input selector: class='{class_string}'")
+
                     selector = "".join(selector_parts)
 
                 else:  # button element
@@ -8619,6 +8632,19 @@ class LangGraphFormProcessor:
                     # Add name attribute if available and no ID
                     if element_name and not element_id:
                         selector_parts.append(f"[name='{element_name}']")
+
+                    # 🚀 NEW: Add class attribute for better precision when ID/name are missing
+                    element_class = submit_element.get("class")
+                    if element_class and not element_id and not element_name:
+                        # Convert class list to space-separated string if it's a list
+                        if isinstance(element_class, list):
+                            class_string = " ".join(element_class)
+                        else:
+                            class_string = str(element_class)
+                        
+                        # Use the full class string for precision
+                        selector_parts.append(f"[class='{class_string}']")
+                        print(f"DEBUG: Added class attribute to button selector: class='{class_string}'")
 
                     selector = "".join(selector_parts)
 
