@@ -5787,8 +5787,10 @@ class LangGraphFormProcessor:
                             if not used_dummy_data:
                                 # Check based on data source path or reasoning
                                 reasoning_for_dummy = result.get("reasoning", "") or ""  # Handle None values
-                                used_dummy_data = ("contactInformation" in result.get("data_source_path", "") or
-                                                   "dummy" in reasoning_for_dummy.lower())
+                                data_source_path = result.get("data_source_path", "") or ""
+                                used_dummy_data = ("dummy" in reasoning_for_dummy.lower() or
+                                                   "dummy" in data_source_path.lower() or
+                                                   "fallback" in reasoning_for_dummy.lower())
 
                             # Format the result according to expected structure
                             formatted_result = {
@@ -10248,11 +10250,13 @@ class LangGraphFormProcessor:
             {json.dumps(cross_page_context, indent=1, ensure_ascii=False) if cross_page_context else "None"}
 
             # Instructions:
-            **IMPORTANT - Data Usage Priority:**
-            1. **PRIMARY DATA**: Always try to use User Data (profile_data) first
-            2. **FALLBACK DATA**: If User Data is insufficient, incomplete, or you're not confident about the match, use Dummy Data as fallback
-            3. **CONFIDENCE ASSESSMENT**: If User Data exists but seems uncertain/incomplete for a field, prefer Dummy Data for that specific field
-            4. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
+            **CRITICAL - Data Usage Priority (MANDATORY):**
+            1. **PRIMARY DATA**: ALWAYS use User Data (profile_data) first when available - this is the user's real information
+            2. **STRICT PRIORITY**: If User Data contains ANY relevant value for a field, MUST use User Data regardless of completeness
+            3. **FALLBACK ONLY**: Use Dummy Data ONLY when User Data completely lacks the required information
+            4. **NO UNCERTAINTY OVERRIDE**: Do NOT switch to Dummy Data just because User Data seems "uncertain" - User Data is always preferred when present
+            5. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
+            6. **VERIFICATION RULE**: When both User Data and Dummy Data contain the same field, ALWAYS choose User Data value
             
             **Field Analysis Rules:**
             1. Use semantic matching - understand field meaning, not just names
@@ -10410,9 +10414,10 @@ class LangGraphFormProcessor:
                             question = questions[index]
                             # Determine if dummy data was used based on data_source_path or reasoning
                             reasoning_text = result.get("reasoning", "") or ""  # Handle None values
-                            used_dummy_data = ("contactInformation" in result.get("data_source_path", "") or
-                                               "dummy" in reasoning_text.lower() or
-                                               result.get("confidence", 0) >= 70 and result.get("answer", ""))
+                            data_source_path = result.get("data_source_path", "") or ""
+                            used_dummy_data = ("dummy" in reasoning_text.lower() or
+                                               "dummy" in data_source_path.lower() or
+                                               "fallback" in reasoning_text.lower())
 
                             # 🚀 FIXED: Use ONLY original AI confidence assessment - no artificial boost
                             original_confidence = result.get("confidence", 0)
