@@ -10257,6 +10257,11 @@ class LangGraphFormProcessor:
             4. **NO UNCERTAINTY OVERRIDE**: Do NOT switch to Dummy Data just because User Data seems "uncertain" - User Data is always preferred when present
             5. **CLEAR REASONING**: Always indicate in your reasoning which data source you used and why
             6. **VERIFICATION RULE**: When both User Data and Dummy Data contain the same field, ALWAYS choose User Data value
+            7. **CRITICAL PASSPORT PRIORITY**: For passport-related questions (biometric chip, passport type, etc.):
+               - MUST use identityDocuments.passport from User Data (profile_data) when available
+               - NEVER use passport information from Dummy Data if User Data has passport details
+               - User Data passport information takes absolute priority over Dummy Data passport information
+               - Example: If User Data has passport with issuingAuthority "A.E.A./D.D.- N.P.C." and Dummy Data has "Republic of Turkey", MUST use User Data
             
             **Field Analysis Rules:**
             1. Use semantic matching - understand field meaning, not just names
@@ -10281,7 +10286,17 @@ class LangGraphFormProcessor:
               
             6. For ranges: "5 years" + options ["3 years or less", "More than 3 years"] = "More than 3 years"
             7. For countries: European countries → "European Economic Area" or "schengen"
-            8. 🚀 CRITICAL: EU Passport Recognition Logic (MANDATORY):
+            8. 🚀 CRITICAL: Passport Biometric Chip Logic (MANDATORY):
+              * For questions about "biometric chip", "Does your passport have a biometric chip?", or similar passport chip questions
+              * MUST use identityDocuments.passport from User Data (profile_data) ONLY - NEVER from Dummy Data
+              * Check passport issue date from User Data: passports issued after 2005-2006 typically have biometric chips
+              * RULE: If User Data passport issued after 2005, answer "Yes" (has biometric chip)
+              * RULE: If User Data passport issued before 2005, answer "No" (no biometric chip) 
+              * CRITICAL: Use ONLY the passport information from User Data, ignore any passport details in Dummy Data
+              * Example: User Data passport issueDate "2021-12-01" → "Yes" (modern passport with chip)
+              * Example: User Data passport issueDate "2003-06-15" → "No" (old passport without chip)
+              * Confidence: 90+ for passport issue date based chip determination
+            9. 🚀 CRITICAL: EU Passport Recognition Logic (MANDATORY):
               * ALWAYS check identityDocuments.passport.issuingAuthority to answer question
               * For questions asking about "EU passport", "European passport", or "passport type"
               * RULE: If passport issuingAuthority is from EU/EEA countries, MUST answer "Yes" or "EU passport"
@@ -10293,7 +10308,7 @@ class LangGraphFormProcessor:
               * Example: issuingAuthority = "Turkey" → MUST answer "No" (Turkey is not EU/EEA member)
               * CRITICAL: Passport issuing authority determines passport type, NOT user nationality
               * Confidence: 95+ for clear EU/EEA country passport identification
-            9. 🚀 CRITICAL: Biometric Information Country Selection:
+            10. 🚀 CRITICAL: Biometric Information Country Selection:
               * For questions about "biometric information", "biometric appointment", "provide biometrics", or "select country to provide biometrics"
               * Use user's current residential address country, NOT nationality
               * Check contactInformation.currentAddress.country for current residence
@@ -10301,13 +10316,13 @@ class LangGraphFormProcessor:
               * Example: User nationality = Turkish, current address = Germany → select "Germany"
               * This is where the user will physically attend biometric appointment
               * Confidence: 95+ for clear current address country identification
-            10. Confidence: 90+ for perfect match, 80+ for strong semantic match
-            11. For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
+            11. Confidence: 90+ for perfect match, 80+ for strong semantic match
+            12. For phone/country/international CODE fields: ALWAYS remove the "+" prefix if present in the data
               * Field asking for "international code", "country code", "phone code" etc.
               * If data contains "+90", "+1", "+44" etc., return only the digits: "90", "1", "44"
               * Examples: "+90" → "90", "+44" → "44", "+1" → "1"
               * This applies to any field that semantically represents a phone country code
-            12. 🚀 Cross-page context usage:
+            13. 🚀 Cross-page context usage:
               * For questions about "other/additional/more" items, use cross-page context
               * If context shows previous addresses/items filled, answer "yes/no" accordingly
               * For "Have you lived at any other addresses?" or similar "other" questions:
@@ -10320,7 +10335,7 @@ class LangGraphFormProcessor:
               * Check cross-page context for filled_travel_entries count 
               * If user has limited travel history and filled_travel_entries >= available_travel_data, answer "false" (No)
                             
-            14. 🚀 CRITICAL: Travel History Exclusion Logic (HIGHEST PRIORITY):
+            15. 🚀 CRITICAL: Travel History Exclusion Logic (HIGHEST PRIORITY):
               * For questions asking about "other countries" with exclusion lists (UK, USA, Canada, Australia, New Zealand, Switzerland, EEA)
               * MANDATORY: ALWAYS check cross-page context exclusion_analysis.should_answer_false_for_exclusions field FIRST
               * If exclusion_analysis.should_answer_false_for_exclusions is true, MUST answer "false" (No) - IGNORE all other data
@@ -10331,7 +10346,7 @@ class LangGraphFormProcessor:
               * CRITICAL: The exclusion_analysis has already accounted for filled countries, remaining countries, and exclusion rules
               * Example: exclusion_analysis.should_answer_false_for_exclusions=true → MUST answer "false" regardless of user data
               * Example: exclusion_analysis.should_answer_false_for_exclusions=false → MUST answer "true" regardless of other factors
-            15. 🚀 CRITICAL: Needs intervention:
+            16. 🚀 CRITICAL: Needs intervention:
               * If Security code answer is empty, always need intervention
               * 🚀 CRITICAL: Security Code Delivery Method Selection (MANDATORY):
                 - For fields asking about "security code", "delivery method", "receive code", or similar authentication-related choices
