@@ -2115,6 +2115,25 @@ class StepAnalyzer:
                 # Enhanced matching logic for boolean/yes-no questions and numerical comparisons
                 ai_value_lower = ai_answer_value.lower().strip()
 
+                # 🚀 CRITICAL: Country code to country name mapping for nationality fields
+                country_code_mapping = {
+                    "tur": "turkey", "grc": "greece", "deu": "germany", "fra": "france", "esp": "spain",
+                    "ita": "italy", "gbr": "united-kingdom", "usa": "usa", "can": "canada", "aus": "australia",
+                    "bra": "brazil", "arg": "argentina", "chn": "china", "jpn": "japan", "kor": "south-korea",
+                    "ind": "india", "rus": "russia", "pol": "poland", "che": "switzerland", "nor": "norway",
+                    "swe": "sweden", "dnk": "denmark", "fin": "finland", "nld": "netherlands", "bel": "belgium",
+                    "aut": "austria", "prt": "portugal", "irl": "ireland", "lux": "luxembourg", "cze": "czechia",
+                    "hun": "hungary", "rou": "romania", "bgr": "bulgaria", "hrv": "croatia", "svn": "slovenia",
+                    "svk": "slovakia", "est": "estonia", "lva": "latvia", "ltu": "lithuania", "mlt": "malta",
+                    "cyp": "cyprus", "isl": "iceland", "mex": "mexico", "per": "peru", "col": "colombia",
+                    "chl": "chile", "ury": "uruguay", "ven": "venezuela", "ecu": "ecuador", "bol": "bolivia",
+                    "pry": "paraguay", "guy": "guyana", "sur": "suriname", "guf": "french-guiana",
+                    "brasileiro": "brazil", "hellenic": "greece", "turkish": "turkey", "british": "united-kingdom"
+                }
+                
+                # Try to map country codes or nationality names to option values
+                mapped_value = country_code_mapping.get(ai_value_lower, ai_value_lower)
+
                 for option in options:
                     option_value = option.get("value", "").lower()
                     option_text = option.get("text", "").lower()
@@ -2123,10 +2142,11 @@ class StepAnalyzer:
                         f"DEBUG: _create_answer_data - Checking option: '{option.get('text', '')}' (value: '{option.get('value', '')}')")
 
                     # Direct string matching (exact match)
-                    if (option_value == ai_value_lower or option_text == ai_value_lower):
+                    if (option_value == ai_value_lower or option_text == ai_value_lower or 
+                        option_value == mapped_value or option_text == mapped_value):
                         matched_option = option
                         print(
-                            f"DEBUG: _create_answer_data - Direct string match found: '{ai_answer_value}' matches '{option.get('text', '')}'")
+                            f"DEBUG: _create_answer_data - Direct/mapped string match found: '{ai_answer_value}' (mapped: '{mapped_value}') matches '{option.get('text', '')}'")
                         break
 
                     # Boolean value mapping for yes/no questions
